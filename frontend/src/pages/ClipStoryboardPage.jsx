@@ -101,6 +101,15 @@ function safeDel(key) {
   }
 }
 
+function fmtTime(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s)) return "—";
+  const total = Math.max(0, Math.floor(s));
+  const mm = Math.floor(total / 60);
+  const ss = total % 60;
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
 async function uploadAsset(file) {
   const fd = new FormData();
   fd.append("file", file);
