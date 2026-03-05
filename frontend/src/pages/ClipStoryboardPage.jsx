@@ -687,6 +687,54 @@ const scenarioScenes = useMemo(() => {
 }, [scenarioNode]);
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
+  const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
+  const [scenarioImageError, setScenarioImageError] = useState("");
+
+  const updateScenarioScene = useCallback((idx, patch) => {
+    if (!scenarioNode?.id || idx < 0) return;
+    setNodes((prev) => prev.map((n) => {
+      if (n.id !== scenarioNode.id) return n;
+      const scenes = Array.isArray(n?.data?.scenes) ? n.data.scenes : [];
+      if (!scenes[idx]) return n;
+      const nextScenes = scenes.map((s, i) => (i === idx ? { ...s, ...patch } : s));
+      return { ...n, data: { ...n.data, scenes: nextScenes } };
+    }));
+  }, [scenarioNode?.id, setNodes]);
+
+  const handleGenerateScenarioImage = useCallback(async () => {
+    if (!scenarioSelected) return;
+    const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
+    const prompt = String(scenarioSelected.imagePrompt || scenarioSelected.sceneText || "").trim();
+    if (!prompt) {
+      setScenarioImageError("Добавьте Prompt (Image)");
+      return;
+    }
+
+    setScenarioImageLoading(true);
+    setScenarioImageError("");
+    try {
+      const out = await fetchJson("/api/clip/image", {
+        method: "POST",
+        body: {
+          sceneId,
+          prompt,
+        },
+      });
+      if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
+      updateScenarioScene(scenarioEditor.selected, { imageUrl: String(out.imageUrl || "") });
+    } catch (e) {
+      console.error(e);
+      setScenarioImageError(String(e?.message || e));
+    } finally {
+      setScenarioImageLoading(false);
+    }
+  }, [scenarioSelected, scenarioEditor.selected, updateScenarioScene]);
+
+  const handleClearScenarioImage = useCallback(() => {
+    setScenarioImageError("");
+    updateScenarioScene(scenarioEditor.selected, { imageUrl: "" });
+  }, [scenarioEditor.selected, updateScenarioScene]);
+
   const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
   const edgesRef = useRef([]);
 
@@ -895,7 +943,7 @@ onParse: async (nodeId) => {
         const t0 = Number(s.start ?? s.t0 ?? 0);
         const t1 = Number(s.end ?? s.t1 ?? 0);
         const prompt = String(s.imagePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
-        return { t0, t1, prompt, sceneText: s.sceneText || "", imagePrompt: s.imagePrompt || "", videoPrompt: s.videoPrompt || "", why: s.why || "" };
+        return { id: s.id || `s${String(idx + 1).padStart(2, "0")}`, start: t0, end: t1, t0, t1, prompt, sceneText: s.sceneText || "", imagePrompt: s.imagePrompt || "", videoPrompt: s.videoPrompt || "", imageUrl: s.imageUrl || "", why: s.why || "" };
       })
       .filter((s) => Number.isFinite(s.t0) && Number.isFinite(s.t1) && s.t1 > s.t0);
 
@@ -1304,13 +1352,22 @@ const hydrate = useCallback(() => {
                     className={"clipSB_scenarioItem" + (i === scenarioEditor.selected ? " isActive" : "")}
                     onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
                   >
-                    <div className="clipSB_scenarioItemTop">
-                      <div className="clipSB_scenarioItemTime">
-                        {fmtTime(s.start)} → {fmtTime(s.end)}
+                    <div className="clipSB_scenarioItemInner">
+                      {s.imageUrl ? (
+                        <img src={s.imageUrl} alt="scene" className="clipSB_scenarioThumb" />
+                      ) : (
+                        <div className="clipSB_scenarioThumb clipSB_scenarioThumbPlaceholder" />
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="clipSB_scenarioItemTop">
+                          <div className="clipSB_scenarioItemTime">
+                            {fmtTime(s.start)} → {fmtTime(s.end)}
+                          </div>
+                          {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
+                        </div>
+                        <div className="clipSB_scenarioItemText">{(s.sceneText || "").slice(0, 90) || "—"}</div>
                       </div>
-                      {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
                     </div>
-                    <div className="clipSB_scenarioItemText">{(s.sceneText || "").slice(0, 90) || "—"}</div>
                   </button>
                 ))}
               </div>
@@ -1369,6 +1426,26 @@ const hydrate = useCallback(() => {
                         value={scenarioSelected.imagePrompt || ""}
                         onChange={(e) => updateScenarioScene(scenarioEditor.selected, { imagePrompt: e.target.value })}
                       />
+                    </div>
+
+                    <div className="clipSB_scenarioEditRow">
+                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Изображение сцены</div>
+                      <div className="clipSB_scenarioPreviewWrap">
+                        {scenarioSelected.imageUrl ? (
+                          <img src={scenarioSelected.imageUrl} alt="scene preview" className="clipSB_scenarioPreview" />
+                        ) : (
+                          <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <button className="clipSB_btn clipSB_btnSecondary" onClick={handleGenerateScenarioImage} disabled={scenarioImageLoading}>
+                          {scenarioImageLoading ? "Генерация..." : "Сгенерировать изображение"}
+                        </button>
+                        <button className="clipSB_btn clipSB_btnSecondary" onClick={handleClearScenarioImage}>
+                          Очистить изображение
+                        </button>
+                      </div>
+                      {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
                     </div>
 
                     <div className="clipSB_scenarioEditRow">

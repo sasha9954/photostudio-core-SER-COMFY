@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import requests
 import tempfile
@@ -8,11 +9,75 @@ import base64
 import json
 import re
 import os
+from uuid import uuid4
+
+from PIL import Image, ImageDraw
 
 from app.core.config import settings
 from app.engine.gemini_rest import post_generate_content
 
 router = APIRouter()
+
+ASSETS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "static", "assets"))
+
+
+class ClipImageIn(BaseModel):
+    sceneId: str
+    prompt: str
+    style: str | None = "default"
+    width: int | None = 1024
+    height: int | None = 1024
+
+
+def _ensure_assets_dir() -> None:
+    os.makedirs(ASSETS_DIR, exist_ok=True)
+
+
+def _asset_url(filename: str) -> str:
+    base = (settings.PUBLIC_BASE_URL or "http://127.0.0.1:8000").rstrip("/")
+    return f"{base}/static/assets/{filename}"
+
+
+def _save_bytes_as_asset(raw: bytes, ext: str = "png") -> str:
+    _ensure_assets_dir()
+    ext = (ext or "png").lower().replace(".", "")
+    if ext not in {"png", "jpg", "jpeg", "webp"}:
+        ext = "png"
+    filename = f"clip_scene_{uuid4().hex}.{ext}"
+    fpath = os.path.join(ASSETS_DIR, filename)
+    with open(fpath, "wb") as f:
+        f.write(raw)
+    return _asset_url(filename)
+
+
+def _mock_scene_image(scene_id: str, width: int, height: int) -> str:
+    _ensure_assets_dir()
+    w = max(256, min(2048, int(width or 1024)))
+    h = max(256, min(2048, int(height or 1024)))
+    img = Image.new("RGB", (w, h), color=(44, 48, 58))
+    draw = ImageDraw.Draw(img)
+    text = f"MOCK\n{scene_id or 'scene'}"
+    draw.multiline_text((32, 32), text, fill=(230, 235, 245), spacing=8)
+    filename = f"clip_scene_mock_{uuid4().hex}.png"
+    img.save(os.path.join(ASSETS_DIR, filename), format="PNG")
+    return _asset_url(filename)
+
+
+def _decode_gemini_image(resp: dict) -> tuple[bytes, str] | None:
+    try:
+        for cand in (resp.get("candidates") or []):
+            content = (cand or {}).get("content") or {}
+            for part in (content.get("parts") or []):
+                inline = part.get("inlineData") or {}
+                b64 = inline.get("data")
+                mime = (inline.get("mimeType") or "image/png").lower()
+                if isinstance(b64, str) and b64:
+                    raw = base64.b64decode(b64)
+                    ext = "jpg" if "jpeg" in mime or "jpg" in mime else "png"
+                    return raw, ext
+    except Exception:
+        return None
+    return None
 
 
 class BrainIn(BaseModel):
@@ -494,3 +559,50 @@ JSON СХЕМА:
         "fallbackUsed": fallback_used,
         "hint": None,
     }
+
+
+@router.post("/clip/image")
+def clip_image(payload: ClipImageIn):
+    scene_id = (payload.sceneId or "").strip()
+    prompt = (payload.prompt or "").strip()
+    style = (payload.style or "default").strip()
+
+    if not scene_id:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneId_required"})
+    if not prompt:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "prompt_required"})
+
+    width = max(256, min(2048, int(payload.width or 1024)))
+    height = max(256, min(2048, int(payload.height or 1024)))
+
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    if not api_key:
+        image_url = _mock_scene_image(scene_id, width, height)
+        return {"ok": True, "sceneId": scene_id, "imageUrl": image_url, "engine": "mock", "hint": "no_gemini_key"}
+
+    try:
+        model = settings.GEMINI_IMAGE_MODEL or "gemini-2.5-flash-image-preview"
+        body = {
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": f"Create one cinematic frame for storyboard scene {scene_id}. Style: {style}. {prompt}"}],
+            }],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        }
+        resp = post_generate_content(api_key, model, body, timeout=120)
+        decoded = _decode_gemini_image(resp if isinstance(resp, dict) else {})
+        if decoded:
+            raw, ext = decoded
+            image_url = _save_bytes_as_asset(raw, ext)
+            return {"ok": True, "sceneId": scene_id, "imageUrl": image_url, "engine": "gemini"}
+
+        image_url = _mock_scene_image(scene_id, width, height)
+        return {"ok": True, "sceneId": scene_id, "imageUrl": image_url, "engine": "mock", "hint": "gemini_no_image"}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": str(e)[:300]})
+    except Exception as e:
+        try:
+            image_url = _mock_scene_image(scene_id, width, height)
+            return {"ok": True, "sceneId": scene_id, "imageUrl": image_url, "engine": "mock", "hint": f"gemini_error:{str(e)[:200]}"}
+        except Exception:
+            return JSONResponse(status_code=500, content={"ok": False, "code": "IMAGE_GENERATION_FAILED", "hint": str(e)[:300]})
