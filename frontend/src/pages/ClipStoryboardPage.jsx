@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import ReactFlow, {
+import {
+  ReactFlow,
   Background,
   Controls,
   Handle,
@@ -7,8 +8,8 @@ import ReactFlow, {
   addEdge,
   useEdgesState,
   useNodesState,
-} from "reactflow";
-import "reactflow/dist/style.css";
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import "./ClipStoryboardPage.css";
 
 import { API_BASE, fetchJson } from "../services/api";
