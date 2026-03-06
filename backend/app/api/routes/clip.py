@@ -1106,6 +1106,16 @@ ATMOSPHERIC / STORY INSERTS:
         extra += "\nDistribute product references across scenes to create visual variation."
         extra += "\nUse different angles for different scenes."
         extra += "\nAvoid repeating identical framing unless required by rhythm."
+        extra += "\nPRODUCT CONTINUITY RULE:"
+        extra += "\nThe product must remain present in most scenes of the clip."
+        extra += "\nDo not create scenes that completely ignore the product unless it is a very short atmospheric transition."
+        extra += "\nThe product should appear as:"
+        extra += "\n- hero product"
+        extra += "\n- detail view"
+        extra += "\n- interaction with character"
+        extra += "\n- product on table"
+        extra += "\n- product demonstration"
+        extra += "\nAvoid scenes that replace the product with unrelated objects."
 
     if text:
         extra += "\nТЕКСТ/СМЫСЛ (может быть история или слова песни):\n" + text[:4000]
