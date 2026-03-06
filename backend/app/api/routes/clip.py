@@ -9,6 +9,8 @@ import base64
 import json
 import re
 import os
+import io
+import mimetypes
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -234,6 +236,7 @@ class BrainIn(BaseModel):
     # refs (urls)
     refs: BrainRefsIn | None = None
     characterRefs: list[RefUrlItem] | None = None
+    character_refs: list[str] | None = None
     locationRefs: list[RefUrlItem] | None = None
     propsRefs: list[RefUrlItem] | None = None
     styleRef: RefUrlItem | None = None
@@ -894,7 +897,9 @@ def clip_plan(payload: BrainIn):
         if not items:
             return out
         for it in items:
-            if isinstance(it, dict):
+            if isinstance(it, str):
+                url = str(it).strip()
+            elif isinstance(it, dict):
                 url = str(it.get("url") or "").strip()
             else:
                 url = str(getattr(it, "url", "") or "").strip()
@@ -902,8 +907,49 @@ def clip_plan(payload: BrainIn):
                 out.append(url)
         return out[:max_items]
 
+    def _guess_image_mime(url: str, headers: dict, raw: bytes) -> str:
+        header_mime = str((headers or {}).get("Content-Type") or "").split(";")[0].strip().lower()
+        if header_mime.startswith("image/"):
+            return header_mime
+
+        guessed, _ = mimetypes.guess_type(url or "")
+        guessed = (guessed or "").lower()
+        if guessed.startswith("image/"):
+            return guessed
+
+        try:
+            fmt = (Image.open(io.BytesIO(raw)).format or "").lower()
+        except Exception:
+            fmt = ""
+        if fmt == "jpeg":
+            return "image/jpeg"
+        if fmt:
+            return f"image/{fmt}"
+        return "image/jpeg"
+
+    def _load_reference_image_inline(url: str) -> dict | None:
+        try:
+            r = requests.get(url, timeout=10)
+            r.raise_for_status()
+            raw = r.content
+            if not raw:
+                return None
+            mime = _guess_image_mime(url, dict(r.headers), raw)
+            return {
+                "inlineData": {
+                    "mimeType": mime,
+                    "data": base64.b64encode(raw).decode("ascii"),
+                }
+            }
+        except Exception:
+            return None
+
     refs_obj = payload.refs
-    character_refs = _normalize_ref_list((refs_obj.character if refs_obj else None) or payload.characterRefs)
+    character_refs = []
+    character_refs.extend(_normalize_ref_list((refs_obj.character if refs_obj else None)))
+    character_refs.extend(_normalize_ref_list(payload.characterRefs))
+    character_refs.extend(_normalize_ref_list(payload.character_refs))
+
     location_refs = _normalize_ref_list((refs_obj.location if refs_obj else None) or payload.locationRefs)
     props_refs = _normalize_ref_list((refs_obj.props if refs_obj else None) or payload.propsRefs)
 
@@ -921,14 +967,26 @@ def clip_plan(payload: BrainIn):
         if u:
             style_refs = [u]
 
-    if not character_refs and payload.refCharacter:
-        character_refs = [str(payload.refCharacter).strip()]
+    if payload.refCharacter:
+        character_refs.append(str(payload.refCharacter).strip())
     if not location_refs and payload.refLocation:
         location_refs = [str(payload.refLocation).strip()]
     if not props_refs and payload.refItems:
         props_refs = [str(payload.refItems).strip()]
     if not style_refs and payload.refStyle:
         style_refs = [str(payload.refStyle).strip()]
+
+    character_refs = [url for url in character_refs if url]
+    character_refs = list(dict.fromkeys(character_refs))[:8]
+
+    character_images = []
+    for ref_url in character_refs:
+        inline_part = _load_reference_image_inline(ref_url)
+        if inline_part:
+            character_images.append(inline_part)
+
+    print("CLIP DEBUG character_refs:", character_refs)
+    print("CLIP DEBUG attached character images:", len(character_images))
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
     if not api_key:
@@ -982,7 +1040,20 @@ Response schema (all keys required):
     "motion": string,
     "reason": string
   }}]
-}}"""
+}}
+
+CHARACTER IDENTITY LOCK
+
+If character reference images are provided:
+- All images represent the SAME person
+- This character must appear in every scene
+- Do not redesign or replace the character
+- Maintain identical facial identity
+- Maintain same age, gender, hair, body type
+- Treat these images as the source of truth
+
+All scenes must describe the SAME character.
+"""
 
     user_input = {
         "mode": mode,
@@ -997,10 +1068,9 @@ Response schema (all keys required):
         },
     }
 
-    parts = [
-        {"text": system_rules},
-        {"text": "Input payload:\n" + json.dumps(user_input, ensure_ascii=False)},
-    ]
+    parts = [{"text": system_rules}]
+    parts.extend(character_images)
+    parts.append({"text": "Input payload:\n" + json.dumps(user_input, ensure_ascii=False)})
     if audio_bytes:
         parts.append({"inlineData": {"mimeType": audio_mime, "data": base64.b64encode(audio_bytes).decode("ascii")}})
 
