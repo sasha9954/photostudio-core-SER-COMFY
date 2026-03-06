@@ -665,6 +665,71 @@ def _validate_planner_scenes_quality(duration: float, scenario_key: str, scenes:
     }
 
 
+def _build_planning_semantics(
+    text: str,
+    scenario_key: str,
+    audio_type_hint: str,
+    text_type_hint: str,
+    want_lipsync: bool,
+    character_refs: list[str],
+    location_refs: list[str],
+    props_refs: list[str],
+    style_key: str,
+) -> dict:
+    text_l = (text or "").lower()
+    style_l = (style_key or "").lower()
+    hint_audio_l = (audio_type_hint or "").lower()
+    hint_text_l = (text_type_hint or "").lower()
+
+    product_keywords = [
+        "прод", "товар", "описан", "аппарат", "product", "commercial", "sale", "selling", "welding",
+    ]
+    is_product_text = bool(text_l) and any(k in text_l for k in product_keywords)
+
+    text_types = []
+    if hint_text_l:
+        text_types.append(hint_text_l)
+    if is_product_text:
+        text_types.extend(["commercial description", "product narrative"])
+    if not text_types and text_l:
+        text_types.append("story")
+
+    has_song_vocals = hint_audio_l in {"song", "song_with_vocals", "vocals"} or want_lipsync
+    audio_type = "song_with_vocals" if has_song_vocals else (hint_audio_l or "mixed")
+
+    has_character = bool(character_refs)
+    has_location = bool(location_refs)
+    has_style = bool(style_key)
+    product_ref_count = len(props_refs)
+    product_mode = bool(product_ref_count and (is_product_text or "product" in hint_text_l or "commercial" in hint_text_l))
+
+    props_role = "multi-angle product reference" if product_mode and product_ref_count > 1 else "generic props"
+    mode_key = (scenario_key or "").strip().lower()
+    if mode_key == "clip" and product_mode:
+        mode_interpretation = "clip_product_performance"
+    elif mode_key == "clip":
+        mode_interpretation = "music_driven_visual_montage"
+    else:
+        mode_interpretation = "generic_storyboard"
+
+    return {
+        "textType": text_types,
+        "audioType": audio_type,
+        "storySource": "TEXT" if text_l else "AUDIO",
+        "timingSource": "AUDIO" if mode_key == "clip" else "TEXT",
+        "speechSource": "AUDIO" if has_song_vocals else ("TEXT" if text_l else "NONE"),
+        "audioRole": ["emotion source", "rhythm source", "timing source"] if has_song_vocals else ["timing source"],
+        "propsRole": props_role,
+        "productMode": product_mode,
+        "productRefCount": product_ref_count,
+        "hasCharacter": has_character,
+        "hasLocation": has_location,
+        "hasStyle": has_style,
+        "modeInterpretation": mode_interpretation,
+        "styleApplication": "historical_world_modern_product" if "18" in style_l and product_mode else "default",
+    }
+
+
 @router.post("/clip/plan")
 def clip_plan(payload: BrainIn):
     """SMART ScenePlan: returns timecoded scenes across whole audio."""
@@ -682,26 +747,6 @@ def clip_plan(payload: BrainIn):
         "rejectedReason": None,
         "repairRetryUsed": False,
     }
-
-    # If no key -> fallback
-    if not (settings.GEMINI_API_KEY or "").strip():
-        scenes = _fallback_plan(duration, text)
-        return {
-            "ok": True,
-            "engine": "fallback",
-            "audioDuration": duration,
-            "scenes": scenes,
-            "plannerDebug": {"audio": audio_debug, "validation": empty_validation_debug},
-            "modelUsed": None,
-            "fallbackUsed": False,
-            "hint": "no_gemini_key",
-            "error": {
-                "code": "GENERATION_FAILED",
-                "hint": "no_gemini_key",
-                "modelUsed": None,
-                "fallbackUsed": False,
-            },
-        }
 
     scenario_key = "clip"
     shoot_key = (payload.shootKey or "cinema").strip()
@@ -736,6 +781,38 @@ def clip_plan(payload: BrainIn):
         props_refs = [str(payload.refItems).strip()]
     if not style_ref and payload.refStyle:
         style_ref = str(payload.refStyle).strip()
+
+    planning_semantics = _build_planning_semantics(
+        text=text,
+        scenario_key=scenario_key,
+        audio_type_hint=audio_type_hint,
+        text_type_hint=text_type_hint,
+        want_lipsync=want_lipsync,
+        character_refs=character_refs,
+        location_refs=location_refs,
+        props_refs=props_refs,
+        style_key=style_key,
+    )
+
+    # If no key -> fallback
+    if not (settings.GEMINI_API_KEY or "").strip():
+        scenes = _fallback_plan(duration, text)
+        return {
+            "ok": True,
+            "engine": "fallback",
+            "audioDuration": duration,
+            "scenes": scenes,
+            "plannerDebug": {"audio": audio_debug, "validation": empty_validation_debug, "planningSemantics": planning_semantics},
+            "modelUsed": None,
+            "fallbackUsed": False,
+            "hint": "no_gemini_key",
+            "error": {
+                "code": "GENERATION_FAILED",
+                "hint": "no_gemini_key",
+                "modelUsed": None,
+                "fallbackUsed": False,
+            },
+        }
 
     rules = f"""Ты — режиссёр монтажа музыкального клипа.
 Нужно построить SMART storyboard по треку и (если дан) тексту.
@@ -982,6 +1059,23 @@ ATMOSPHERIC / STORY INSERTS:
     if props_refs:
         extra += "\npropsRefs:\n" + "\n".join(f"- {u[:500]}" for u in props_refs)
 
+    extra += "\nВНУТРЕННЯЯ СЕМАНТИКА PLANNER (используй как канон):"
+    extra += f"\n- textType: {', '.join(planning_semantics.get('textType') or []) or 'none'}"
+    extra += f"\n- audioType: {planning_semantics.get('audioType')}"
+    extra += f"\n- storySource: {planning_semantics.get('storySource')}"
+    extra += f"\n- timingSource: {planning_semantics.get('timingSource')}"
+    extra += f"\n- speechSource: {planning_semantics.get('speechSource')}"
+    extra += f"\n- audioRole: {', '.join(planning_semantics.get('audioRole') or [])}"
+    extra += f"\n- propsRole: {planning_semantics.get('propsRole')}"
+    extra += f"\n- productMode: {planning_semantics.get('productMode')}"
+    extra += f"\n- modeInterpretation: {planning_semantics.get('modeInterpretation')}"
+    extra += "\nЕсли audioType=song_with_vocals: НЕ превращай TEXT в разговорный диалог персонажа."
+    extra += "\nLip sync в таком случае только singing/performance, либо полностью визуальный performance без разговорной речи."
+    if planning_semantics.get('styleApplication') == 'historical_world_modern_product':
+        extra += "\nКонфликт style/product: историческая атмосфера (персонаж/интерьер/свет), но товар должен остаться современным и узнаваемым."
+    if planning_semantics.get('productMode') and planning_semantics.get('productRefCount', 0) > 1:
+        extra += "\npropsRefs интерпретируй как один товар в разных ракурсах/деталях (multi-angle product reference), а не как разные товары."
+
     if text:
         extra += "\nТЕКСТ/СМЫСЛ (может быть история или слова песни):\n" + text[:4000]
     if audio_type_hint:
@@ -1041,7 +1135,7 @@ ATMOSPHERIC / STORY INSERTS:
                     "engine": "gemini_partial",
                     "audioDuration": duration,
                     "scenes": scenes,
-                    "plannerDebug": {"audio": audio_debug, "validation": validation},
+                    "plannerDebug": {"audio": audio_debug, "validation": validation, "planningSemantics": planning_semantics},
                     "modelUsed": model_used,
                     "fallbackUsed": fallback_used,
                     "hint": "http_error_but_parsed_json" if audio_bytes else "plan_built_without_audio_bytes",
@@ -1052,7 +1146,7 @@ ATMOSPHERIC / STORY INSERTS:
             "engine": "fallback",
             "audioDuration": duration,
             "scenes": scenes,
-            "plannerDebug": {"audio": audio_debug, "validation": parsed_http_validation},
+            "plannerDebug": {"audio": audio_debug, "validation": parsed_http_validation, "planningSemantics": planning_semantics},
             "modelUsed": model_used,
             "fallbackUsed": fallback_used,
             "hint": "plan_built_without_audio_bytes" if not audio_bytes else (error_hint or raw_text[:1500]),
@@ -1099,7 +1193,7 @@ ATMOSPHERIC / STORY INSERTS:
             "engine": "fallback",
             "audioDuration": duration,
             "scenes": scenes,
-            "plannerDebug": {"audio": audio_debug, "validation": empty_validation_debug},
+            "plannerDebug": {"audio": audio_debug, "validation": empty_validation_debug, "planningSemantics": planning_semantics},
             "modelUsed": model_used,
             "fallbackUsed": fallback_used,
             "hint": "plan_built_without_audio_bytes" if not audio_bytes else hint,
@@ -1125,7 +1219,7 @@ ATMOSPHERIC / STORY INSERTS:
             "engine": "fallback",
             "audioDuration": duration,
             "scenes": scenes,
-            "plannerDebug": {"audio": audio_debug, "validation": validation},
+            "plannerDebug": {"audio": audio_debug, "validation": validation, "planningSemantics": planning_semantics},
             "modelUsed": model_used,
             "fallbackUsed": fallback_used,
             "hint": "plan_built_without_audio_bytes" if not audio_bytes else "empty_scenes",
@@ -1177,7 +1271,7 @@ REPAIR MODE: предыдущий storyboard требует доработки (
                     "engine": "gemini",
                     "audioDuration": duration,
                     "scenes": repair_scenes,
-                    "plannerDebug": {"audio": audio_debug, "validation": repair_validation},
+                    "plannerDebug": {"audio": audio_debug, "validation": repair_validation, "planningSemantics": planning_semantics},
                     "modelUsed": model_used,
                     "fallbackUsed": fallback_used,
                     "hint": None if audio_bytes else "plan_built_without_audio_bytes",
@@ -1192,7 +1286,7 @@ REPAIR MODE: предыдущий storyboard требует доработки (
                     "engine": "gemini",
                     "audioDuration": duration,
                     "scenes": scenes,
-                    "plannerDebug": {"audio": audio_debug, "validation": validation},
+                    "plannerDebug": {"audio": audio_debug, "validation": validation, "planningSemantics": planning_semantics},
                     "modelUsed": model_used,
                     "fallbackUsed": fallback_used,
                     "hint": None if audio_bytes else "plan_built_without_audio_bytes",
@@ -1205,7 +1299,7 @@ REPAIR MODE: предыдущий storyboard требует доработки (
                 "engine": "fallback",
                 "audioDuration": duration,
                 "scenes": fallback_scenes,
-                "plannerDebug": {"audio": audio_debug, "validation": repair_validation},
+                "plannerDebug": {"audio": audio_debug, "validation": repair_validation, "planningSemantics": planning_semantics},
                 "modelUsed": model_used,
                 "fallbackUsed": fallback_used,
                 "hint": "plan_built_without_audio_bytes" if not audio_bytes else f"planner_output_rejected_as_low_quality:{rejected_reason}",
@@ -1223,7 +1317,7 @@ REPAIR MODE: предыдущий storyboard требует доработки (
             "engine": "gemini",
             "audioDuration": duration,
             "scenes": scenes,
-            "plannerDebug": {"audio": audio_debug, "validation": validation},
+            "plannerDebug": {"audio": audio_debug, "validation": validation, "planningSemantics": planning_semantics},
             "modelUsed": model_used,
             "fallbackUsed": fallback_used,
             "hint": None if audio_bytes else "plan_built_without_audio_bytes",
@@ -1234,7 +1328,7 @@ REPAIR MODE: предыдущий storyboard требует доработки (
         "engine": "gemini",
         "audioDuration": duration,
         "scenes": scenes,
-        "plannerDebug": {"audio": audio_debug, "validation": validation},
+        "plannerDebug": {"audio": audio_debug, "validation": validation, "planningSemantics": planning_semantics},
         "modelUsed": model_used,
         "fallbackUsed": fallback_used,
         "hint": None if audio_bytes else "plan_built_without_audio_bytes",
