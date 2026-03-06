@@ -512,9 +512,19 @@ def _validate_storyboard_timeline(duration: float, scenes: list[dict]) -> tuple[
     max_gap = 0.75
     warnings: list[str] = []
 
-    sorted_scenes = sorted(scenes, key=lambda s: float(s.get("start") or 0.0))
-    if sorted_scenes != scenes:
+    starts = [float(scene.get("start") or 0.0) for scene in scenes]
+    if starts != sorted(starts):
         return False, "timeline_unsorted", warnings
+
+    sorted_scenes = scenes
+
+    for idx, scene in enumerate(sorted_scenes):
+        start = float(scene.get("start") or 0.0)
+        end = float(scene.get("end") or 0.0)
+        if start < -tol_edge:
+            return False, f"timeline_scene_start_oob_at_{idx}", warnings
+        if end > float(duration) + tol_edge:
+            return False, f"timeline_scene_end_oob_at_{idx}", warnings
 
     first_start = float(sorted_scenes[0].get("start") or 0.0)
     last_end = float(sorted_scenes[-1].get("end") or 0.0)
@@ -1070,6 +1080,7 @@ Response schema (all keys required):
 
     if not is_valid:
         retry_used = True
+        validation_warnings = []
         retry_parts = parts + [{"text": f"Previous output invalid ({reason}). Return ONLY one valid JSON object matching required schema."}]
         resp, raw_text, parsed = _call_gemini(retry_parts, model_used)
         is_valid, reason = _validate_plan(parsed)
@@ -1089,7 +1100,7 @@ Response schema (all keys required):
             status_code=502,
             content={
                 "ok": False,
-                "code": "CLIP_PLAN_INVALID_JSON",
+                "code": "CLIP_PLAN_VALIDATION_FAILED",
                 "detail": str(err)[:1200],
                 "modelUsed": model_used,
                 "hint": reason,
