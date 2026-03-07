@@ -1119,6 +1119,36 @@ If location reference images are attached:
 
 If reference images are attached, they override free imagination.
 
+CHARACTER CONFLICT RESOLUTION
+
+If scene text conflicts with character reference identity:
+- Character refs always win.
+- Conflicting text about gender, facial identity, age, hairstyle, clothing identity, or visible accessories must be ignored.
+- Do not mix contradictory identity signals.
+- Do not partially preserve incorrect text claims when they contradict character refs.
+- Example: if text says "girl" but the character reference clearly shows a man, describe the man from reference and ignore the incorrect text identity label.
+
+REFERENCE DETAIL ACCURACY
+
+- Describe only details that are clearly supported by reference images.
+- Do not invent accessories, wearable items, or carried objects that are not clearly visible.
+- If a detail is ambiguous, do not state it as fact.
+- Prefer omission over hallucination.
+
+CLOTHING DETAIL INTERPRETATION RULES
+
+- Hoodie drawstrings, garment cords, seams, folds, logo edges, shadows, and fabric details must not be misidentified as headphones, necklaces, wires, or accessories.
+- Clothing details must remain clothing details unless clearly identifiable as separate objects.
+- Logos must remain logos and must not be turned into separate accessories.
+
+NO INVENTED ACCESSORIES RULE
+
+Do not add headphones, glasses, jewelry, bags, backpacks, hats, watches, necklaces, or other accessories unless:
+- They are clearly visible in reference images, or
+- They are explicitly defined by a higher-priority reference node.
+
+Scene text alone must not invent small visual accessories when character refs contradict or do not support them.
+
 Response schema (all keys required):
 {{
   "track": {{"durationSec": number, "bpm": number, "timeSignature": string, "energyProfile": string}},
@@ -1201,6 +1231,8 @@ When references are present:
 - When style refs exist, visualDescription and visualPrompt must explicitly reflect the style-defining season, atmosphere, weather, palette, and texture.
 - When props refs exist, visualDescription and visualPrompt must explicitly mention and integrate the key prop in relevant scenes.
 - When props refs exist, visualDescription and visualPrompt must preserve exact prop identity from refs and must never replace or rename the prop based on scene text.
+- visualDescription and visualPrompt must not include invented small accessories or unsupported wardrobe details.
+- If an accessory is uncertain, omit it and do not guess.
 
 If reference images exist they override imagination.
 
