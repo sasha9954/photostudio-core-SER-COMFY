@@ -1147,21 +1147,21 @@ def clip_plan(payload: BrainIn):
     refs_debug["propAnchorSource"] = prop_anchor_source
 
     style_anchor = (
-        "style defined by style reference images (season, weather, palette, cinematic language)"
+        "season, weather, color palette and cinematic visual language must be taken directly from style reference images"
         if style_refs
         else ((payload.styleKey or "").strip() or "neutral cinematic realism")
     )
     lighting_anchor = (
-        "lighting consistent with style references"
+        "light direction, softness, exposure and color temperature must match the lighting implied by style reference images"
         if style_refs
         else "natural outdoor cinematic lighting"
     )
     location_anchor = (
-        "environment defined by location reference images"
+        "architecture style, street geometry, paving materials and environmental aging must match location reference images"
         if location_refs
-        else "coherent single location environment"
+        else "coherent single-location environment"
     )
-    environment_anchor = "consistent weather, atmosphere, materials and environmental mood across scenes"
+    environment_anchor = "weather, atmosphere, surface materials and environmental mood must remain stable across scenes"
 
     has_visual_inputs = bool(audio_bytes or character_images or location_images or props_images)
     if has_visual_inputs:
@@ -1819,21 +1819,21 @@ def clip_image(payload: ClipImageIn):
     }
 
     style_anchor = (
-        "style defined by style reference images (season, weather, palette, cinematic language)"
+        "season, weather, color palette and cinematic visual language must be taken directly from style reference images"
         if style_refs
-        else (style or "neutral cinematic realism")
+        else ((style or "").strip() or "neutral cinematic realism")
     )
     lighting_anchor = (
-        "lighting consistent with style references"
+        "light direction, softness, exposure and color temperature must match the lighting implied by style reference images"
         if style_refs
         else "natural outdoor cinematic lighting"
     )
     location_anchor = (
-        "environment defined by location reference images"
+        "architecture style, street geometry, paving materials and environmental aging must match location reference images"
         if location_refs
-        else "coherent single location environment"
+        else "coherent single-location environment"
     )
-    environment_anchor = "consistent weather, atmosphere, materials and environmental mood across scenes"
+    environment_anchor = "weather, atmosphere, surface materials and environmental mood must remain stable across scenes"
 
     has_visual_refs_attached = bool(character_images or location_images or style_images or props_images)
     # Normalize aspect label for prompt
@@ -1887,7 +1887,14 @@ def clip_image(payload: ClipImageIn):
             "FINAL RULE: generate ONE cinematic still frame that looks like real footage from a professional film production, never an artificial collage. "
             "WORLD CONSISTENCY: Maintain the same environment, lighting and visual style as previous scenes from the storyboard. The world state must remain stable. Do not change weather, lighting, architecture, season, or color palette. Treat this frame as another camera shot from the same film scene. "
             "ENVIRONMENT CONTINUITY: The environment must remain visually consistent. Maintain same street type, same architectural style, same weather conditions, same surface materials, and same atmosphere. The viewer should feel that all frames belong to the same real location. "
-            "SESSION WORLD ANCHORS: Use these anchors as global constraints: - Style anchor defines season, palette and cinematic language - Lighting anchor defines light direction, softness and color temperature - Location anchor defines architecture and environment - Environment anchor defines weather and atmosphere All generated frames must obey these anchors. Do not reinterpret them. "
+            f"SESSION WORLD ANCHORS:\n"
+            f"Style anchor: {style_anchor}\n"
+            f"Lighting anchor: {lighting_anchor}\n"
+            f"Location anchor: {location_anchor}\n"
+            f"Environment anchor: {environment_anchor}\n\n"
+            "Use these anchors as global constraints. "
+            "All generated frames must obey these anchors. "
+            "Do not reinterpret them. "
             "Scene text may be Russian and visual prompt may be English. Use both when available: visual prompt defines composition/action, and scene text defines narrative context and emotion."
         )
 
