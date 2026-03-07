@@ -142,6 +142,23 @@ function normalizeDurationSec(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeImageRefs(refsLike) {
+  const refsObj = refsLike && typeof refsLike === "object" ? refsLike : {};
+  const toUrlList = (value) => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => (typeof item === "string" ? item : item?.url))
+      .map((url) => String(url || "").trim())
+      .filter(Boolean);
+  };
+  return {
+    character: toUrlList(refsObj.character),
+    location: toUrlList(refsObj.location),
+    style: toUrlList(refsObj.style),
+    props: toUrlList(refsObj.props),
+  };
+}
+
 function resolveAssetUrl(url) {
   const raw = String(url || "").trim();
   if (!raw) return "";
@@ -823,6 +840,16 @@ const scenarioNode = useMemo(() => {
   return nodes.find((n) => n.type === "storyboardNode") || null;
 }, [nodes, scenarioEditor.nodeId]);
 
+const scenarioBrainRefs = useMemo(() => {
+  if (!scenarioNode?.id) return { character: [], location: [], style: [], props: [] };
+  const incomingPlanEdge = [...edges]
+    .reverse()
+    .find((e) => e.target === scenarioNode.id && (e.targetHandle || "") === "plan_in");
+  if (!incomingPlanEdge?.source) return { character: [], location: [], style: [], props: [] };
+  const brainNode = nodes.find((n) => n.id === incomingPlanEdge.source && n.type === "brainNode");
+  return normalizeImageRefs(brainNode?.data?.scenePlan?.refs);
+}, [edges, nodes, scenarioNode?.id]);
+
 const scenarioScenes = useMemo(() => {
   const arr = scenarioNode?.data?.scenes;
   return Array.isArray(arr) ? arr : [];
@@ -879,7 +906,8 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
   const handleGenerateScenarioImage = useCallback(async () => {
     if (!scenarioSelected) return;
     const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
-    const prompt = String(scenarioSelected.imagePrompt || scenarioSelected.sceneText || "").trim();
+    const prompt = String(scenarioSelected.imagePrompt || scenarioSelected.visualPrompt || scenarioSelected.prompt || "").trim();
+    const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const imageFormat = normalizeSceneImageFormat(scenarioSelected.imageFormat);
     const { width, height } = getSceneImageSize(imageFormat);
     if (!prompt) {
@@ -895,8 +923,10 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
         body: {
           sceneId,
           prompt: `${prompt}\nAspect ratio: ${imageFormat}`,
+          sceneText,
           width,
           height,
+          refs: scenarioBrainRefs,
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
@@ -907,7 +937,7 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [scenarioSelected, scenarioEditor.selected, updateScenarioScene]);
+  }, [scenarioSelected, scenarioEditor.selected, scenarioBrainRefs, updateScenarioScene]);
 
   const handleClearScenarioImage = useCallback(() => {
     setScenarioImageError("");
