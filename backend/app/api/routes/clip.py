@@ -25,7 +25,8 @@ router = APIRouter()
 
 class ClipImageIn(BaseModel):
     sceneId: str
-    prompt: str
+    prompt: str | None = None
+    sceneDelta: str | None = None
     style: str | None = "default"
     width: int | None = 1024
     height: int | None = 1024
@@ -42,7 +43,9 @@ class ClipImageRefsIn(BaseModel):
     sessionCharacterAnchor: str | None = None
     sessionLocationAnchor: str | None = None
     sessionStyleAnchor: str | None = None
+    sessionBaseline: dict | None = None
     previousContinuityMemory: dict | None = None
+    previousSceneImageUrl: str | None = None
 
 
 class AudioSliceIn(BaseModel):
@@ -2487,6 +2490,16 @@ If any of the required descriptive fields are returned in English, the output is
 
     normalized_scenes = []
     previous_continuity_memory = None
+    session_baseline = {
+        "character": session_world_anchors["character"],
+        "location": session_world_anchors["location"],
+        "style": session_world_anchors["style"],
+        "lighting": lighting_anchor,
+        "environment": environment_anchor,
+        "weather": weather_anchor,
+        "surface": surface_anchor,
+        "propAnchorLabel": prop_anchor_label or None,
+    }
     for idx, s in enumerate(scenes):
         start = float(s.get("start"))
         end = float(s.get("end"))
@@ -2520,6 +2533,7 @@ If any of the required descriptive fields are returned in English, the output is
             "start": start,
             "end": end,
             "prompt": visual_prompt or visual_desc,
+            "sceneDelta": visual_prompt or visual_desc,
             "sceneText": visual_desc,
             "imagePrompt": visual_prompt,
             "videoPrompt": video_prompt,
@@ -2552,6 +2566,7 @@ If any of the required descriptive fields are returned in English, the output is
             "location": session_world_anchors["location"],
             "style": session_world_anchors["style"],
         },
+        "sessionBaseline": session_baseline,
         "plannerDebug": {
             "audio": audio_debug,
             "inputState": input_state_debug,
@@ -2576,12 +2591,13 @@ If any of the required descriptive fields are returned in English, the output is
 def clip_image(payload: ClipImageIn):
     scene_id = (payload.sceneId or "").strip()
     prompt = (payload.prompt or "").strip()
+    scene_delta = (payload.sceneDelta or prompt).strip()
     style = (payload.style or "default").strip()
 
     if not scene_id:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneId_required"})
-    if not prompt:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "prompt_required"})
+    if not scene_delta:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneDelta_or_prompt_required"})
 
     width = max(256, min(2048, int(payload.width or 1024)))
     height = max(256, min(2048, int(payload.height or 1024)))
@@ -2595,7 +2611,10 @@ def clip_image(payload: ClipImageIn):
     session_character_anchor = str(getattr(refs_obj, "sessionCharacterAnchor", "") or "").strip()
     session_location_anchor = str(getattr(refs_obj, "sessionLocationAnchor", "") or "").strip()
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
+    session_baseline = getattr(refs_obj, "sessionBaseline", None)
     previous_continuity_memory = _sanitize_continuity_memory(getattr(refs_obj, "previousContinuityMemory", None))
+    previous_scene_image_url = str(getattr(refs_obj, "previousSceneImageUrl", "") or "").strip()
+    previous_scene_image_inline = _load_reference_image_inline(previous_scene_image_url) if previous_scene_image_url else None
 
     character_images = []
     for ref_url in character_refs:
@@ -2643,7 +2662,9 @@ def clip_image(payload: ClipImageIn):
         "sessionCharacterAnchor": session_character_anchor or None,
         "sessionLocationAnchor": session_location_anchor or None,
         "sessionStyleAnchor": session_style_anchor or None,
+        "hasSessionBaseline": bool(isinstance(session_baseline, dict) and session_baseline),
         "hasPreviousContinuityMemory": bool(previous_continuity_memory),
+        "hasPreviousSceneImage": bool(previous_scene_image_inline),
     }
 
     style_anchor = (
@@ -2791,16 +2812,20 @@ def clip_image(payload: ClipImageIn):
                 parts.append({"text": f"Session prop anchor label: {prop_anchor_label}. Keep exactly this prop identity."})
 
         if prop_anchor_label:
-            prompt = _enforce_prop_anchor_text(prompt, prop_anchor_label, lang="en")
+            scene_delta = _enforce_prop_anchor_text(scene_delta, prop_anchor_label, lang="en")
             scene_text = _enforce_prop_anchor_text(scene_text, prop_anchor_label, lang="ru")
 
-        prompt = (
+        effective_character_anchor = str((session_baseline or {}).get("character") or session_character_anchor or "").strip()
+        effective_location_anchor = str((session_baseline or {}).get("location") or session_location_anchor or "").strip()
+        effective_style_anchor = str((session_baseline or {}).get("style") or session_style_anchor or "").strip()
+
+        assembled_prompt = (
             _inject_session_world_anchors(
-                prompt,
+                scene_delta,
                 {
-                    "character": session_character_anchor or "coherent single-character identity across all scenes",
-                    "location": session_location_anchor or location_anchor,
-                    "style": session_style_anchor or style_anchor,
+                    "character": effective_character_anchor or "coherent single-character identity across all scenes",
+                    "location": effective_location_anchor or location_anchor,
+                    "style": effective_style_anchor or style_anchor,
                 },
             )
             + "\n\n"
@@ -2838,6 +2863,17 @@ def clip_image(payload: ClipImageIn):
             "Keep one world identity across clip shots: stable lighting logic, palette, atmosphere, weather, and material response."
         )
 
+        generation_mode = "continuity_chain" if previous_scene_image_inline else "baseline_only"
+
+        if isinstance(session_baseline, dict) and session_baseline:
+            parts.append({
+                "text": "Session baseline (persistent world anchors for whole storyboard):\n" + json.dumps(session_baseline, ensure_ascii=False)
+            })
+
+        if previous_scene_image_inline:
+            parts.append({"text": "Previous generated scene image (visual continuity reference, do not clone composition):"})
+            parts.append(previous_scene_image_inline)
+
         if previous_continuity_memory:
             parts.append({
                 "text": "Previous scene continuity memory (persistent state to inherit; keep as soft continuity reference, not composition clone):\n" + json.dumps(previous_continuity_memory, ensure_ascii=False)
@@ -2862,7 +2898,9 @@ def clip_image(payload: ClipImageIn):
             "aspectRatio": aspect_ratio,
             "resolution": f"{width}x{height}",
             "sceneText": scene_text,
-            "visualPrompt": prompt,
+            "sceneDelta": scene_delta,
+            "visualPrompt": assembled_prompt,
+            "generationMode": generation_mode,
             "propAnchorLabel": prop_anchor_label or None,
             "sessionCharacterAnchor": session_character_anchor or None,
             "sessionLocationAnchor": session_location_anchor or None,
@@ -2896,6 +2934,7 @@ def clip_image(payload: ClipImageIn):
                 "engine": "gemini",
                 "modelUsed": model,
                 "refsDebug": refs_debug,
+                "generationMode": generation_mode,
             }
 
         image_url = _mock_scene_image(scene_id, width, height)
@@ -2907,6 +2946,7 @@ def clip_image(payload: ClipImageIn):
             "hint": "gemini_no_image",
             "modelUsed": model,
             "refsDebug": refs_debug,
+            "generationMode": generation_mode,
         }
     except ValueError as e:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": str(e)[:300]})
@@ -2921,6 +2961,7 @@ def clip_image(payload: ClipImageIn):
                 "hint": f"gemini_error:{str(e)[:200]}",
                 "modelUsed": model if 'model' in locals() else None,
                 "refsDebug": refs_debug,
+                "generationMode": generation_mode if 'generation_mode' in locals() else "baseline_only",
             }
         except Exception:
             return JSONResponse(status_code=500, content={"ok": False, "code": "IMAGE_GENERATION_FAILED", "hint": str(e)[:300]})

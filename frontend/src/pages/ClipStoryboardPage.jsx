@@ -337,9 +337,16 @@ function normalizeClipImageRefsPayload(refs = {}) {
   const sessionStyleAnchor = String(refs?.sessionStyleAnchor || "").trim();
   if (sessionStyleAnchor) normalized.sessionStyleAnchor = sessionStyleAnchor;
 
+  if (refs?.sessionBaseline && typeof refs.sessionBaseline === "object") {
+    normalized.sessionBaseline = refs.sessionBaseline;
+  }
+
   if (refs?.previousContinuityMemory && typeof refs.previousContinuityMemory === "object") {
     normalized.previousContinuityMemory = refs.previousContinuityMemory;
   }
+
+  const previousSceneImageUrl = String(refs?.previousSceneImageUrl || "").trim();
+  if (previousSceneImageUrl) normalized.previousSceneImageUrl = previousSceneImageUrl;
 
   return normalized;
 }
@@ -980,6 +987,7 @@ const scenarioBrainRefs = useMemo(() => {
     sessionCharacterAnchor: planRefs.sessionCharacterAnchor,
     sessionLocationAnchor: planRefs.sessionLocationAnchor,
     sessionStyleAnchor: planRefs.sessionStyleAnchor,
+    sessionBaseline: planRefs.sessionBaseline,
   };
 }, [edges, nodes, scenarioNode?.id]);
 
@@ -1039,16 +1047,17 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
   const handleGenerateScenarioImage = useCallback(async () => {
     if (!scenarioSelected) return;
     const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
-    const prompt = String(scenarioSelected.imagePrompt || scenarioSelected.visualPrompt || scenarioSelected.prompt || "").trim();
+    const sceneDelta = String(scenarioSelected.imagePrompt || scenarioSelected.visualPrompt || scenarioSelected.prompt || "").trim();
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
+    const previousSceneImageUrl = String(previousScene?.imageUrl || "").trim();
     const previousContinuityMemory = scenarioSelected.previousContinuityMemory
       || previousScene?.continuityMemory
       || null;
     const imageFormat = normalizeSceneImageFormat(scenarioSelected.imageFormat);
     const { width, height } = getSceneImageSize(imageFormat);
-    if (!prompt) {
-      setScenarioImageError("Добавьте Prompt (Image)");
+    if (!sceneDelta) {
+      setScenarioImageError("Добавьте Scene delta (Image prompt)");
       return;
     }
 
@@ -1059,13 +1068,14 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
         method: "POST",
         body: {
           sceneId,
-          prompt: `${prompt}\nAspect ratio: ${imageFormat}`,
+          sceneDelta: `${sceneDelta}\nAspect ratio: ${imageFormat}`,
           sceneText,
           width,
           height,
           refs: normalizeClipImageRefsPayload({
             ...scenarioBrainRefs,
             previousContinuityMemory,
+            previousSceneImageUrl,
           }),
         },
       });
@@ -1520,6 +1530,9 @@ onParse: async (nodeId) => {
                     sessionCharacterAnchor: String(out?.sessionWorldAnchors?.character || "").trim() || undefined,
                     sessionLocationAnchor: String(out?.sessionWorldAnchors?.location || "").trim() || undefined,
                     sessionStyleAnchor: String(out?.sessionWorldAnchors?.style || "").trim() || undefined,
+                    sessionBaseline: out?.sessionBaseline && typeof out.sessionBaseline === "object"
+                      ? out.sessionBaseline
+                      : undefined,
                   },
                   settings: { scenarioKey, shootKey, styleKey, freezeStyle },
                 },
