@@ -232,6 +232,14 @@ def _is_clip_video_transition_mode(transition_type: str, start_image_url: str, e
     return bool(start_image_url and end_image_url)
 
 
+def _is_localhost_url(url: str) -> bool:
+    try:
+        host = (urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {"127.0.0.1", "localhost", "0.0.0.0"}
+
+
 def _kie_wait_for_video_result(task_id: str, *, poll_interval_sec: int, poll_timeout_sec: int) -> tuple[str | None, str | None, str | None]:
     started = time.time()
     while time.time() - started < poll_timeout_sec:
@@ -4027,6 +4035,18 @@ def clip_video(payload: ClipVideoIn):
                 "code": "VIDEO_SOURCE_IMAGE_REQUIRED",
                 "hint": "imageUrl_or_startImageUrl_required",
                 "details": "Provide imageUrl for single mode or startImageUrl/endImageUrl for transition modes.",
+            },
+        )
+
+    if _is_localhost_url(source_image_url):
+        print(f"[CLIP VIDEO] localhost_image_blocked={source_image_url}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "code": "KIE_LOCALHOST_IMAGE_URL_UNSUPPORTED",
+                "hint": "provider_cannot_fetch_localhost_asset",
+                "details": f"KIE cannot access local asset URL: {source_image_url}. Use a public URL or upload image bytes to the provider.",
             },
         )
 
