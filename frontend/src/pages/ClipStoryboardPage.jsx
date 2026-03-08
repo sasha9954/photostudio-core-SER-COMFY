@@ -2633,27 +2633,93 @@ const hydrate = useCallback(() => {
                     {scenarioVideoOpen ? (
                       <div className="clipSB_scenarioEditRow clipSB_videoBlock">
                         <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео сцены</div>
-                        <div className="clipSB_videoPreviewWrap">
-                          {scenarioSelected.videoUrl ? (
-                            <video
-                              key={String(scenarioSelected.id || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
-                              className="clipSB_videoPlayer"
-                              controls
-                              playsInline
-                              preload="metadata"
-                              src={scenarioSelected.videoUrl}
-                              poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
-                            />
-                          ) : getSceneVideoPoster(scenarioSelected, scenarioPreviousScene) ? (
-                            <img className="clipSB_videoPoster" src={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)} alt="poster" />
-                          ) : null}
-
-                          {scenarioVideoLoading ? (
-                            <div className="clipSB_videoOverlay">
-                              <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                        {scenarioSelectedTransitionType === "continuous" ? (
+                          <div className="clipSB_videoPipelineRow">
+                            <div className="clipSB_videoFrameSmall">
+                              <div className="clipSB_hint">START</div>
+                              {scenarioSelectedEffectiveStartImageUrl ? (
+                                <img
+                                  src={scenarioSelectedEffectiveStartImageUrl}
+                                  className="clipSB_videoFrameImg"
+                                  alt="start frame"
+                                  onClick={() => setLightboxUrl(scenarioSelectedEffectiveStartImageUrl)}
+                                />
+                              ) : (
+                                <div className="clipSB_videoFramePlaceholder">START</div>
+                              )}
                             </div>
-                          ) : null}
-                        </div>
+
+                            <div className="clipSB_videoArrow">→</div>
+
+                            <div className="clipSB_videoFrameSmall">
+                              <div className="clipSB_hint">END</div>
+                              {scenarioSelected.endImageUrl ? (
+                                <img
+                                  src={scenarioSelected.endImageUrl}
+                                  className="clipSB_videoFrameImg"
+                                  alt="end frame"
+                                  onClick={() => setLightboxUrl(scenarioSelected.endImageUrl)}
+                                />
+                              ) : (
+                                <div className="clipSB_videoFramePlaceholder">END</div>
+                              )}
+                            </div>
+
+                            <div className="clipSB_videoArrow">→</div>
+
+                            <div className="clipSB_videoResultBox">
+                              <div className="clipSB_videoPreviewWrap">
+                                {scenarioSelected.videoUrl ? (
+                                  <video
+                                    key={String(scenarioSelected.id || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
+                                    className="clipSB_videoPlayer"
+                                    controls
+                                    playsInline
+                                    preload="metadata"
+                                    src={scenarioSelected.videoUrl}
+                                    poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
+                                  />
+                                ) : getSceneVideoPoster(scenarioSelected, scenarioPreviousScene) ? (
+                                  <img
+                                    className="clipSB_videoPoster"
+                                    src={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
+                                    alt="video preview"
+                                  />
+                                ) : (
+                                  <div className="clipSB_videoFramePlaceholder">RESULT</div>
+                                )}
+
+                                {scenarioVideoLoading ? (
+                                  <div className="clipSB_videoOverlay">
+                                    <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="clipSB_videoPreviewWrap">
+                            {scenarioSelected.videoUrl ? (
+                              <video
+                                key={String(scenarioSelected.id || scenarioEditor.selected) + ":" + String(scenarioSelected.videoUrl || "")}
+                                className="clipSB_videoPlayer"
+                                controls
+                                playsInline
+                                preload="metadata"
+                                src={scenarioSelected.videoUrl}
+                                poster={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)}
+                              />
+                            ) : getSceneVideoPoster(scenarioSelected, scenarioPreviousScene) ? (
+                              <img className="clipSB_videoPoster" src={getSceneVideoPoster(scenarioSelected, scenarioPreviousScene)} alt="poster" />
+                            ) : null}
+
+                            {scenarioVideoLoading ? (
+                              <div className="clipSB_videoOverlay">
+                                <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
                         <details className="clipSB_videoDetails">
                           <summary>Детали</summary>
                           <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
