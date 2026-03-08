@@ -642,48 +642,122 @@ def _normalize_transition_type(value) -> str:
 def _infer_transition_type(scene: dict) -> str:
     if not isinstance(scene, dict):
         return "single"
-    tokens = " ".join(
-        [
-            str(scene.get("sceneType") or ""),
-            str(scene.get("shotPurpose") or ""),
-            str(scene.get("visualDescription") or ""),
-            str(scene.get("reason") or ""),
-            str(scene.get("motion") or ""),
-        ]
-    ).lower()
+
+    def _norm_text(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            return " ".join(f"{k}:{v}" for k, v in value.items())
+        if isinstance(value, list):
+            return " ".join(str(v) for v in value)
+        return str(value)
+
+    def _norm_compact(value) -> str:
+        return re.sub(r"\s+", " ", _norm_text(value).strip().lower())
+
+    continuity_memory = scene.get("continuityMemory") if isinstance(scene.get("continuityMemory"), dict) else {}
+    previous_continuity_memory = scene.get("previousContinuityMemory") if isinstance(scene.get("previousContinuityMemory"), dict) else {}
+
+    token_fields = [
+        scene.get("sceneType"),
+        scene.get("shotPurpose"),
+        scene.get("visualDescription"),
+        scene.get("visualPrompt"),
+        scene.get("reason"),
+        scene.get("motion"),
+        scene.get("camera"),
+    ]
+    continuity_fields = [
+        continuity_memory.get("location"),
+        continuity_memory.get("worldState"),
+        continuity_memory.get("worldScaleContext"),
+        previous_continuity_memory.get("location"),
+        previous_continuity_memory.get("worldState"),
+        previous_continuity_memory.get("worldScaleContext"),
+    ]
+    tokens = " ".join(_norm_text(v) for v in [*token_fields, *continuity_fields]).lower()
 
     hard_cut_tokens = [
         "location change",
         "new location",
         "another location",
+        "different location",
+        "different city",
+        "new city",
+        "different world",
         "new place",
         "time jump",
         "time skip",
         "next day",
+        "later that night",
+        "meanwhile",
+        "elsewhere",
         "new chapter",
+        "chapter break",
         "new world",
         "hard cut",
+        "cut to",
         "montage",
+        "flashback",
+        "flash forward",
+        "dream",
+        "memory",
+        "vision",
     ]
     continuous_tokens = [
         "reveal",
+        "revealing",
         "emerge",
+        "emerging",
         "emergence",
+        "rise",
+        "rising",
+        "eruption",
+        "erupts",
+        "bursts through",
+        "forms",
+        "forming",
         "approach",
+        "approaching",
+        "advance",
+        "advancing",
         "walk",
+        "walking",
+        "run",
         "running",
         "chase",
         "transformation",
+        "transforming",
         "escalation",
         "impact",
         "clash",
+        "combat",
+        "build-up",
+        "buildup",
         "progression",
         "movement",
+        "motion",
+        "unfolds",
+        "develops",
     ]
 
-    if any(token in tokens for token in hard_cut_tokens):
+    hard_cut_evidence = any(token in tokens for token in hard_cut_tokens)
+    continuous_evidence = any(token in tokens for token in continuous_tokens)
+
+    continuity_changed = False
+    changed_fields = []
+    for field in ["location", "worldState", "worldScaleContext"]:
+        previous_value = _norm_compact(previous_continuity_memory.get(field))
+        current_value = _norm_compact(continuity_memory.get(field))
+        if previous_value and current_value and previous_value != current_value:
+            changed_fields.append(field)
+    if changed_fields:
+        continuity_changed = True
+
+    if hard_cut_evidence or (continuity_changed and (hard_cut_evidence or "new" in tokens or "different" in tokens or "change" in tokens or "switch" in tokens)):
         return "hard_cut"
-    if any(token in tokens for token in continuous_tokens):
+
+    if continuous_evidence:
         return "continuous"
     return "single"
 
@@ -3114,8 +3188,10 @@ If any of the required descriptive fields are returned in English, the output is
 
         if transition_type == "continuous":
             prompt_value = end_frame_prompt or start_frame_prompt or visual_prompt or visual_desc
+            image_prompt_value = start_frame_prompt or end_frame_prompt or visual_prompt or visual_desc
         else:
             prompt_value = frame_prompt or visual_prompt or visual_desc
+            image_prompt_value = frame_prompt or visual_prompt or visual_desc
 
         continuity_memory = _sanitize_continuity_memory(s.get("continuityMemory"))
         if not continuity_memory:
@@ -3145,7 +3221,7 @@ If any of the required descriptive fields are returned in English, the output is
             "prompt": prompt_value,
             "sceneDelta": scene_delta,
             "sceneText": visual_desc,
-            "imagePrompt": visual_prompt,
+            "imagePrompt": image_prompt_value,
             "videoPrompt": video_prompt,
             "why": reason_text,
             "sceneType": scene_type,
