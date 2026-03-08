@@ -631,6 +631,63 @@ def _format_entity_scale_anchors(anchors: dict[str, float]) -> str:
     return ", ".join(f"{k}:{v:g}" for k, v in ordered)
 
 
+_TRANSITION_TYPES = {"continuous", "single", "hard_cut"}
+
+
+def _normalize_transition_type(value) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _TRANSITION_TYPES else "single"
+
+
+def _infer_transition_type(scene: dict) -> str:
+    if not isinstance(scene, dict):
+        return "single"
+    tokens = " ".join(
+        [
+            str(scene.get("sceneType") or ""),
+            str(scene.get("shotPurpose") or ""),
+            str(scene.get("visualDescription") or ""),
+            str(scene.get("reason") or ""),
+            str(scene.get("motion") or ""),
+        ]
+    ).lower()
+
+    hard_cut_tokens = [
+        "location change",
+        "new location",
+        "another location",
+        "new place",
+        "time jump",
+        "time skip",
+        "next day",
+        "new chapter",
+        "new world",
+        "hard cut",
+        "montage",
+    ]
+    continuous_tokens = [
+        "reveal",
+        "emerge",
+        "emergence",
+        "approach",
+        "walk",
+        "running",
+        "chase",
+        "transformation",
+        "escalation",
+        "impact",
+        "clash",
+        "progression",
+        "movement",
+    ]
+
+    if any(token in tokens for token in hard_cut_tokens):
+        return "hard_cut"
+    if any(token in tokens for token in continuous_tokens):
+        return "continuous"
+    return "single"
+
+
 def _build_scene_continuity_memory(*, scene: dict, session_world_anchors: dict[str, str], prop_anchor_label: str) -> dict[str, str]:
 
     location = _trim_continuity_value(
@@ -1986,6 +2043,65 @@ Even in close-ups, preserve perceived scale via framing, perspective, crop, and 
 THREAT DOMINANCE RULE:
 When a threat entity exists (monster, predator, boss), it must visually dominate frame presence via scale, occupancy, or spatial pressure even when partially visible.
 
+KEYFRAME STORYBOARD ENGINE:
+The storyboard must classify each scene into one of three types:
+- continuous
+- single
+- hard_cut
+
+continuous:
+Use when the same local event develops over time and should be shown as a visual transition.
+For continuous scenes, return:
+- startFramePrompt
+- endFramePrompt
+- transitionActionPrompt
+
+single:
+Use when the scene is one important visual beat or one static cinematic moment.
+For single scenes, return:
+- framePrompt
+
+hard_cut:
+Use when the next scene starts a new location, time block, or narrative chapter.
+For hard_cut scenes, return:
+- framePrompt
+
+SCENE TYPE SELECTION RULE:
+If the event evolves naturally in the same local world situation, use continuous.
+If the scene is only one strong visual beat, use single.
+If the narrative jumps to another block, use hard_cut.
+
+CONTINUOUS CHAIN RULE:
+For continuous scenes, the end frame should feel like the natural visual destination of the start frame.
+The transitionActionPrompt must describe what visually happens between start and end.
+Use physical progression, not abstract poetic wording.
+
+EXAMPLES:
+- hero walking across dune -> sand begins trembling
+- sand swelling -> monster emerging
+- fighter raising sword -> clash impact
+- singer stepping toward microphone -> close emotional performance moment
+
+SINGLE SCENE RULE:
+Single scenes should describe one complete cinematic moment.
+No start/end pair is needed.
+
+HARD CUT RULE:
+Hard cut scenes begin a new block.
+Do not force visual interpolation from the previous scene when a hard cut is more natural.
+
+VISUAL CAUSALITY RULE:
+For continuous scenes, there must be visible cause-and-effect progression between start and end.
+Do not skip directly from setup to payoff if an intermediate event is visually implied.
+
+KEYFRAME CLARITY RULE:
+All frame prompts must describe what the image should look like at that exact moment.
+Do not describe a full animation inside a single frame prompt.
+
+TRANSITION ACTION RULE:
+transitionActionPrompt must describe motion/process/change between the two keyframes.
+This prompt will later be used for image-to-video generation.
+
 CAMERA CONTINUITY ENGINE:
 The storyboard must follow cinematic camera progression rules.
 Scenes must not repeat identical framing or camera logic.
@@ -2634,9 +2750,14 @@ Response schema (all keys required):
     "id": "scene_001",
     "start": number,
     "end": number,
+    "transitionType": "continuous | single | hard_cut",
     "sceneType": string,
     "shotPurpose": string,
     "visualDescription": string,
+    "startFramePrompt": string,
+    "endFramePrompt": string,
+    "framePrompt": string,
+    "transitionActionPrompt": string,
     "visualPrompt": string,
     "lipSyncText": string,
     "camera": string,
@@ -2838,7 +2959,10 @@ If any of the required descriptive fields are returned in English, the output is
                 return False, f"scene_{idx}_start_not_less_than_end"
             visual_prompt = str(scene.get("visualPrompt") or "").strip()
             visual_desc = str(scene.get("visualDescription") or "").strip()
-            if not (visual_prompt or visual_desc):
+            frame_prompt = str(scene.get("framePrompt") or "").strip()
+            start_frame_prompt = str(scene.get("startFramePrompt") or "").strip()
+            end_frame_prompt = str(scene.get("endFramePrompt") or "").strip()
+            if not (visual_prompt or visual_desc or frame_prompt or start_frame_prompt or end_frame_prompt):
                 return False, f"scene_{idx}_visual_empty"
         return True, None
 
@@ -2952,7 +3076,32 @@ If any of the required descriptive fields are returned in English, the output is
             video_prompt = _enforce_prop_anchor_text(video_prompt, prop_anchor_label, lang="en")
             visual_desc = _enforce_prop_anchor_text(visual_desc, prop_anchor_label, lang="ru")
             reason_text = _enforce_prop_anchor_text(reason_text, prop_anchor_label, lang="ru")
+
+        raw_transition_type = s.get("transitionType")
+        transition_type = _normalize_transition_type(raw_transition_type)
+        if not str(raw_transition_type or "").strip():
+            transition_type = _infer_transition_type(s)
+
         scene_type = str(s.get("sceneType") or "visual_rhythm").strip() or "visual_rhythm"
+        start_frame_prompt = ""
+        end_frame_prompt = ""
+        frame_prompt = ""
+        transition_action_prompt = ""
+
+        if transition_type == "continuous":
+            start_frame_prompt = str(s.get("startFramePrompt") or "").strip()
+            end_frame_prompt = str(s.get("endFramePrompt") or "").strip()
+            transition_action_prompt = str(s.get("transitionActionPrompt") or "").strip()
+
+            if not start_frame_prompt:
+                start_frame_prompt = str(s.get("visualDescription") or s.get("visualPrompt") or "").strip()
+            if not end_frame_prompt:
+                end_frame_prompt = str(s.get("visualPrompt") or s.get("visualDescription") or "").strip()
+            if not transition_action_prompt:
+                transition_action_prompt = str(s.get("reason") or s.get("motion") or s.get("visualDescription") or "").strip()
+
+        elif transition_type in {"single", "hard_cut"}:
+            frame_prompt = str(s.get("framePrompt") or s.get("visualPrompt") or s.get("visualDescription") or "").strip()
         continuity_memory = _sanitize_continuity_memory(s.get("continuityMemory"))
         if not continuity_memory:
             continuity_memory = _build_scene_continuity_memory(
@@ -2973,7 +3122,12 @@ If any of the required descriptive fields are returned in English, the output is
             "id": str(s.get("id") or f"scene_{idx + 1:03d}"),
             "start": start,
             "end": end,
-            "prompt": visual_prompt or visual_desc,
+            "transitionType": transition_type,
+            "startFramePrompt": start_frame_prompt,
+            "endFramePrompt": end_frame_prompt,
+            "framePrompt": frame_prompt,
+            "transitionActionPrompt": transition_action_prompt,
+            "prompt": frame_prompt or visual_prompt or visual_desc,
             "sceneDelta": scene_delta,
             "sceneText": visual_desc,
             "imagePrompt": visual_prompt,
