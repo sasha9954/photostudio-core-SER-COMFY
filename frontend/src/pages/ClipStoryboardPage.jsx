@@ -292,6 +292,42 @@ function getSceneImageSize(format) {
   return { width: 768, height: 1344 };
 }
 
+function resolveSceneTransitionType(scene) {
+  const raw = String(scene?.transitionType || "single").toLowerCase();
+  if (raw === "continuous" || raw === "single" || raw === "hard_cut") return raw;
+  return "single";
+}
+
+function getSceneTypeBadge(type) {
+  if (type === "continuous") return "CONTINUOUS";
+  if (type === "hard_cut") return "HARD CUT";
+  return "SINGLE";
+}
+
+function getScenePrimaryFramePrompt(scene) {
+  return String(scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
+}
+
+function getSceneTransitionPrompt(scene) {
+  return String(scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
+}
+
+function getSceneVideoPoster(scene) {
+  const transitionType = resolveSceneTransitionType(scene);
+  if (transitionType === "continuous") {
+    return String(scene?.startImageUrl || scene?.endImageUrl || scene?.imageUrl || "").trim();
+  }
+  return String(scene?.imageUrl || "").trim();
+}
+
+function getSceneListThumb(scene) {
+  const transitionType = resolveSceneTransitionType(scene);
+  if (transitionType === "continuous") {
+    return String(scene?.startImageUrl || scene?.endImageUrl || scene?.imageUrl || "").trim();
+  }
+  return String(scene?.imageUrl || "").trim();
+}
+
 async function uploadAsset(file) {
   const fd = new FormData();
   fd.append("file", file);
@@ -1109,6 +1145,7 @@ const scenarioScenes = useMemo(() => {
 }, [scenarioNode]);
 
 const scenarioSelected = scenarioScenes[scenarioEditor.selected] || null;
+const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelected);
 const scenarioSelectedImageFormat = normalizeSceneImageFormat(scenarioSelected?.imageFormat);
 const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? scenarioEditor.selected + 1 : 0;
 const scenarioSelectedT0 = Number(scenarioSelected?.t0 ?? scenarioSelected?.start ?? 0);
@@ -1156,10 +1193,12 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
     }));
   }, [scenarioNode?.id, setNodes]);
 
-  const handleGenerateScenarioImage = useCallback(async () => {
+  const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
+
+    const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
     const sceneId = String(scenarioSelected.id || `s${scenarioEditor.selected + 1}`);
-    const sceneDelta = String(scenarioSelected.imagePrompt || scenarioSelected.visualPrompt || scenarioSelected.prompt || "").trim();
     const sceneText = String(scenarioSelected.sceneText || scenarioSelected.visualDescription || "").trim();
     const previousScene = scenarioEditor.selected > 0 ? scenarioScenes[scenarioEditor.selected - 1] : null;
     const previousSceneImageUrl = String(previousScene?.imageUrl || "").trim();
@@ -1168,8 +1207,18 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
       || null;
     const imageFormat = normalizeSceneImageFormat(scenarioSelected.imageFormat);
     const { width, height } = getSceneImageSize(imageFormat);
+
+    let sceneDelta = "";
+    if (transitionType === "continuous" && normalizedSlot === "start") {
+      sceneDelta = String(scenarioSelected.startFramePrompt || scenarioSelected.imagePrompt || scenarioSelected.prompt || "").trim();
+    } else if (transitionType === "continuous" && normalizedSlot === "end") {
+      sceneDelta = String(scenarioSelected.endFramePrompt || scenarioSelected.imagePrompt || scenarioSelected.prompt || "").trim();
+    } else {
+      sceneDelta = getScenePrimaryFramePrompt(scenarioSelected);
+    }
+
     if (!sceneDelta) {
-      setScenarioImageError("Добавьте Scene delta (Image prompt)");
+      setScenarioImageError("Добавьте prompt для генерации кадра");
       return;
     }
 
@@ -1180,7 +1229,8 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
         method: "POST",
         body: {
           sceneId,
-          sceneDelta: `${sceneDelta}\nAspect ratio: ${imageFormat}`,
+          sceneDelta: `${sceneDelta}
+Aspect ratio: ${imageFormat}`,
           sceneText,
           width,
           height,
@@ -1192,7 +1242,15 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
-      updateScenarioScene(scenarioEditor.selected, { imageUrl: String(out.imageUrl || ""), imageFormat });
+
+      const generatedImageUrl = String(out.imageUrl || "");
+      if (transitionType === "continuous" && normalizedSlot === "start") {
+        updateScenarioScene(scenarioEditor.selected, { startImageUrl: generatedImageUrl, imageFormat });
+      } else if (transitionType === "continuous" && normalizedSlot === "end") {
+        updateScenarioScene(scenarioEditor.selected, { endImageUrl: generatedImageUrl, imageFormat });
+      } else {
+        updateScenarioScene(scenarioEditor.selected, { imageUrl: generatedImageUrl, imageFormat });
+      }
     } catch (e) {
       console.error(e);
       setScenarioImageError(String(e?.message || e));
@@ -1201,10 +1259,20 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
     }
   }, [scenarioSelected, scenarioEditor.selected, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
 
-  const handleClearScenarioImage = useCallback(() => {
+  const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
+    const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const normalizedSlot = slot === "start" || slot === "end" ? slot : "single";
+    if (transitionType === "continuous" && normalizedSlot === "start") {
+      updateScenarioScene(scenarioEditor.selected, { startImageUrl: "" });
+      return;
+    }
+    if (transitionType === "continuous" && normalizedSlot === "end") {
+      updateScenarioScene(scenarioEditor.selected, { endImageUrl: "" });
+      return;
+    }
     updateScenarioScene(scenarioEditor.selected, { imageUrl: "" });
-  }, [scenarioEditor.selected, updateScenarioScene]);
+  }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
   const handleScenarioVideoTakeAudio = useCallback(async () => {
     if (!scenarioSelected) return;
@@ -1264,7 +1332,15 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
   }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
   const handleScenarioGenerateVideo = useCallback(async () => {
-    if (!scenarioSelected?.imageUrl) return;
+    const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const frameImageUrl = String(scenarioSelected?.imageUrl || "").trim();
+    const startImageUrl = String(scenarioSelected?.startImageUrl || "").trim();
+    const endImageUrl = String(scenarioSelected?.endImageUrl || "").trim();
+    const hasImageForVideo = transitionType === "continuous"
+      ? !!(startImageUrl || endImageUrl || frameImageUrl)
+      : !!frameImageUrl;
+
+    if (!hasImageForVideo) return;
     if (scenarioSelected?.lipSync && !scenarioSelected?.audioSliceUrl) {
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
       return;
@@ -1284,12 +1360,17 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
         method: "POST",
         body: {
           sceneId,
-          imageUrl: scenarioSelected.imageUrl,
+          imageUrl: frameImageUrl || startImageUrl || endImageUrl,
+          startImageUrl,
+          endImageUrl,
           audioSliceUrl: scenarioSelected.audioSliceUrl || "",
           videoPrompt: scenarioSelected.videoPrompt || "",
+          transitionActionPrompt: getSceneTransitionPrompt(scenarioSelected),
+          transitionType,
           requestedDurationSec,
           lipSync: !!scenarioSelected.lipSync,
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
+          // TODO: Switch fully to transition-aware backend endpoint once available.
         },
       });
       if (!out?.ok || !out?.videoUrl) throw new Error(out?.hint || out?.code || "video_generation_failed");
@@ -1308,7 +1389,11 @@ const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSele
   }, [scenarioEditor.selected, updateScenarioScene]);
 
   const handleScenarioAddToVideo = useCallback(() => {
-    if (!scenarioSelected?.imageUrl) return;
+    const transitionType = resolveSceneTransitionType(scenarioSelected);
+    const hasImage = transitionType === "continuous"
+      ? !!(scenarioSelected?.startImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl)
+      : !!scenarioSelected?.imageUrl;
+    if (!hasImage) return;
     setScenarioVideoOpen(true);
     setScenarioVideoError("");
   }, [scenarioSelected]);
@@ -1605,7 +1690,8 @@ onClipSec: (nodeId, value) => {
                     .map((s, idx) => {
                       const t0 = Number(s.start ?? s.t0 ?? 0);
                       const t1 = Number(s.end ?? s.t1 ?? 0);
-                      const prompt = String(s.imagePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
+                      const prompt = String(s.imagePrompt || s.framePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
+                      const transitionType = resolveSceneTransitionType(s);
                       return {
                         id: s.id || `s${String(idx + 1).padStart(2, "0")}`,
                         start: t0,
@@ -1613,10 +1699,17 @@ onClipSec: (nodeId, value) => {
                         t0,
                         t1,
                         prompt,
+                        transitionType,
                         sceneText: s.sceneText || "",
                         imagePrompt: s.imagePrompt || "",
+                        framePrompt: s.framePrompt || s.imagePrompt || s.prompt || "",
+                        startFramePrompt: s.startFramePrompt || "",
+                        endFramePrompt: s.endFramePrompt || "",
+                        transitionActionPrompt: s.transitionActionPrompt || s.videoPrompt || "",
                         videoPrompt: s.videoPrompt || "",
                         imageUrl: s.imageUrl || "",
+                        startImageUrl: s.startImageUrl || "",
+                        endImageUrl: s.endImageUrl || "",
                         imageFormat: normalizeSceneImageFormat(s.imageFormat),
                         audioSliceUrl: s.audioSliceUrl || "",
                         audioSliceT0: Number(s.audioSliceT0 ?? t0),
@@ -2150,15 +2243,15 @@ const hydrate = useCallback(() => {
                     onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
                   >
                     <div className="clipSB_scenarioItemInner">
-                      {s.imageUrl ? (
+                      {getSceneListThumb(s) ? (
                         <img
-                          src={s.imageUrl}
+                          src={getSceneListThumb(s)}
                           alt="scene"
                           className="clipSB_scenarioThumb"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            setLightboxUrl(s.imageUrl);
+                            setLightboxUrl(getSceneListThumb(s));
                           }}
                         />
                       ) : (
@@ -2170,7 +2263,8 @@ const hydrate = useCallback(() => {
                             {fmtTime(s.start)} → {fmtTime(s.end)}
                           </div>
                           <div className="clipSB_scenarioTags">
-                            {s.imageUrl ? <div className="clipSB_tag">IMG</div> : null}
+                            <div className="clipSB_tag">{getSceneTypeBadge(resolveSceneTransitionType(s))}</div>
+                            {getSceneListThumb(s) ? <div className="clipSB_tag">IMG</div> : null}
                             {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
                             {s.lipSync ? <div className="clipSB_tag">LIP</div> : null}
                           </div>
@@ -2228,73 +2322,169 @@ const hydrate = useCallback(() => {
                       />
                     </div>
 
-                    <div className="clipSB_scenarioEditRow">
-                      <div className="clipSB_hint">Prompt (Image)</div>
-                      <textarea
-                        className="clipSB_textarea"
-                        rows={5}
-                        value={scenarioSelected.imagePrompt || ""}
-                        onChange={(e) => updateScenarioScene(scenarioEditor.selected, { imagePrompt: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="clipSB_scenarioEditRow">
-                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Изображение сцены</div>
-                      <div className="clipSB_aspectPills" style={{ marginBottom: 8 }}>
-                        {SCENE_IMAGE_FORMATS.map((format) => (
-                          <button
-                            key={format}
-                            type="button"
-                            className={`clipSB_aspectPill${scenarioSelectedImageFormat === format ? " isActive" : ""}`}
-                            onClick={() => updateScenarioScene(scenarioEditor.selected, { imageFormat: format })}
-                          >
-                            {format}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="clipSB_scenarioPreviewWrap">
-                        {scenarioSelected.imageUrl ? (
-                          <img
-                            src={scenarioSelected.imageUrl}
-                            alt="scene preview"
-                            className="clipSB_scenarioPreview"
-                            onClick={() => setLightboxUrl(scenarioSelected.imageUrl)}
+                    {scenarioSelectedTransitionType === "continuous" ? (
+                      <>
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint">Prompt (Start Frame)</div>
+                          <textarea
+                            className="clipSB_textarea"
+                            rows={4}
+                            value={scenarioSelected.startFramePrompt || ""}
+                            onChange={(e) => updateScenarioScene(scenarioEditor.selected, { startFramePrompt: e.target.value })}
                           />
-                        ) : (
-                          <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
-                        )}
-                      </div>
-                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                        <button className="clipSB_btn clipSB_btnSecondary" onClick={handleGenerateScenarioImage} disabled={scenarioImageLoading}>
-                          {scenarioImageLoading ? "Генерация..." : "Сгенерировать изображение"}
-                        </button>
-                        <button className="clipSB_btn clipSB_btnSecondary" onClick={handleClearScenarioImage}>
-                          Очистить изображение
-                        </button>
-                        {scenarioSelected.imageUrl ? (
-                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>
-                            Добавить в Видео
-                          </button>
-                        ) : null}
-                      </div>
-                      {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
-                    </div>
+                        </div>
 
-                    <div className="clipSB_scenarioEditRow">
-                      <div className="clipSB_hint">Prompt (Video)</div>
-                      <textarea
-                        className="clipSB_textarea"
-                        rows={4}
-                        value={scenarioSelected.videoPrompt || ""}
-                        onChange={(e) => updateScenarioScene(scenarioEditor.selected, { videoPrompt: e.target.value })}
-                      />
-                    </div>
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint">Prompt (End Frame)</div>
+                          <textarea
+                            className="clipSB_textarea"
+                            rows={4}
+                            value={scenarioSelected.endFramePrompt || ""}
+                            onChange={(e) => updateScenarioScene(scenarioEditor.selected, { endFramePrompt: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint">Prompt (Transition Video)</div>
+                          <textarea
+                            className="clipSB_textarea"
+                            rows={4}
+                            value={scenarioSelected.transitionActionPrompt ?? scenarioSelected.videoPrompt ?? ""}
+                            onChange={(e) => updateScenarioScene(scenarioEditor.selected, { transitionActionPrompt: e.target.value, videoPrompt: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint" style={{ marginBottom: 6 }}>Изображения сцены</div>
+                          <div className="clipSB_aspectPills" style={{ marginBottom: 8 }}>
+                            {SCENE_IMAGE_FORMATS.map((format) => (
+                              <button
+                                key={format}
+                                type="button"
+                                className={`clipSB_aspectPill${scenarioSelectedImageFormat === format ? " isActive" : ""}`}
+                                onClick={() => updateScenarioScene(scenarioEditor.selected, { imageFormat: format })}
+                              >
+                                {format}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="clipSB_hint" style={{ marginBottom: 6 }}>START FRAME IMAGE</div>
+                          <div className="clipSB_scenarioPreviewWrap">
+                            {scenarioSelected.startImageUrl ? (
+                              <img
+                                src={scenarioSelected.startImageUrl}
+                                alt="start frame preview"
+                                className="clipSB_scenarioPreview"
+                                onClick={() => setLightboxUrl(scenarioSelected.startImageUrl)}
+                              />
+                            ) : (
+                              <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Start preview отсутствует</div>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 10 }}>
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("start")} disabled={scenarioImageLoading}>
+                              {scenarioImageLoading ? "Генерация..." : "Сгенерировать start"}
+                            </button>
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("start")}>Очистить start</button>
+                          </div>
+
+                          <div className="clipSB_hint" style={{ marginBottom: 6 }}>END FRAME IMAGE</div>
+                          <div className="clipSB_scenarioPreviewWrap">
+                            {scenarioSelected.endImageUrl ? (
+                              <img
+                                src={scenarioSelected.endImageUrl}
+                                alt="end frame preview"
+                                className="clipSB_scenarioPreview"
+                                onClick={() => setLightboxUrl(scenarioSelected.endImageUrl)}
+                              />
+                            ) : (
+                              <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">End preview отсутствует</div>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("end")} disabled={scenarioImageLoading}>
+                              {scenarioImageLoading ? "Генерация..." : "Сгенерировать end"}
+                            </button>
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("end")}>Очистить end</button>
+                            {(scenarioSelected.startImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) ? (
+                              <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
+                            ) : null}
+                          </div>
+                          {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span>Prompt (Frame)</span>
+                            {scenarioSelectedTransitionType === "hard_cut" ? <span className="clipSB_tag">Новый блок</span> : null}
+                          </div>
+                          <textarea
+                            className="clipSB_textarea"
+                            rows={5}
+                            value={scenarioSelected.framePrompt ?? scenarioSelected.imagePrompt ?? ""}
+                            onChange={(e) => updateScenarioScene(scenarioEditor.selected, { framePrompt: e.target.value, imagePrompt: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint" style={{ marginBottom: 6 }}>Изображение сцены</div>
+                          <div className="clipSB_aspectPills" style={{ marginBottom: 8 }}>
+                            {SCENE_IMAGE_FORMATS.map((format) => (
+                              <button
+                                key={format}
+                                type="button"
+                                className={`clipSB_aspectPill${scenarioSelectedImageFormat === format ? " isActive" : ""}`}
+                                onClick={() => updateScenarioScene(scenarioEditor.selected, { imageFormat: format })}
+                              >
+                                {format}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="clipSB_scenarioPreviewWrap">
+                            {scenarioSelected.imageUrl ? (
+                              <img
+                                src={scenarioSelected.imageUrl}
+                                alt="scene preview"
+                                className="clipSB_scenarioPreview"
+                                onClick={() => setLightboxUrl(scenarioSelected.imageUrl)}
+                              />
+                            ) : (
+                              <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleGenerateScenarioImage("single")} disabled={scenarioImageLoading}>
+                              {scenarioImageLoading ? "Генерация..." : "Сгенерировать изображение"}
+                            </button>
+                            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => handleClearScenarioImage("single")}>Очистить изображение</button>
+                            {scenarioSelected.imageUrl ? (
+                              <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioAddToVideo}>Добавить в Видео</button>
+                            ) : null}
+                          </div>
+                          {scenarioImageError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioImageError}</div> : null}
+                        </div>
+
+                        <div className="clipSB_scenarioEditRow">
+                          <div className="clipSB_hint">Prompt (Video)</div>
+                          <textarea
+                            className="clipSB_textarea"
+                            rows={4}
+                            value={scenarioSelected.videoPrompt || ""}
+                            onChange={(e) => updateScenarioScene(scenarioEditor.selected, { videoPrompt: e.target.value })}
+                          />
+                        </div>
+                      </>
+                    )}
 
                     <div className="clipSB_scenarioEditRow">
                       <div className="clipSB_hint">Scene decision debug</div>
                       <div className="clipSB_kv" style={{ display: "grid", gridTemplateColumns: "160px 1fr", rowGap: 6, columnGap: 8, alignItems: "start" }}>
                         <span>audioType</span><span>{String(scenarioSelected.audioType || "") || "—"}</span>
                         <span>sceneType</span><span>{String(scenarioSelected.sceneType || "") || "—"}</span>
+                        <span>transitionType</span><span>{scenarioSelectedTransitionType}</span>
                         <span>hasVocals</span><span>{String(!!scenarioSelected.hasVocals)}</span>
                         <span>isLipSync</span><span>{String(!!scenarioSelected.isLipSync || !!scenarioSelected.lipSync)}</span>
                         <span>lyricFragment</span><span>{String(scenarioSelected.lyricFragment || "") || "—"}</span>
@@ -2370,10 +2560,10 @@ const hydrate = useCallback(() => {
                               playsInline
                               preload="metadata"
                               src={scenarioSelected.videoUrl}
-                              poster={scenarioSelected.imageUrl || ""}
+                              poster={getSceneVideoPoster(scenarioSelected)}
                             />
-                          ) : scenarioSelected.imageUrl ? (
-                            <img className="clipSB_videoPoster" src={scenarioSelected.imageUrl} alt="poster" />
+                          ) : getSceneVideoPoster(scenarioSelected) ? (
+                            <img className="clipSB_videoPoster" src={getSceneVideoPoster(scenarioSelected)} alt="poster" />
                           ) : null}
 
                           {scenarioVideoLoading ? (
@@ -2385,6 +2575,9 @@ const hydrate = useCallback(() => {
                         <details className="clipSB_videoDetails">
                           <summary>Детали</summary>
                           <div className="clipSB_videoKv"><span>imageUrl</span><span>{scenarioSelected.imageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>startImageUrl</span><span>{scenarioSelected.startImageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>endImageUrl</span><span>{scenarioSelected.endImageUrl || "—"}</span></div>
+                          <div className="clipSB_videoKv"><span>transitionActionPrompt</span><span>{scenarioSelected.transitionActionPrompt || scenarioSelected.videoPrompt || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>audioSliceUrl</span><span>{scenarioSelected.audioSliceUrl || "—"}</span></div>
                           <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
                         </details>
@@ -2395,7 +2588,7 @@ const hydrate = useCallback(() => {
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
-                            disabled={scenarioVideoLoading || !scenarioSelected.imageUrl || (scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
+                            disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelected.startImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelected.lipSync && !scenarioSelected.audioSliceUrl)}
                           >
                             Сгенерировать видео
                           </button>
