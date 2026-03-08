@@ -851,6 +851,48 @@ body.ps_clip_fullscreen .mainCol {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
 }
 
+
+.clipSB_videoPipelineRow{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-bottom:12px;
+}
+
+.clipSB_videoFrameSmall{
+  width:120px;
+  flex-shrink:0;
+  text-align:center;
+}
+
+.clipSB_videoFrameImg{
+  width:100%;
+  height:90px;
+  object-fit:cover;
+  border-radius:6px;
+  cursor:pointer;
+}
+
+.clipSB_videoFramePlaceholder{
+  width:100%;
+  height:90px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:1px dashed rgba(255,255,255,0.2);
+  border-radius:6px;
+  opacity:0.5;
+}
+
+.clipSB_videoArrow{
+  font-size:22px;
+  opacity:0.6;
+}
+
+.clipSB_videoResultBox{
+  flex:1;
+  min-width:260px;
+}
 .clipSB_videoPreviewWrap{
   position: relative;
   width: 100%;
