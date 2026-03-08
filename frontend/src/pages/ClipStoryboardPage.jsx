@@ -1406,7 +1406,9 @@ onClipSec: (nodeId, value) => {
                   parseControllerRef.current = null;
                 }
                 activeParseNodeRef.current = null;
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, isParsing: false } } : x)));
+                setNodes((prev) => prev.map((x) => (x.id === nodeId
+                  ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null, lastParseError: null } }
+                  : x)));
               },
               onParse: async (nodeId) => {
                 const brainCurrent = nodesRef.current.find((x) => x.id === nodeId);
@@ -1435,7 +1437,9 @@ onClipSec: (nodeId, value) => {
                   parseControllerRef.current = null;
                   parseTimeoutRef.current = null;
                   activeParseNodeRef.current = null;
-                  setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, isParsing: false } } : x)));
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null } }
+                    : x)));
                   notify({ type: "warning", message: "Разбор занял слишком много времени" });
                 }, 95000);
                 parseTimeoutRef.current = timeoutId;
@@ -1614,6 +1618,9 @@ onClipSec: (nodeId, value) => {
                   if (parseTokenRef.current !== parseToken) return;
                   if (err?.name === "AbortError") {
                     if (timeoutTriggered) return;
+                    setNodes((prev) => prev.map((x) => (x.id === nodeId
+                      ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null } }
+                      : x)));
                     return;
                   }
                   console.error(err);
@@ -1857,15 +1864,6 @@ const hydrate = useCallback(() => {
   useEffect(() => {
     hydrate();
   }, [hydrate]);
-
-  // hydration safety: parsing should never restore after reload/session restore
-  useEffect(() => {
-    setNodes((prev) => prev.map((node) => (
-      node?.type === "brainNode" && node?.data?.isParsing
-        ? { ...node, data: { ...node.data, isParsing: false } }
-        : node
-    )));
-  }, [setNodes]);
 
   useEffect(() => () => {
     if (parseTimeoutRef.current) {
