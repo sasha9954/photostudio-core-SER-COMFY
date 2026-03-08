@@ -165,12 +165,17 @@ def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration:
         "input": {
             "prompt": prompt,
             "image_urls": [image_url],
-            "sound": False,
+            "sound": bool(send_audio),
             "duration": duration,
         },
     }
     if send_audio and (audio_url or "").strip():
         body["input"]["audio_url"] = str(audio_url).strip()
+
+    print(f"[CLIP VIDEO] provider_payload_has_audio={bool(body['input'].get('audio_url'))}")
+    print(f"[CLIP VIDEO] provider_payload_sound={body['input'].get('sound')}")
+    print(f"[CLIP VIDEO] provider_payload_model={body.get('model')}")
+
     callback_url = (settings.KIE_CALLBACK_URL or "").strip()
     if callback_url:
         body["callBackUrl"] = callback_url
@@ -4005,6 +4010,10 @@ def clip_video(payload: ClipVideoIn):
     if not effective_prompt:
         effective_prompt = "cinematic motion, natural movement"
 
+    print(f"[CLIP VIDEO] transition_type={transition_type}")
+    print(f"[CLIP VIDEO] effective_prompt={effective_prompt[:300]}")
+    print(f"[CLIP VIDEO] audio_slice_url={audio_slice_url}")
+
     if mode == "single":
         source_image_url = image_url or start_image_url or end_image_url
     else:
@@ -4033,11 +4042,22 @@ def clip_video(payload: ClipVideoIn):
         )
 
     if mode == "lipsync":
-        selected_model = (settings.KIE_VIDEO_MODEL_LIPSYNC or settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+        selected_model = (settings.KIE_VIDEO_MODEL_LIPSYNC or "").strip()
     elif mode == "continuous":
         selected_model = (settings.KIE_VIDEO_MODEL_CONTINUOUS or settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
     else:
         selected_model = (settings.KIE_VIDEO_MODEL_SINGLE or "").strip()
+
+    if mode == "lipsync" and not selected_model:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "code": "KIE_MODEL_NOT_CONFIGURED",
+                "hint": "lipsync_model_is_empty",
+                "details": "Set KIE_VIDEO_MODEL_LIPSYNC for lipSync mode.",
+            },
+        )
 
     if not selected_model:
         return JSONResponse(
