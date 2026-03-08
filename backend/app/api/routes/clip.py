@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw
 
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
+from app.engine.video_engine import _download_image_from_source
 from app.engine.gemini_rest import post_generate_content
 
 router = APIRouter()
@@ -158,16 +159,21 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
     return None
 
 
-def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False) -> tuple[str | None, str | None]:
+def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False, image_base64: str | None = None) -> tuple[str | None, str | None]:
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
+    input_payload = {
+        "prompt": prompt,
+        "sound": bool(send_audio),
+        "duration": duration,
+    }
+    if (image_base64 or "").strip():
+        input_payload["image"] = str(image_base64).strip()
+    else:
+        input_payload["image_urls"] = [image_url]
+
     body = {
         "model": model,
-        "input": {
-            "prompt": prompt,
-            "image_urls": [image_url],
-            "sound": bool(send_audio),
-            "duration": duration,
-        },
+        "input": input_payload,
     }
     if send_audio and (audio_url or "").strip():
         body["input"]["audio_url"] = str(audio_url).strip()
@@ -4076,17 +4082,19 @@ def clip_video(payload: ClipVideoIn):
             },
         )
 
-    if _is_localhost_url(source_image_url):
-        print(f"[CLIP VIDEO] localhost_image_blocked={source_image_url}")
-        return JSONResponse(
-            status_code=400,
-            content={
-                "ok": False,
-                "code": "KIE_LOCALHOST_IMAGE_URL_UNSUPPORTED",
-                "hint": "provider_cannot_fetch_localhost_asset",
-                "details": f"KIE cannot access local asset URL: {source_image_url}. Use a public URL or upload image bytes to the provider.",
-            },
-        )
+    image_bytes = None
+    image_ext = None
+    try:
+        image_bytes, image_ext = _download_image_from_source(source_image_url)
+    except Exception:
+        image_bytes = None
+
+    image_base64 = None
+    if image_bytes is not None:
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        print("[CLIP VIDEO] image_source=local_file")
+    else:
+        print("[CLIP VIDEO] image_source=url")
 
     if mode == "lipsync" and not audio_slice_url:
         return JSONResponse(
@@ -4150,6 +4158,7 @@ def clip_video(payload: ClipVideoIn):
     task_id, create_err = _kie_create_video_task(
         model=selected_model,
         image_url=source_image_url,
+        image_base64=image_base64,
         prompt=effective_prompt,
         duration=duration,
         audio_url=audio_slice_url,
