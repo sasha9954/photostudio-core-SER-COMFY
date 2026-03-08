@@ -81,6 +81,42 @@ def _kie_headers() -> dict:
     }
 
 
+def _kie_upload_image_bytes(*, image_bytes: bytes, filename: str, mime_type: str) -> tuple[str | None, str | None]:
+    upload_url = os.getenv("KIE_UPLOAD_URL", "https://kieai.redpandaai.co/api/file-base64-upload").strip()
+    upload_path = os.getenv("KIE_UPLOAD_PATH", "images/photostudio").strip() or "images/photostudio"
+
+    if not upload_url:
+        return None, "upload_url_is_empty"
+
+    safe_filename = str(filename or "source.jpg").strip() or "source.jpg"
+    safe_mime = str(mime_type or "image/jpeg").strip() or "image/jpeg"
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    payload = {
+        "base64Data": f"data:{safe_mime};base64,{b64}",
+        "uploadPath": upload_path,
+        "fileName": safe_filename,
+    }
+
+    try:
+        resp = requests.post(upload_url, headers=_kie_headers(), json=payload, timeout=60)
+        if resp.status_code >= 400:
+            return None, f"upload_http_{resp.status_code}:{resp.text[:300]}"
+        data = resp.json()
+    except RequestException as exc:
+        return None, f"upload_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        return None, f"upload_parse_error:{str(exc)[:300]}"
+
+    image_url = None
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        image_url = (data["data"].get("downloadUrl") or data["data"].get("url") or "").strip()
+
+    if not image_url:
+        return None, f"upload_url_missing:{str(data)[:300]}"
+    return image_url, None
+
+
 def _extract_task_id(data: dict) -> str | None:
     if not isinstance(data, dict):
         return None
@@ -159,7 +195,7 @@ def _extract_video_url_from_kie_payload(payload: object) -> str | None:
     return None
 
 
-def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False) -> tuple[str | None, str | None]:
+def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration: str, audio_url: str | None = None, send_audio: bool = False, aspect_ratio: str | None = None) -> tuple[str | None, str | None]:
     endpoint = f"{settings.KIE_BASE_URL.rstrip('/')}/jobs/createTask"
     input_payload = {
         "prompt": prompt,
@@ -167,6 +203,8 @@ def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration:
         "duration": duration,
     }
     input_payload["image_urls"] = [image_url]
+    if (aspect_ratio or "").strip():
+        input_payload["aspect_ratio"] = str(aspect_ratio).strip()
 
     body = {
         "model": model,
@@ -178,6 +216,7 @@ def _kie_create_video_task(*, model: str, image_url: str, prompt: str, duration:
     print(f"[CLIP VIDEO] provider_payload_has_audio={bool(body['input'].get('audio_url'))}")
     print(f"[CLIP VIDEO] provider_payload_sound={body['input'].get('sound')}")
     print(f"[CLIP VIDEO] provider_payload_model={body.get('model')}")
+    print(f"[CLIP VIDEO] provider_input_keys={sorted(list(body.get('input', {}).keys()))}")
 
     callback_url = (settings.KIE_CALLBACK_URL or "").strip()
     if callback_url:
@@ -4081,26 +4120,49 @@ def clip_video(payload: ClipVideoIn):
 
     image_bytes = None
     image_ext = None
+    image_read_error = None
     try:
         image_bytes, image_ext = _download_image_from_source(source_image_url)
-    except Exception:
+    except Exception as exc:
         image_bytes = None
+        image_read_error = str(exc)
 
+    provider_image_url = source_image_url
     if image_bytes is not None:
         print("[CLIP VIDEO] image_source=local_file")
+        ext = (image_ext or "jpg").lower().replace(".", "")
+        mime = mimetypes.types_map.get(f".{ext}", "image/jpeg")
+        upload_filename = f"clip_source_{uuid4().hex}.{ext if ext in {'jpg', 'jpeg', 'png', 'webp'} else 'jpg'}"
+        uploaded_image_url, upload_err = _kie_upload_image_bytes(
+            image_bytes=image_bytes,
+            filename=upload_filename,
+            mime_type=mime,
+        )
+        if upload_err or not uploaded_image_url:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "code": "KIE_UPLOAD_FAILED",
+                    "hint": "provider_file_upload_error",
+                    "details": upload_err or "upload_failed",
+                },
+            )
+        provider_image_url = uploaded_image_url
+        print("[CLIP VIDEO] image_source=uploaded_local_bytes")
+        print(f"[CLIP VIDEO] uploaded_image_url={uploaded_image_url}")
     else:
         print("[CLIP VIDEO] image_source=url")
-
-    if _is_localhost_url(source_image_url) and image_bytes is not None:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "ok": False,
-                "code": "KIE_LOCAL_IMAGE_UPLOAD_NOT_IMPLEMENTED",
-                "hint": "provider_requires_supported_image_transport",
-                "details": "Local image bytes were loaded successfully, but KIE createTask does not yet support the current base64 payload format in this route. Use a public URL or implement the provider's supported upload/base64 schema.",
-            },
-        )
+        if _is_localhost_url(source_image_url):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "KIE_LOCAL_IMAGE_READ_FAILED",
+                    "hint": "provider_requires_public_or_uploaded_asset",
+                    "details": f"localhost image could not be read from disk for KIE upload flow: {(image_read_error or 'read_failed')[:300]}",
+                },
+            )
 
     if mode == "lipsync" and not audio_slice_url:
         return JSONResponse(
@@ -4163,11 +4225,12 @@ def clip_video(payload: ClipVideoIn):
 
     task_id, create_err = _kie_create_video_task(
         model=selected_model,
-        image_url=source_image_url,
+        image_url=provider_image_url,
         prompt=effective_prompt,
         duration=duration,
         audio_url=audio_slice_url,
         send_audio=send_audio_to_provider,
+        aspect_ratio=output_format,
     )
     if create_err or not task_id:
         return JSONResponse(
