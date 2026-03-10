@@ -1151,6 +1151,7 @@ function RefNode({ id, data }) {
 
 function StoryboardPlanNode({ id, data }) {
   const scenes = data?.scenes || [];
+  const isStale = !!data?.isStale;
   return (
     <>
       <Handle type="target" position={Position.Left} id="plan_in" className="clipSB_handle" style={handleStyle("plan")} />
@@ -1165,6 +1166,9 @@ function StoryboardPlanNode({ id, data }) {
           <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenScenario?.(id)} disabled={scenes.length === 0}>
             Сценарий
           </button>
+          {isStale ? (
+            <span className="clipSB_small" style={{ color: "#ffb86c", alignSelf: "center" }}>⚠ результат устарел</span>
+          ) : null}
         </div>
 
         {scenes.length === 0 ? (
@@ -1192,6 +1196,7 @@ function AssemblyNode({ id, data }) {
   const finalVideoUrl = resolveAssetUrl(data?.result?.finalVideoUrl);
   const resultSceneCount = Number(result?.sceneCount || 0);
   const audioApplied = !!result?.audioApplied;
+  const isStale = !!data?.isStale;
 
   return (
     <>
@@ -1213,6 +1218,9 @@ function AssemblyNode({ id, data }) {
           <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble}>
             {isAssembling ? "⚙ Собираем клип..." : "Собрать клип"}
           </button>
+          {isStale ? (
+            <span className="clipSB_small" style={{ color: "#ffb86c", alignSelf: "center" }}>⚠ результат устарел</span>
+          ) : null}
           {isAssembling ? (
             <button className="clipSB_btn clipSB_btnSecondary" onClick={data?.onStopAssemble}>
               ⏹ stop
@@ -1253,7 +1261,7 @@ function AssemblyNode({ id, data }) {
           </div>
         ) : null}
 
-        {status === "done" && finalVideoUrl ? (
+        {finalVideoUrl ? (
           <div className="clipSB_assemblyResult">
             <div className="clipSB_assemblyDoneTitle">✅ Клип готов</div>
             <div className="clipSB_assemblyDoneMeta">
@@ -1458,6 +1466,7 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   const [assemblyError, setAssemblyError] = useState("");
   const [assemblyInfo, setAssemblyInfo] = useState("");
   const [assemblyResult, setAssemblyResult] = useState(null);
+  const [isAssemblyStale, setIsAssemblyStale] = useState(false);
   const [isAssembling, setIsAssembling] = useState(false);
   const [assemblyJobId, setAssemblyJobId] = useState("");
   const [assemblyProgressPercent, setAssemblyProgressPercent] = useState(0);
@@ -1802,10 +1811,10 @@ Aspect ratio: ${imageFormat}`,
 
     if (isAssembling) return;
 
-    setAssemblyResult(null);
     setAssemblyError("");
     setAssemblyInfo("");
     setAssemblyBuildState("idle");
+    setIsAssemblyStale(true);
     setAssemblyJobId("");
     setAssemblyProgressPercent(0);
     setAssemblyStage("");
@@ -1860,6 +1869,7 @@ Aspect ratio: ${imageFormat}`,
           });
           setAssemblyBuildState("done");
           setAssemblyInfo("");
+          setIsAssemblyStale(false);
           setAssemblyJobId("");
           setIsAssembling(false);
           setNodes((prev) => [...prev]);
@@ -1913,6 +1923,7 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyError("");
     setAssemblyInfo("");
     setAssemblyResult(null);
+    setIsAssemblyStale(false);
     setAssemblyProgressPercent(0);
     setAssemblyStage("");
     setAssemblyStageLabel("");
@@ -1981,7 +1992,7 @@ Aspect ratio: ${imageFormat}`,
     if (isAssembling) return "building";
     if (assemblyBuildState === "done" && assemblyResult?.finalVideoUrl) return "done";
     if (assemblyBuildState === "error") return "error";
-    if (!hasVideoScenes) return "empty";
+    if (!hasVideoScenes && !assemblyResult?.finalVideoUrl) return "empty";
     return "ready";
   }, [isAssembling, assemblyBuildState, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
 
@@ -2013,6 +2024,7 @@ Aspect ratio: ${imageFormat}`,
           assemblyStageLabel,
           assemblyStageCurrent,
           assemblyStageTotal,
+          isStale: isAssemblyStale,
           onAssemble: handleAssemblyBuild,
           onStopAssemble: handleAssemblyStop,
         },
@@ -2032,6 +2044,7 @@ Aspect ratio: ${imageFormat}`,
     assemblyStageLabel,
     assemblyStageCurrent,
     assemblyStageTotal,
+    isAssemblyStale,
     handleAssemblyBuild,
     handleAssemblyStop,
     setNodes,
@@ -2072,21 +2085,27 @@ Aspect ratio: ${imageFormat}`,
           ...n,
           data: {
             ...n.data,
-            scenes: [],
             scenePlan: null,
             lastPlanMeta: null,
             plannerInputSignature: null,
+            plannerState: "stale",
           },
         };
       });
 
       const staleTargets = edgesNow.filter((e) => invalidBrainIds.includes(e.source)).map((e) => e.target);
-      return next.map((n) =>
-        staleTargets.includes(n.id) && (n.type === "storyboardNode" || n.type === "resultsNode")
-          ? { ...n, data: { ...n.data, scenes: [] } }
-          : n
-      );
+      return next.map((n) => {
+        if (!staleTargets.includes(n.id)) return n;
+        if (n.type === "storyboardNode" || n.type === "resultsNode") {
+          return { ...n, data: { ...n.data, isStale: true } };
+        }
+        if (n.type === "assemblyNode") {
+          return { ...n, data: { ...n.data, isStale: true } };
+        }
+        return n;
+      });
     });
+    setIsAssemblyStale(true);
   }, [nodes, edges, setNodes]);
 
 
@@ -2427,6 +2446,7 @@ onClipSec: (nodeId, value) => {
                                 settings: { scenarioKey, shootKey, styleKey, freezeStyle },
                               },
                               plannerInputSignature,
+                              plannerState: "fresh",
                             },
                           }
                         : x
@@ -2435,10 +2455,11 @@ onClipSec: (nodeId, value) => {
                     const targets = (edgesRef.current || []).filter((e) => e.source === nodeId).map((e) => e.target);
                     return updated.map((x) =>
                       targets.includes(x.id) && (x.type === "storyboardNode" || x.type === "resultsNode")
-                        ? { ...x, data: { ...x.data, scenes } }
+                        ? { ...x, data: { ...x.data, scenes, isStale: false } }
                         : x
                     );
                   });
+                  setIsAssemblyStale(true);
                 } catch (err) {
                   if (parseTokenRef.current !== parseToken) return;
                   if (err?.name === "AbortError") {
@@ -2629,6 +2650,7 @@ const hydrate = useCallback(() => {
       setEdges(defaultEdges);
       setAssemblyResult(null);
       setAssemblyBuildState("idle");
+      setIsAssemblyStale(false);
       setAssemblyInfo("");
       setAssemblyError("");
       setAssemblyJobId("");
@@ -2752,9 +2774,11 @@ const hydrate = useCallback(() => {
           audioApplied: !!savedAssemblyResult.audioApplied,
         });
         setAssemblyBuildState("done");
+        setIsAssemblyStale(false);
       } else {
         setAssemblyResult(null);
         setAssemblyBuildState("idle");
+        setIsAssemblyStale(false);
       }
       setAssemblyInfo("");
       setAssemblyError("");
@@ -2771,6 +2795,7 @@ const hydrate = useCallback(() => {
       setEdges(defaultEdges);
       setAssemblyResult(null);
       setAssemblyBuildState("idle");
+      setIsAssemblyStale(false);
       setAssemblyInfo("");
       setAssemblyError("");
       setAssemblyJobId("");
