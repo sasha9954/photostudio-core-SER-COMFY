@@ -372,6 +372,32 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
   };
 }
 
+function extractStoryboardScenesFromNodes(nodes = []) {
+  const storyboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "storyboardNode") || null;
+  return Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
+}
+
+function extractGlobalAudioUrlFromNodes(nodes = []) {
+  const audioNodeWithUrl = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "audioNode" && n?.data?.audioUrl);
+  return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
+}
+
+function buildAssemblyPayloadSignature(payload) {
+  return JSON.stringify({
+    audioUrl: payload?.audioUrl || "",
+    format: payload?.format || "9:16",
+    scenes: Array.isArray(payload?.scenes)
+      ? payload.scenes.map((s) => ({
+        sceneId: s.sceneId,
+        videoUrl: s.videoUrl,
+        requestedDurationSec: s.requestedDurationSec,
+        transitionType: s.transitionType,
+        order: s.order,
+      }))
+      : [],
+  });
+}
+
 function getSceneStartImageSource(scene, previousScene) {
   if (resolveSceneTransitionType(scene) !== "continuous") return "none";
   const inheritPreviousEndAsStart = !!scene?.inheritPreviousEndAsStart;
@@ -1295,10 +1321,7 @@ const scenarioSelectedT1 = Number(scenarioSelected?.t1 ?? scenarioSelected?.end 
 const scenarioSelectedExpectedSliceSec = Number(
   scenarioSelected?.audioSliceExpectedDurationSec ?? Math.max(0, scenarioSelectedT1 - scenarioSelectedT0)
 );
-const globalAudioUrlRaw = useMemo(() => {
-  const audioNodeWithUrl = nodes.find((n) => n.type === "audioNode" && n?.data?.audioUrl);
-  return audioNodeWithUrl?.data?.audioUrl ? String(audioNodeWithUrl.data.audioUrl) : "";
-}, [nodes]);
+const globalAudioUrlRaw = useMemo(() => extractGlobalAudioUrlFromNodes(nodes), [nodes]);
 const globalAudioUrlResolved = useMemo(() => resolveAssetUrl(globalAudioUrlRaw), [globalAudioUrlRaw]);
 const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSelected?.audioSliceUrl), [scenarioSelected?.audioSliceUrl]);
 const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
@@ -1340,6 +1363,15 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
     setScenarioVideoLoading(false);
     setScenarioVideoOpen(false);
   }, [scenarioEditor.selected]);
+
+  useEffect(() => {
+    if (!scenarioEditor.open) return;
+    if (!scenarioScenes.length) return;
+    const maxIdx = scenarioScenes.length - 1;
+    if (scenarioEditor.selected < 0 || scenarioEditor.selected > maxIdx) {
+      setScenarioEditor((prev) => ({ ...prev, selected: 0 }));
+    }
+  }, [scenarioEditor.open, scenarioEditor.selected, scenarioScenes.length]);
 
   const updateScenarioScene = useCallback((idx, patch) => {
     if (!scenarioNode?.id || idx < 0) return;
@@ -1502,6 +1534,24 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoError(msg);
   }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
+  const openNextSceneWithoutVideo = useCallback((currentIdx) => {
+    const safeIdx = Number(currentIdx);
+    if (!Number.isFinite(safeIdx) || safeIdx < 0) return;
+    const startFrom = safeIdx + 1;
+    if (!Array.isArray(scenarioScenes) || startFrom >= scenarioScenes.length) {
+      setAssemblyInfo("Все сцены готовы. Можно собирать клип.");
+      return;
+    }
+
+    const nextIdx = scenarioScenes.findIndex((scene, idx) => idx >= startFrom && !String(scene?.videoUrl || "").trim());
+    if (nextIdx >= 0) {
+      setScenarioEditor((prev) => ({ ...prev, selected: nextIdx }));
+      return;
+    }
+
+    setAssemblyInfo("Все сцены готовы. Можно собирать клип.");
+  }, [scenarioScenes]);
+
   const handleScenarioGenerateVideo = useCallback(async () => {
     const transitionType = resolveSceneTransitionType(scenarioSelected);
     const frameImageUrl = String(scenarioSelected?.imageUrl || "").trim();
@@ -1567,13 +1617,14 @@ Aspect ratio: ${imageFormat}`,
         requestedDurationSec: normalizeDurationSec(out.requestedDurationSec),
         providerDurationSec: normalizeDurationSec(out.providerDurationSec),
       });
+      openNextSceneWithoutVideo(scenarioEditor.selected);
     } catch (e) {
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
     } finally {
       setScenarioVideoLoading(false);
     }
-  }, [scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
+  }, [openNextSceneWithoutVideo, scenarioEditor.selected, scenarioSelected, scenarioSelectedEffectiveStartImageUrl, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
@@ -1590,11 +1641,7 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoError("");
   }, [scenarioSelected, scenarioSelectedEffectiveStartImageUrl]);
 
-  const storyboardScenesForAssembly = useMemo(() => {
-    const storyboardNode = nodes.find((n) => n.type === "storyboardNode") || null;
-    const scenes = storyboardNode?.data?.scenes;
-    return Array.isArray(scenes) ? scenes : [];
-  }, [nodes]);
+  const storyboardScenesForAssembly = useMemo(() => extractStoryboardScenesFromNodes(nodes), [nodes]);
 
   const assemblyPayload = useMemo(() => {
     const sceneFormat = storyboardScenesForAssembly.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat || "9:16";
@@ -1605,17 +1652,7 @@ Aspect ratio: ${imageFormat}`,
     });
   }, [globalAudioUrlRaw, storyboardScenesForAssembly]);
 
-  const assemblyPayloadSignature = useMemo(() => JSON.stringify({
-    audioUrl: assemblyPayload.audioUrl,
-    format: assemblyPayload.format,
-    scenes: assemblyPayload.scenes.map((s) => ({
-      sceneId: s.sceneId,
-      videoUrl: s.videoUrl,
-      requestedDurationSec: s.requestedDurationSec,
-      transitionType: s.transitionType,
-      order: s.order,
-    })),
-  }), [assemblyPayload]);
+  const assemblyPayloadSignature = useMemo(() => buildAssemblyPayloadSignature(assemblyPayload), [assemblyPayload]);
 
   const lastAssemblyPayloadSignatureRef = useRef("");
   const assemblyAbortControllerRef = useRef(null);
@@ -2461,6 +2498,18 @@ const hydrate = useCallback(() => {
     if (!raw) {
       setNodes(bindHandlers(defaultNodes));
       setEdges(defaultEdges);
+      setAssemblyResult(null);
+      setAssemblyBuildState("idle");
+      setAssemblyInfo("");
+      setAssemblyError("");
+      setAssemblyJobId("");
+      setAssemblyProgressPercent(0);
+      setAssemblyStage("");
+      setAssemblyStageLabel("");
+      setAssemblyStageCurrent(0);
+      setAssemblyStageTotal(0);
+      setIsAssembling(false);
+      lastAssemblyPayloadSignatureRef.current = "";
       // mark hydrated on next tick to avoid wiping storage with default state
       setTimeout(() => {
         didHydrateRef.current = true;
@@ -2473,6 +2522,11 @@ const hydrate = useCallback(() => {
       const parsed = JSON.parse(raw);
       const savedNodes = Array.isArray(parsed?.nodes) ? parsed.nodes : null;
       const savedEdges = Array.isArray(parsed?.edges) ? parsed.edges : null;
+      const savedAssemblyResult = parsed?.assemblyResult && typeof parsed.assemblyResult === "object" ? parsed.assemblyResult : null;
+      const savedAssemblyBuildState = ["idle", "done"].includes(parsed?.assemblyBuildState)
+        ? parsed.assemblyBuildState
+        : "idle";
+      const savedAssemblyPayloadSignature = String(parsed?.assemblyPayloadSignature || "");
 
       if (!savedNodes || !savedEdges) throw new Error("bad_format");
 
@@ -2521,11 +2575,62 @@ const hydrate = useCallback(() => {
         .filter((e) => e && typeof e.id === "string" && e.source && e.target)
         .map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null, style: e.style, animated: e.animated, data: e.data }));
 
-      setNodes(bindHandlers(cleanNodes.length ? cleanNodes : defaultNodes));
-      setEdges(cleanEdges.length ? cleanEdges : defaultEdges);
+      const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
+      const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
+      const hydratedScenes = extractStoryboardScenesFromNodes(hydratedNodes);
+      const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
+      const hydratedFormat = hydratedScenes.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat || "9:16";
+      const hydratedPayload = buildAssemblyPayload({
+        scenes: hydratedScenes,
+        audioUrl: hydratedAudioUrl,
+        format: hydratedFormat,
+      });
+      const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload);
+
+      setNodes(bindHandlers(hydratedNodes));
+      setEdges(hydratedEdges);
+
+      if (
+        savedAssemblyResult?.finalVideoUrl
+        && savedAssemblyBuildState === "done"
+        && savedAssemblyPayloadSignature
+        && savedAssemblyPayloadSignature === hydratedSignature
+      ) {
+        setAssemblyResult({
+          finalVideoUrl: String(savedAssemblyResult.finalVideoUrl || ""),
+          sceneCount: Number(savedAssemblyResult.sceneCount || 0),
+          audioApplied: !!savedAssemblyResult.audioApplied,
+        });
+        setAssemblyBuildState("done");
+      } else {
+        setAssemblyResult(null);
+        setAssemblyBuildState("idle");
+      }
+      setAssemblyInfo("");
+      setAssemblyError("");
+      setAssemblyJobId("");
+      setAssemblyProgressPercent(0);
+      setAssemblyStage("");
+      setAssemblyStageLabel("");
+      setAssemblyStageCurrent(0);
+      setAssemblyStageTotal(0);
+      setIsAssembling(false);
+      lastAssemblyPayloadSignatureRef.current = hydratedSignature;
     } catch {
       setNodes(bindHandlers(defaultNodes));
       setEdges(defaultEdges);
+      setAssemblyResult(null);
+      setAssemblyBuildState("idle");
+      setAssemblyInfo("");
+      setAssemblyError("");
+      setAssemblyJobId("");
+      setAssemblyProgressPercent(0);
+      setAssemblyStage("");
+      setAssemblyStageLabel("");
+      setAssemblyStageCurrent(0);
+      setAssemblyStageTotal(0);
+      setIsAssembling(false);
+      lastAssemblyPayloadSignatureRef.current = "";
     } finally {
       // mark hydrated on next tick so persist effect can't overwrite storage
       setTimeout(() => {
@@ -2611,9 +2716,21 @@ const hydrate = useCallback(() => {
     const serialNodes = serializeNodesForStorage(nodes);
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
 
-    const ok = safeSet(STORE_KEY, JSON.stringify({ nodes: serialNodes, edges: serialEdges }));
+    const ok = safeSet(STORE_KEY, JSON.stringify({
+      nodes: serialNodes,
+      edges: serialEdges,
+      assemblyResult: assemblyResult?.finalVideoUrl
+        ? {
+          finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
+          sceneCount: Number(assemblyResult.sceneCount || 0),
+          audioApplied: !!assemblyResult.audioApplied,
+        }
+        : null,
+      assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
+      assemblyPayloadSignature,
+    }));
     if (ok) setLastSavedAt(Date.now());
-  }, [nodes, edges, STORE_KEY, accountKey]);
+  }, [nodes, edges, STORE_KEY, accountKey, assemblyResult, assemblyBuildState, assemblyPayloadSignature]);
 
   // extra safety: flush to storage on page unload (helps when navigating away quickly)
   useEffect(() => {
@@ -2623,13 +2740,25 @@ const hydrate = useCallback(() => {
 
       const serialNodes = serializeNodesForStorage(nodes);
       const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
-      const ok = safeSet(STORE_KEY, JSON.stringify({ nodes: serialNodes, edges: serialEdges }));
+      const ok = safeSet(STORE_KEY, JSON.stringify({
+      nodes: serialNodes,
+      edges: serialEdges,
+      assemblyResult: assemblyResult?.finalVideoUrl
+        ? {
+          finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
+          sceneCount: Number(assemblyResult.sceneCount || 0),
+          audioApplied: !!assemblyResult.audioApplied,
+        }
+        : null,
+      assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
+      assemblyPayloadSignature,
+    }));
       if (ok) setLastSavedAt(Date.now());
     };
 
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [nodes, edges, STORE_KEY, accountKey]);
+  }, [nodes, edges, STORE_KEY, accountKey, assemblyResult, assemblyBuildState, assemblyPayloadSignature]);
 
 
   const nodeTypes = useMemo(
