@@ -129,13 +129,6 @@ function getEdgePresentation(input) {
   };
 }
 
-function withSelectedEdge(edgesList, selectedEdgeId) {
-  return edgesList.map((edge) => ({
-    ...edge,
-    selected: !!selectedEdgeId && edge.id === selectedEdgeId,
-  }));
-}
-
 const SCENARIO_OPTIONS = [
   { value: "clip", label: "клип" },
   { value: "kino", label: "кино" },
@@ -1290,7 +1283,6 @@ export default function ClipStoryboardPage() {
 
   const didHydrateRef = useRef(false);
   const isHydratingRef = useRef(true);
-  const selectedEdgeRef = useRef(null);
   const parseTokenRef = useRef(0);
   const parseControllerRef = useRef(null);
   const parseTimeoutRef = useRef(null);
@@ -2994,26 +2986,8 @@ const hydrate = useCallback(() => {
 
   const onEdgeClick = useCallback((evt, edge) => {
     evt?.stopPropagation?.();
-    const nextSelected = edge?.id || null;
-    selectedEdgeRef.current = nextSelected;
-    setEdges((eds) => withSelectedEdge(eds, nextSelected));
-  }, [setEdges]);
-
-  const onPaneClick = useCallback(() => {
-    selectedEdgeRef.current = null;
-    setEdges((eds) => withSelectedEdge(eds, null));
-  }, [setEdges]);
-
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
-      const id = selectedEdgeRef.current;
-      if (!id) return;
-      setEdges((eds) => eds.filter((x) => x.id !== id));
-      selectedEdgeRef.current = null;
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    if (!edge?.id) return;
+    setEdges((eds) => eds.filter((e) => e.id !== edge.id));
   }, [setEdges]);
 
   useEffect(() => {
@@ -3599,7 +3573,6 @@ const hydrate = useCallback(() => {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onEdgeClick={onEdgeClick}
-          onPaneClick={onPaneClick}
           defaultEdgeOptions={{ style: { strokeDasharray: "6 6" }, interactionWidth: 30 }}
           connectionLineStyle={{ strokeDasharray: "6 6" }}
           fitView
