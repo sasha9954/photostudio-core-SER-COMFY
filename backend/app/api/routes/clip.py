@@ -1084,6 +1084,30 @@ def _inject_session_world_anchors(prompt: str, anchors: dict[str, str]) -> str:
     return f"{base}\n\n{anchor_text}" if base else anchor_text
 
 
+
+
+def _adapt_outfit_prompt_for_character_refs(text: str, *, has_character_refs: bool) -> str:
+    value = str(text or "").strip()
+    if not value or not has_character_refs:
+        return value
+
+    adapted = value
+    # Prefer visual character reference for wardrobe identity instead of text color guesses.
+    adapted = re.sub(
+        r"\bwearing\s+(?:a|an|the)?\s*(?:[a-z]+\s+){0,3}(\w+\s+tracksuit)\b",
+        r"wearing the same \1 from the character reference",
+        adapted,
+        flags=re.IGNORECASE,
+    )
+
+    if "character reference" in adapted.lower() and "preserve the exact outfit color" not in adapted.lower():
+        adapted = (
+            f"{adapted}. preserve the exact outfit color, material, and logo placement from the character reference"
+            if adapted
+            else "preserve the exact outfit color, material, and logo placement from the character reference"
+        )
+    return re.sub(r"\s+", " ", adapted).strip()
+
 def _trim_continuity_value(value: str, limit: int = 220) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip())
     return text[:limit]
@@ -4258,6 +4282,10 @@ def clip_image(payload: ClipImageIn):
             scene_delta = _enforce_prop_anchor_text(scene_delta, prop_anchor_label, lang="en")
             scene_text = _enforce_prop_anchor_text(scene_text, prop_anchor_label, lang="ru")
 
+        has_character_refs = bool(character_images or character_refs)
+        scene_delta = _adapt_outfit_prompt_for_character_refs(scene_delta, has_character_refs=has_character_refs)
+        scene_text = _adapt_outfit_prompt_for_character_refs(scene_text, has_character_refs=has_character_refs)
+
         effective_character_anchor = str((session_baseline or {}).get("character") or session_character_anchor or "").strip()
         effective_location_anchor = str((session_baseline or {}).get("location") or session_location_anchor or "").strip()
         effective_style_anchor = str((session_baseline or {}).get("style") or session_style_anchor or "").strip()
@@ -4687,19 +4715,21 @@ def clip_video(payload: ClipVideoIn):
 
     if selected_model == "omni-human-1.5" and mode == "lipsync":
         effective_prompt += """
-    The character should perform naturally with subtle human motion.
-    Allow small natural head movement, facial expression changes, and slight upper body motion to convey emotion.
-    Avoid strong body rotations, avoid turning the hips or legs sideways, and avoid large pose changes.
+    The character should perform naturally with controlled emotional motion.
+    Allow clearer mouth articulation and slightly stronger lip opening while singing, matching the emotional intensity of the audio.
+    Allow subtle expressive hand gestures near the torso and chest, and slight shoulder movement, as long as the hands do not block the mouth or distort the outfit.
 
-    Keep the body mostly facing the camera with gentle natural movement.
-    Movement should be minimal but alive, not static.
+    Keep the body mostly facing the camera.
+    Avoid strong body rotations, avoid turning the hips or legs sideways, and avoid large pose changes.
+    Avoid dramatic full-body movement.
 
     Preserve the clothing exactly as in the reference image.
-    Preserve all visible logos and clothing details.
+    Preserve the exact outfit colors, logos, materials, and details from the reference.
+    Do not change the color of the outfit.
     Do not redraw, distort, remove, or hallucinate logos or clothing patterns.
     Do not modify the design of the hoodie or pants during motion.
 
-    Motion should feel natural and emotional but controlled, avoiding movements that would hide or distort clothing details.
+    Motion should feel emotional, musical, and alive, but controlled enough to keep the outfit and logos intact.
     """
 
     if mode != "lipsync" and not selected_model:
