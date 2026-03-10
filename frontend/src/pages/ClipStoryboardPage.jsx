@@ -1117,7 +1117,12 @@ function AssemblyNode({ id, data }) {
             <div className="clipSB_assemblyProgressTrack">
               <div
                 className="clipSB_assemblyProgressBar"
-                style={{ width: `${Math.max(6, Math.min(100, Number(data?.progressPercent || 0)))}%` }}
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Number(data?.isAssembling ? (Number(data?.progressPercent || 0) <= 0 ? 6 : Number(data?.progressPercent || 0)) : (data?.progressPercent || 0))
+                  )}%`,
+                }}
               />
             </div>
           </div>
@@ -1615,6 +1620,7 @@ Aspect ratio: ${imageFormat}`,
   const lastAssemblyPayloadSignatureRef = useRef("");
   const assemblyAbortControllerRef = useRef(null);
   const assemblyPollTimerRef = useRef(null);
+  const assemblyPollingActiveRef = useRef(false);
 
   useEffect(() => {
     if (!assemblyPayloadSignature) return;
@@ -1643,8 +1649,9 @@ Aspect ratio: ${imageFormat}`,
   }, [assemblyPayloadSignature, isAssembling]);
 
   const stopAssemblyPolling = useCallback(() => {
+    assemblyPollingActiveRef.current = false;
     if (assemblyPollTimerRef.current) {
-      clearInterval(assemblyPollTimerRef.current);
+      clearTimeout(assemblyPollTimerRef.current);
       assemblyPollTimerRef.current = null;
     }
   }, []);
@@ -1652,6 +1659,7 @@ Aspect ratio: ${imageFormat}`,
   const startAssemblyPolling = useCallback((jobId) => {
     if (!jobId) return;
     stopAssemblyPolling();
+    assemblyPollingActiveRef.current = true;
     const statusUrl = API_BASE
       ? `${API_BASE}/api/clip/assemble/status/${encodeURIComponent(jobId)}`
       : `/api/clip/assemble/status/${encodeURIComponent(jobId)}`;
@@ -1666,6 +1674,7 @@ Aspect ratio: ${imageFormat}`,
           out = null;
         }
         if (!res.ok) throw new Error(String(out?.detail || out?.message || out?.hint || `HTTP ${res.status}`));
+        if (!assemblyPollingActiveRef.current) return;
 
         const status = String(out?.status || "").toLowerCase();
         setAssemblyProgressPercent(Number(out?.progressPercent || 0));
@@ -1685,6 +1694,7 @@ Aspect ratio: ${imageFormat}`,
           });
           setAssemblyBuildState("done");
           setAssemblyInfo("");
+          setAssemblyJobId("");
           setIsAssembling(false);
           setNodes((prev) => [...prev]);
           return;
@@ -1694,6 +1704,7 @@ Aspect ratio: ${imageFormat}`,
           stopAssemblyPolling();
           setAssemblyBuildState("error");
           setAssemblyError(String(out?.error || "Ошибка сборки"));
+          setAssemblyJobId("");
           setIsAssembling(false);
           return;
         }
@@ -1702,19 +1713,25 @@ Aspect ratio: ${imageFormat}`,
           stopAssemblyPolling();
           setAssemblyBuildState("idle");
           setAssemblyInfo("Сборка остановлена");
+          setAssemblyJobId("");
           setIsAssembling(false);
           return;
         }
       } catch (e) {
+        if (!assemblyPollingActiveRef.current) return;
         stopAssemblyPolling();
         setAssemblyBuildState("error");
         setAssemblyError(String(e?.message || e || "Ошибка запроса статуса"));
+        setAssemblyJobId("");
         setIsAssembling(false);
+        return;
       }
+
+      if (!assemblyPollingActiveRef.current) return;
+      assemblyPollTimerRef.current = setTimeout(tick, 900);
     };
 
     tick();
-    assemblyPollTimerRef.current = setInterval(tick, 900);
   }, [assemblyPayload.scenes.length, setNodes, stopAssemblyPolling]);
 
   useEffect(() => {

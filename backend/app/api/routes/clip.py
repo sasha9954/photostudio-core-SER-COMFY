@@ -4690,6 +4690,7 @@ def _update_clip_assemble_job(job_id: str, **updates):
         job = CLIP_ASSEMBLE_JOBS.get(job_id)
         if not job:
             return
+        updates["updatedAt"] = time.time()
         job.update(updates)
 
 
@@ -4949,6 +4950,7 @@ def clip_assemble(payload: AssembleClipIn):
             "audioApplied": False,
             "sceneCount": 0,
             "error": None,
+            "updatedAt": time.time(),
         }
 
     threading.Thread(target=_run_clip_assemble_job, args=(job_id, payload), daemon=True).start()
@@ -4978,7 +4980,7 @@ def clip_assemble_stop(job_id: str):
                 status_code=404,
                 content={"ok": False, "code": "ASSEMBLE_JOB_NOT_FOUND", "hint": "job_id_not_found_or_expired"},
             )
-        job.update({"status": "stopped", "stage": "stopped", "label": "stopped", "error": None})
+        job.update({"status": "stopped", "stage": "stopped", "label": "stopped", "error": None, "updatedAt": time.time()})
     return {"ok": True, "jobId": safe_job_id, "status": "stopped"}
 
 
