@@ -339,6 +339,39 @@ function getSceneTransitionPrompt(scene) {
   return String(scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
 }
 
+function getSceneRequestedDurationSec(scene) {
+  const explicit = normalizeDurationSec(scene?.requestedDurationSec);
+  if (explicit != null) return explicit;
+  const t0 = Number(scene?.t0 ?? scene?.start ?? 0);
+  const t1 = Number(scene?.t1 ?? scene?.end ?? 0);
+  const fallback = t1 - t0;
+  return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+}
+
+function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
+  const normalizedFormat = normalizeSceneImageFormat(format);
+  const safeAudioUrl = String(audioUrl || "").trim();
+  const preparedScenes = (Array.isArray(scenes) ? scenes : [])
+    .map((scene, idx) => {
+      const videoUrl = String(scene?.videoUrl || "").trim();
+      if (!videoUrl) return null;
+      return {
+        sceneId: String(scene?.id || `scene_${String(idx + 1).padStart(3, "0")}`),
+        videoUrl,
+        requestedDurationSec: getSceneRequestedDurationSec(scene),
+        transitionType: resolveSceneTransitionType(scene),
+        order: idx + 1,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    audioUrl: safeAudioUrl,
+    format: normalizedFormat,
+    scenes: preparedScenes,
+  };
+}
+
 function getSceneStartImageSource(scene, previousScene) {
   if (resolveSceneTransitionType(scene) !== "continuous") return "none";
   const inheritPreviousEndAsStart = !!scene?.inheritPreviousEndAsStart;
@@ -1036,6 +1069,11 @@ function StoryboardPlanNode({ id, data }) {
 }
 
 function AssemblyNode({ id, data }) {
+  const isBuilding = !!data?.isBuilding;
+  const canAssemble = !!data?.canAssemble && !isBuilding;
+  const status = data?.status || "empty";
+  const finalVideoUrl = String(data?.result?.finalVideoUrl || "").trim();
+
   return (
     <>
       <Handle type="target" position={Position.Left} />
@@ -1045,21 +1083,31 @@ function AssemblyNode({ id, data }) {
         icon={<span aria-hidden>🎬</span>}
         className="clipSB_nodeAssembly"
       >
-        <button
-          className="clipSB_btn"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps:clipOpenScenario", { detail: { nodeId: data?.scenarioNodeId || null } }))}
-          title="Открыть сценарий"
-        >
-          Сценарий
-        </button>
-
-        <button className="clipSB_btn clipSB_btnMuted" disabled style={{ marginTop: 8 }}>
-          Собрать (скоро)
-        </button>
-
-        <div className="clipSB_hint" style={{ marginTop: 10 }}>
-          скоро: склейка сцен, музыка, lip-sync, экспорт mp4
+        <div className="clipSB_assemblyStats">
+          <div className="clipSB_assemblyRow"><span>Сцен готово</span><strong>{data?.readyScenes || 0}/{data?.totalScenes || 0}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Аудио</span><strong>{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
         </div>
+
+        <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble} style={{ marginTop: 10 }}>
+          {isBuilding ? "Собираем клип..." : "Собрать клип"}
+        </button>
+
+        {status === "empty" ? <div className="clipSB_hint" style={{ marginTop: 8 }}>Нужны готовые видео-сцены и подключённое аудио</div> : null}
+        {data?.infoMessage ? <div className="clipSB_hint" style={{ marginTop: 8 }}>{data.infoMessage}</div> : null}
+        {status === "error" && data?.errorMessage ? <div className="clipSB_hint" style={{ marginTop: 8, color: "#ff8a8a" }}>{data.errorMessage}</div> : null}
+
+        {status === "done" && finalVideoUrl ? (
+          <div className="clipSB_assemblyResult">
+            <div className="clipSB_small" style={{ marginTop: 10 }}>Клип готов</div>
+            <video className="clipSB_videoPlayer" controls playsInline preload="metadata" src={finalVideoUrl} style={{ marginTop: 8 }} />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <a className="clipSB_btn clipSB_btnLink" href={finalVideoUrl} target="_blank" rel="noreferrer">Открыть</a>
+              <a className="clipSB_btn clipSB_btnLink" href={finalVideoUrl} download>Скачать mp4</a>
+            </div>
+          </div>
+        ) : null}
       </NodeShell>
     </>
   );
@@ -1223,7 +1271,10 @@ const scenarioPreviousSceneImageSource = scenarioPreviousScene?.endImageUrl
   const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
   const [scenarioVideoError, setScenarioVideoError] = useState("");
   const [scenarioVideoOpen, setScenarioVideoOpen] = useState(false);
-  const [assemblyHint, setAssemblyHint] = useState("");
+  const [assemblyBuildState, setAssemblyBuildState] = useState("idle");
+  const [assemblyError, setAssemblyError] = useState("");
+  const [assemblyInfo, setAssemblyInfo] = useState("");
+  const [assemblyResult, setAssemblyResult] = useState(null);
   const [lightboxUrl, setLightboxUrl] = useState("");
 
   useEffect(() => {
@@ -1490,20 +1541,58 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoError("");
   }, [scenarioSelected, scenarioSelectedEffectiveStartImageUrl]);
 
-  const handleScenarioAssembly = useCallback(() => {
-    const segments = scenarioScenes
-      .filter((s) => s?.videoUrl)
-      .map((s, idx) => ({
-        sceneId: String(s.id || `s${idx + 1}`),
-        t0: Number(s.t0 ?? s.start ?? 0),
-        t1: Number(s.t1 ?? s.end ?? 0),
-        videoUrl: String(s.videoUrl || ""),
-      }));
-    if (!segments.length) return;
-    const payload = { segments, audioUrl: globalAudioUrlRaw || "" };
-    console.info("assembly_todo_payload", payload);
-    setAssemblyHint("TODO: страница монтажа пока не подключена");
-  }, [globalAudioUrlRaw, scenarioScenes]);
+  const storyboardScenesForAssembly = useMemo(() => {
+    const storyboardNode = nodes.find((n) => n.type === "storyboardNode") || null;
+    const scenes = storyboardNode?.data?.scenes;
+    return Array.isArray(scenes) ? scenes : [];
+  }, [nodes]);
+
+  const assemblyPayload = useMemo(() => {
+    const sceneFormat = storyboardScenesForAssembly.find((scene) => String(scene?.imageFormat || "").trim())?.imageFormat || "9:16";
+    return buildAssemblyPayload({
+      scenes: storyboardScenesForAssembly,
+      audioUrl: globalAudioUrlRaw,
+      format: sceneFormat,
+    });
+  }, [globalAudioUrlRaw, storyboardScenesForAssembly]);
+
+  const handleAssemblyBuild = useCallback(async () => {
+    if (!assemblyPayload.scenes.length || !assemblyPayload.audioUrl) return;
+
+    setAssemblyBuildState("building");
+    setAssemblyError("");
+    setAssemblyInfo("");
+    try {
+      const out = await fetchJson("/api/clip/assemble", {
+        method: "POST",
+        body: assemblyPayload,
+      });
+      const finalVideoUrl = String(out?.finalVideoUrl || out?.videoUrl || out?.url || "").trim();
+      if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
+      setAssemblyResult({ finalVideoUrl });
+      setAssemblyBuildState("done");
+    } catch (e) {
+      const message = String(e?.message || e);
+      if (/HTTP\s*404|not\s*found/i.test(message)) {
+        setAssemblyBuildState("ready");
+        setAssemblyInfo("Endpoint /api/clip/assemble пока не подключён. Payload для сборки уже готов.");
+        console.info("assembly_payload_preview", assemblyPayload);
+        return;
+      }
+      setAssemblyBuildState("error");
+      setAssemblyError(message);
+    }
+  }, [assemblyPayload]);
+
+  const assemblyStatus = useMemo(() => {
+    const hasVideoScenes = assemblyPayload.scenes.length > 0;
+    const hasAudio = !!assemblyPayload.audioUrl;
+    if (assemblyBuildState === "building") return "building";
+    if (assemblyBuildState === "done" && assemblyResult?.finalVideoUrl) return "done";
+    if (assemblyBuildState === "error") return "error";
+    if (!hasVideoScenes || !hasAudio) return "empty";
+    return "ready";
+  }, [assemblyBuildState, assemblyPayload.audioUrl, assemblyPayload.scenes.length, assemblyResult?.finalVideoUrl]);
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
@@ -2000,9 +2089,46 @@ onClipSec: (nodeId, value) => {
             },
           };
         }
+
+        if (n.type === "assemblyNode") {
+          const estimatedDurationSec = assemblyPayload.scenes.reduce(
+            (sum, scene) => sum + (Number(scene.requestedDurationSec) || 0),
+            0
+          );
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              totalScenes: storyboardScenesForAssembly.length,
+              readyScenes: assemblyPayload.scenes.length,
+              hasAudio: !!assemblyPayload.audioUrl,
+              format: assemblyPayload.format,
+              durationSec: estimatedDurationSec,
+              canAssemble: assemblyPayload.scenes.length > 0 && !!assemblyPayload.audioUrl,
+              isBuilding: assemblyBuildState === "building",
+              status: assemblyStatus,
+              result: assemblyResult,
+              errorMessage: assemblyError,
+              infoMessage: assemblyInfo,
+              onAssemble: handleAssemblyBuild,
+            },
+          };
+        }
 return base;
       }),
-    [setNodes, removeNode, edges]
+    [
+      setNodes,
+      removeNode,
+      edges,
+      storyboardScenesForAssembly.length,
+      assemblyPayload,
+      assemblyBuildState,
+      assemblyStatus,
+      assemblyResult,
+      assemblyError,
+      assemblyInfo,
+      handleAssemblyBuild,
+    ]
   );
 
 const hydrate = useCallback(() => {
@@ -2324,13 +2450,6 @@ const hydrate = useCallback(() => {
             <div className="clipSB_scenarioHeader">
               <div className="clipSB_scenarioTitle">SCENARIO</div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <button
-                  className="clipSB_btn clipSB_btnSecondary"
-                  onClick={handleScenarioAssembly}
-                  disabled={!scenarioScenes.some((s) => s?.videoUrl)}
-                >
-                  Монтаж
-                </button>
                 <div className="clipSB_scenarioMeta">
                   {scenarioScenes.length} сцен
                 </div>
@@ -2816,7 +2935,6 @@ const hydrate = useCallback(() => {
                         {scenarioVideoError ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioVideoError}</div> : null}
                       </div>
                     ) : null}
-                    {assemblyHint ? <div className="clipSB_hint" style={{ marginTop: 6 }}>{assemblyHint}</div> : null}
                   </>
                 ) : (
                   <div className="clipSB_empty">Нет выбранной сцены</div>
