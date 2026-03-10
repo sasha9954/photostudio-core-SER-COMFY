@@ -1562,6 +1562,7 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyBuildState("building");
     setAssemblyError("");
     setAssemblyInfo("");
+    setAssemblyResult(null);
     try {
       const out = await fetchJson("/api/clip/assemble", {
         method: "POST",
@@ -1580,6 +1581,7 @@ Aspect ratio: ${imageFormat}`,
         return;
       }
       setAssemblyBuildState("error");
+      setAssemblyResult(null);
       setAssemblyError(message);
     }
   }, [assemblyPayload]);
