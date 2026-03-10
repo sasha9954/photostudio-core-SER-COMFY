@@ -4691,7 +4691,9 @@ def clip_assemble(payload: AssembleClipIn):
 
     _ensure_assets_dir()
     temp_files: list[str] = []
+    generated_temp_assets: list[str] = []
     prepared_scenes: list[tuple[str, float]] = []
+    final_path: str | None = None
 
     try:
         for idx, scene in enumerate(scenes):
@@ -4707,6 +4709,11 @@ def clip_assemble(payload: AssembleClipIn):
                 continue
 
             scene_duration, probe_err = _ffprobe_duration(scene_path)
+            if probe_err == "ffprobe_missing_install_and_add_to_PATH":
+                return JSONResponse(
+                    status_code=500,
+                    content={"ok": False, "code": "FFPROBE_MISSING", "hint": probe_err},
+                )
             if probe_err or scene_duration is None:
                 continue
 
@@ -4723,6 +4730,7 @@ def clip_assemble(payload: AssembleClipIn):
             trim_duration = min(scene_duration, requested_duration)
             trimmed_filename = f"clip_assembled_scene_{idx}_{uuid4().hex}.mp4"
             trimmed_path = os.path.join(str(ASSETS_DIR), trimmed_filename)
+            generated_temp_assets.append(trimmed_path)
             ffmpeg_ok, ffmpeg_err = _run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", scene_path,
@@ -4754,10 +4762,11 @@ def clip_assemble(payload: AssembleClipIn):
         temp_files.append(concat_list_path)
         with open(concat_list_path, "w", encoding="utf-8") as f:
             for pth, _ in prepared_scenes:
-                escaped = pth.replace("'", "'\''")
+                escaped = pth.replace("\\", "/").replace("'", "'\\''")
                 f.write(f"file '{escaped}'\n")
 
         assembled_no_audio = os.path.join(str(ASSETS_DIR), f"clip_final_base_{uuid4().hex}.mp4")
+        generated_temp_assets.append(assembled_no_audio)
         concat_ok, concat_err = _run_ffmpeg([
             "ffmpeg", "-y",
             "-f", "concat",
@@ -4783,6 +4792,11 @@ def clip_assemble(payload: AssembleClipIn):
             audio_path, audio_err = _resolve_media_input(audio_url, temp_files)
             if not audio_err and audio_path:
                 audio_probe, audio_probe_err = _ffprobe_duration(audio_path)
+                if audio_probe_err == "ffprobe_missing_install_and_add_to_PATH":
+                    return JSONResponse(
+                        status_code=500,
+                        content={"ok": False, "code": "FFPROBE_MISSING", "hint": audio_probe_err},
+                    )
                 if not audio_probe_err and audio_probe is not None:
                     audio_ok, audio_ffmpeg_err = _run_ffmpeg([
                         "ffmpeg", "-y",
@@ -4801,15 +4815,31 @@ def clip_assemble(payload: AssembleClipIn):
                         notice = "audio skipped"
                         if audio_ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
                             return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": audio_ffmpeg_err})
-                        _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                        copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                        if not copy_ok:
+                            if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                                return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
+                            return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
                 else:
                     notice = "audio skipped"
-                    _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                    copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                    if not copy_ok:
+                        if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                            return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
+                        return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
             else:
                 notice = "audio skipped"
-                _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                if not copy_ok:
+                    if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                        return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
+                    return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
         else:
-            _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+            copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+            if not copy_ok:
+                if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                    return JSONResponse(status_code=500, content={"ok": False, "code": "FFMPEG_MISSING", "hint": copy_err})
+                return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": copy_err})
 
         if not os.path.isfile(final_path):
             return JSONResponse(status_code=500, content={"ok": False, "code": "ASSEMBLE_FAILED", "hint": "final_file_not_created"})
@@ -4824,6 +4854,12 @@ def clip_assemble(payload: AssembleClipIn):
             response["notice"] = notice
         return response
     finally:
+        for pth in generated_temp_assets:
+            try:
+                if pth and pth != final_path and os.path.isfile(pth):
+                    os.remove(pth)
+            except Exception:
+                pass
         for pth in temp_files:
             try:
                 if os.path.isfile(pth):
