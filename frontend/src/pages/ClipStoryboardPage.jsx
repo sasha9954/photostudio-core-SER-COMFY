@@ -249,6 +249,20 @@ function getSceneUiDescription(scene) {
   return "";
 }
 
+function getScenarioSceneStableKey(scene, idx) {
+  if (!scene || typeof scene !== "object") return `scene-${idx}`;
+  const explicitId = String(scene.id || scene.sceneId || "").trim();
+  if (explicitId) return explicitId;
+
+  const start = Number(scene.t0 ?? scene.start);
+  const end = Number(scene.t1 ?? scene.end);
+  if (Number.isFinite(start) && Number.isFinite(end)) {
+    return `time-${start}-${end}`;
+  }
+
+  return `scene-${idx}`;
+}
+
 
 function isLipSyncScene(scene) {
   if (!scene || typeof scene !== "object") return false;
@@ -1176,7 +1190,7 @@ function StoryboardPlanNode({ id, data }) {
         ) : (
           <div className="clipSB_planList">
             {scenes.map((s, idx) => (
-              <div key={idx} className="clipSB_planRow">
+              <div key={getScenarioSceneStableKey(s, idx)} className="clipSB_planRow">
                 <div className="clipSB_planTime">{s.t0}s → {s.t1}s</div>
                 <div className="clipSB_planText">{getSceneUiDescription(s)}</div>
               </div>
@@ -3071,14 +3085,13 @@ const hydrate = useCallback(() => {
                   const sceneThumb = getSceneListThumb(s, previousScene);
                   return (
                     <button
-                    key={s.id || i}
+                    key={getScenarioSceneStableKey(s, i)}
                     ref={(node) => {
                       if (node) scenarioItemRefs.current.set(i, node);
                       else scenarioItemRefs.current.delete(i);
                     }}
                     className={"clipSB_scenarioItem"
-                      + (i === scenarioEditor.selected ? " isActive" : "")
-                      + (i === recommendedNextSceneIndex ? " isRecommended" : "")}
+                      + (i === scenarioEditor.selected ? " isActive" : "")}
                     onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
                   >
                     <div className="clipSB_scenarioItemInner">
