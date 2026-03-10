@@ -3575,6 +3575,8 @@ const hydrate = useCallback(() => {
           onEdgeClick={onEdgeClick}
           defaultEdgeOptions={{ style: { strokeDasharray: "6 6" }, interactionWidth: 30 }}
           connectionLineStyle={{ strokeDasharray: "6 6" }}
+          connectionRadius={28}
+          connectionDragThreshold={2}
           fitView
           minZoom={0.2}
           maxZoom={2}
