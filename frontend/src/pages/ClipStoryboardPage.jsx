@@ -3154,19 +3154,47 @@ onClipSec: (nodeId, value) => {
 
 
         if (n.type === "comfyBrain") {
+          const nodesNow = nodesRef.current || [];
           const incoming = (edgesRef.current || []).filter((e) => e.target === n.id);
-          const handles = new Set(incoming.map((e) => String(e.targetHandle || '')));
-          const connectedRefsCount = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group','ref_location','ref_style','ref_props'].filter((h) => handles.has(h)).length;
-          const castHandles = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group'].filter((h) => handles.has(h));
+          const pickConnectedNode = (handleId) => {
+            const edge = [...incoming].reverse().find((e) => String(e.targetHandle || '') === handleId);
+            return edge ? (nodesNow.find((x) => x.id === edge.source) || null) : null;
+          };
+
+          const hasMeaningfulRefForHandle = (handleId, expectedKind) => {
+            const sourceNode = pickConnectedNode(handleId);
+            if (sourceNode?.type !== 'refNode' || sourceNode?.data?.kind !== expectedKind) return false;
+            const normalized = normalizeRefData(sourceNode?.data || {}, expectedKind);
+            if (normalized.refs.length > 0) return true;
+            return !!String(sourceNode?.data?.url || '').trim();
+          };
+
+          const textNode = pickConnectedNode('text');
+          const audioNode = pickConnectedNode('audio');
+          const hasText = !!(textNode?.type === 'textNode' && String(textNode?.data?.textValue || '').trim());
+          const hasAudio = !!(audioNode?.type === 'audioNode' && (String(audioNode?.data?.audioUrl || '').trim() || String(audioNode?.data?.audioName || '').trim()));
+
+          const meaningfulRefByHandle = {
+            ref_character_1: hasMeaningfulRefForHandle('ref_character_1', 'ref_character_1'),
+            ref_character_2: hasMeaningfulRefForHandle('ref_character_2', 'ref_character_2'),
+            ref_character_3: hasMeaningfulRefForHandle('ref_character_3', 'ref_character_3'),
+            ref_animal: hasMeaningfulRefForHandle('ref_animal', 'ref_animal'),
+            ref_group: hasMeaningfulRefForHandle('ref_group', 'ref_group'),
+            ref_location: hasMeaningfulRefForHandle('ref_location', 'ref_location'),
+            ref_style: hasMeaningfulRefForHandle('ref_style', 'ref_style'),
+            ref_props: hasMeaningfulRefForHandle('ref_props', 'ref_props'),
+          };
+
+          const connectedRefsCount = Object.values(meaningfulRefByHandle).filter(Boolean).length;
+          const castHandles = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group'].filter((h) => meaningfulRefByHandle[h]);
           const connectedCastCount = castHandles.length;
-          const hasAudio = handles.has('audio');
-          const hasText = handles.has('text');
-          const hasLocation = handles.has('ref_location');
-          const hasProps = handles.has('ref_props');
-          const hasStyleRef = handles.has('ref_style');
+          const hasLocation = meaningfulRefByHandle.ref_location;
+          const hasProps = meaningfulRefByHandle.ref_props;
+          const hasStyleRef = meaningfulRefByHandle.ref_style;
           const modeValue = String(base.data?.mode || 'clip');
           const outputValue = String(base.data?.output || 'comfy image');
           const stylePreset = String(base.data?.styleKey || 'realism');
+          const meaningfulVisualAnchors = connectedRefsCount;
 
           const storySource = hasText && hasAudio
             ? 'text + audio'
@@ -3201,7 +3229,7 @@ onClipSec: (nodeId, value) => {
           if (storySource === 'text') {
             warnings.push('Тайминг будет логическим, без музыкального ритма');
           }
-          if (outputValue === 'comfy image' && connectedRefsCount >= 4) {
+          if (outputValue === 'comfy image' && meaningfulVisualAnchors > 1) {
             warnings.push('Для comfy image будет выбран 1 главный image anchor');
           }
           if (modeValue === 'reklama' && !hasText) {
