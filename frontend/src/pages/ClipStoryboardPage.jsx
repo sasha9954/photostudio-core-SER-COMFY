@@ -371,6 +371,13 @@ function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } = {}) {
     promptLines: promptBasis ? promptBasis.split("\n").length : 0,
     promptBlocksUsed: promptBasis ? 4 : 0,
     promptBasis,
+    modeIntent: plannerInput.modeIntent || plannerMeta.modeIntent || "",
+    modePromptBias: plannerInput.modePromptBias || plannerMeta.modePromptBias || "",
+    modeSceneStrategy: plannerInput.modeSceneStrategy || plannerMeta.modeSceneStrategy || "",
+    modeContinuityBias: plannerInput.modeContinuityBias || plannerMeta.modeContinuityBias || "",
+    planningMindset: plannerInput.planningMindset || plannerMeta.planningMindset || "",
+    styleSummary: plannerInput.styleSummary || plannerMeta.styleSummary || "",
+    styleContinuity: plannerInput.styleContinuity || plannerMeta.styleContinuity || "",
     usedPrimaryImage: plannerInput?.primaryImageAnchor?.url || "",
     pipelineFlow: [
       "brain uses all meaningful refs for scene planning",
@@ -379,6 +386,115 @@ function extractComfyDebugFields({ plannerInput = {}, plannerMeta = {} } = {}) {
       "scene video uses generated image + scene video prompt + scene rules",
     ],
   };
+}
+
+function getModeSemantics(mode = "clip") {
+  const key = String(mode || "clip").toLowerCase();
+  const map = {
+    clip: {
+      modeIntent: "music_clip_rhythm",
+      modePromptBias: "dynamic rhythmic montage vocabulary",
+      modeSceneStrategy: "beat-driven cuts with energy shifts",
+      modeContinuityBias: "energy continuity over strict causal continuity",
+      planningMindset: "music_video_edit_mindset",
+      sceneTypes: ["hero_intro", "transition", "chorus_peak", "finale"],
+      sceneTitles: ["Beat Ignition", "Rhythm Lift", "Chorus Peak", "Final Hit"],
+      narrativeSteps: ["setup", "acceleration", "peak", "release"],
+      hooks: ["instant beat hook", "momentum switch", "chorus impact", "last rhythmic imprint"],
+      cameras: ["snappy establishing move", "kinetic tracking frame", "impact close-up", "wide outro sweep"],
+      ambience: ["tempo-led atmosphere", "high-energy transitions", "peak contrast pulse", "afterglow cadence"],
+      timingReasons: ["intro bars", "rising rhythmic phrase", "chorus accent", "outro cadence"],
+      beatAnchors: ["bar_intro", "bar_rise", "bar_peak", "bar_outro"],
+    },
+    kino: {
+      modeIntent: "cinematic_drama",
+      modePromptBias: "cinematic dramatic coherent scene vocabulary",
+      modeSceneStrategy: "cause-effect dramatic progression",
+      modeContinuityBias: "story continuity and emotional logic",
+      planningMindset: "director_scene_blocking_mindset",
+      sceneTypes: ["world_establish", "conflict_beat", "emotion_beat", "payoff"],
+      sceneTitles: ["World Establish", "Conflict Turn", "Emotional Beat", "Dramatic Payoff"],
+      narrativeSteps: ["setup", "conflict", "emotional_shift", "resolution"],
+      hooks: ["cinematic world reveal", "dramatic tension rise", "character emotion focus", "earned resolution"],
+      cameras: ["composed establishing frame", "motivated push-in", "held close dramatic frame", "controlled payoff composition"],
+      ambience: ["grounded cinematic tone", "tension in atmosphere", "intimate dramatic air", "resolved cinematic calm"],
+      timingReasons: ["logical opening context", "conflict escalation timing", "emotional processing beat", "narrative closure timing"],
+      beatAnchors: ["logic_setup", "logic_conflict", "logic_emotion", "logic_payoff"],
+    },
+    reklama: {
+      modeIntent: "advertising_persuasion",
+      modePromptBias: "hook promise proof payoff commercial vocabulary",
+      modeSceneStrategy: "hero object + promise + proof + payoff beats",
+      modeContinuityBias: "message clarity and product focus",
+      planningMindset: "commercial_persuasion_mindset",
+      sceneTypes: ["hero_intro", "product_focus", "payoff", "finale"],
+      sceneTitles: ["Hook Intro", "Promise Proof", "Benefit Payoff", "Brand Finale"],
+      narrativeSteps: ["hook", "promise", "proof", "payoff"],
+      hooks: ["instant commercial hook", "clear value promise", "proof-oriented beat", "brand memory lock"],
+      cameras: ["hero product reveal", "feature-focused camera pass", "benefit demonstration framing", "clean branded end frame"],
+      ambience: ["attention capture", "premium persuasion tone", "confidence and proof mood", "aspirational closure"],
+      timingReasons: ["hook in first impression window", "message comprehension beat", "proof retention beat", "brand recall beat"],
+      beatAnchors: ["ad_hook", "ad_promise", "ad_proof", "ad_payoff"],
+    },
+    scenario: {
+      modeIntent: "storyboard_authoring",
+      modePromptBias: "structured storyboard objective-driven vocabulary",
+      modeSceneStrategy: "explicit narrative beats and scene objectives",
+      modeContinuityBias: "structural continuity and script logic",
+      planningMindset: "storyboard_writer_mindset",
+      sceneTypes: ["world_establish", "objective_beat", "transition", "finale"],
+      sceneTitles: ["Scene Objective Setup", "Narrative Objective", "Transition Beat", "Storyboard Finale"],
+      narrativeSteps: ["setup", "objective", "transition", "resolution"],
+      hooks: ["clear scene objective", "narrative step clarity", "transition intention", "final objective closure"],
+      cameras: ["blocking-first establishing frame", "objective-focused medium frame", "bridging transition frame", "closure composition"],
+      ambience: ["structured storyboard tone", "narrative clarity mood", "transitional bridge mood", "resolved storyboard tone"],
+      timingReasons: ["script setup step", "objective progression step", "transition linking step", "final narrative step"],
+      beatAnchors: ["script_step_1", "script_step_2", "script_step_3", "script_step_4"],
+    },
+  };
+  return map[key] || map.clip;
+}
+
+function getStyleSemantics(stylePreset = "realism") {
+  const key = String(stylePreset || "realism").toLowerCase();
+  const map = {
+    realism: {
+      styleSummary: "grounded natural believable visual language",
+      styleContinuity: "physical coherence, natural light continuity, believable materials",
+      stylePromptBias: "natural grounded details",
+      ambienceBias: "natural atmosphere with restrained contrast",
+      cameraBias: "observational camera feeling",
+    },
+    film: {
+      styleSummary: "cinematic graded authored visual language",
+      styleContinuity: "cinematic grade continuity, motivated contrast, authored lens mood",
+      stylePromptBias: "cinematic dramatic authored frame",
+      ambienceBias: "dramatic cinematic ambience",
+      cameraBias: "directorial camera grammar",
+    },
+    neon: {
+      styleSummary: "stylized neon glow high-contrast visual language",
+      styleContinuity: "glow accents continuity, color contrast rhythm, stylized lighting",
+      stylePromptBias: "neon glow color accents",
+      ambienceBias: "electrified atmosphere with luminous accents",
+      cameraBias: "stylized energetic camera framing",
+    },
+    glossy: {
+      styleSummary: "polished premium commercial visual language",
+      styleContinuity: "clean premium finish continuity, controlled highlights, polished surfaces",
+      stylePromptBias: "premium polished finish",
+      ambienceBias: "aspirational premium atmosphere",
+      cameraBias: "precision commercial camera direction",
+    },
+    soft: {
+      styleSummary: "gentle airy low-contrast visual language",
+      styleContinuity: "soft light continuity, delicate transitions, airy color harmony",
+      stylePromptBias: "soft gentle airy details",
+      ambienceBias: "calm tender ambience",
+      cameraBias: "smooth delicate camera motion",
+    },
+  };
+  return map[key] || map.realism;
 }
 
 
@@ -409,13 +525,20 @@ function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {
     : baseCast.filter((role) => role !== primary);
   const output = plannerInput.output || "comfy image";
   const baseContinuity = plannerMeta?.globalContinuity || {};
+  const modeSemantics = getModeSemantics(plannerInput.mode);
+  const styleSemantics = getStyleSemantics(plannerInput.stylePreset);
 
-  const sceneBlueprints = [
-    { key: "c1", title: "Anchor Setup", narrativeStep: "setup", hook: "first visual hook", camera: "establishing frame", ambience: "define tone" },
-    { key: "c2", title: "Development Beat", narrativeStep: "development", hook: "emotional escalation", camera: "dynamic medium frame", ambience: "retain style signature" },
-    { key: "c3", title: "Payoff", narrativeStep: "payoff", hook: "resolution reveal", camera: "hero composition", ambience: "closure mood" },
-    { key: "c4", title: "Outro Tag", narrativeStep: "outro", hook: "memorable last frame", camera: "wide final frame", ambience: "final continuity lock" },
-  ];
+  const sceneBlueprints = [0, 1, 2, 3].map((idx) => ({
+    key: `c${idx + 1}`,
+    title: modeSemantics.sceneTitles[idx],
+    narrativeStep: modeSemantics.narrativeSteps[idx],
+    hook: modeSemantics.hooks[idx],
+    camera: `${modeSemantics.cameras[idx]} • ${styleSemantics.cameraBias}`,
+    ambience: `${modeSemantics.ambience[idx]} • ${styleSemantics.ambienceBias}`,
+    sceneType: modeSemantics.sceneTypes[idx],
+    timingReason: modeSemantics.timingReasons[idx],
+    beatAnchor: modeSemantics.beatAnchors[idx],
+  }));
 
   return sceneBlueprints.map((item, idx) => {
     const scenePrimary = idx === 0 ? primary : (secondaries[idx - 1] || primary);
@@ -436,13 +559,13 @@ function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {
     return {
       sceneId: item.key,
       title: item.title,
-      description: `${item.narrativeStep} • ${plannerInput.narrativeSource} • ${plannerInput.timelineSource}`,
+      description: `${item.narrativeStep} • ${modeSemantics.modeIntent} • ${plannerInput.narrativeSource} • ${plannerInput.timelineSource}`,
       primaryRole: scenePrimary,
       secondaryRoles: sceneSecondary,
       continuity: continuityMemory.summary,
-      imagePrompt: `${promptLead}. style ${plannerInput.stylePreset}. continuity lock enabled.`,
-      videoPrompt: `${item.camera}; ${item.ambience}; keep ${baseContinuity.timelineContinuity || "timeline continuity"}.`,
-      sceneType: plannerInput.mode === "reklama" ? "ad_beat" : "story_beat",
+      imagePrompt: `${promptLead}. mode intent: ${modeSemantics.modeIntent}. scene strategy: ${modeSemantics.modeSceneStrategy}. visual style: ${plannerInput.stylePreset} (${styleSemantics.stylePromptBias}). style continuity: ${styleSemantics.styleContinuity}. continuity lock enabled.`,
+      videoPrompt: `${item.camera}; ${item.ambience}; planning mindset: ${modeSemantics.planningMindset}; keep ${baseContinuity.timelineContinuity || "timeline continuity"}.`,
+      sceneType: item.sceneType,
       sceneNarrativeStep: item.narrativeStep,
       continuityInstruction: continuityMemory.summary,
       cameraInstruction: item.camera,
@@ -460,9 +583,9 @@ function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {
       hasSceneVideo: false,
       sceneVideoStatus: "pending_scene_image",
       sceneOutputRule: "scene image is generated first; scene video uses generated image + video prompt + scene rules",
-      lyricFragment: plannerInput.narrativeSource.includes("audio") ? "audio-guided beat" : "",
-      timingReason: plannerInput.timelineSource,
-      beatAnchor: plannerInput.timelineSource === "audio rhythm" ? "audio_bar" : "logic_step",
+      lyricFragment: plannerInput.narrativeSource.includes("audio") ? `${modeSemantics.modeIntent} audio-guided beat` : "",
+      timingReason: plannerInput.timelineSource === "audio rhythm" ? `${item.timingReason} • audio cadence` : `${item.timingReason} • logical cadence`,
+      beatAnchor: plannerInput.timelineSource === "audio rhythm" ? item.beatAnchor : `logic_${item.beatAnchor}`,
       plannerMeta,
     };
   });
@@ -480,6 +603,13 @@ function buildMockComfyScenes(meta = {}) {
     summary: meta?.summary && typeof meta.summary === "object" ? meta.summary : {},
     sceneRoleModel: meta?.sceneRoleModel && typeof meta.sceneRoleModel === "object" ? meta.sceneRoleModel : deriveSceneRoles({ refsByRole: plannerInput?.refsByRole || {} }),
     referenceSummary: meta?.referenceSummary && typeof meta.referenceSummary === "object" ? meta.referenceSummary : {},
+    modeIntent: String(plannerInput?.modeIntent || meta?.modeIntent || ""),
+    modePromptBias: String(plannerInput?.modePromptBias || meta?.modePromptBias || ""),
+    modeSceneStrategy: String(plannerInput?.modeSceneStrategy || meta?.modeSceneStrategy || ""),
+    modeContinuityBias: String(plannerInput?.modeContinuityBias || meta?.modeContinuityBias || ""),
+    planningMindset: String(plannerInput?.planningMindset || meta?.planningMindset || ""),
+    styleSummary: String(plannerInput?.styleSummary || meta?.styleSummary || ""),
+    styleContinuity: String(plannerInput?.styleContinuity || meta?.styleContinuity || ""),
   };
   plannerMeta.globalContinuity = buildComfyGlobalContinuity({ plannerInput, refsByRole: plannerInput?.refsByRole || {}, sceneRoleModel: plannerMeta.sceneRoleModel });
   return buildComfyScenesFromPlanner({ plannerInput, plannerMeta });
@@ -3343,6 +3473,8 @@ onClipSec: (nodeId, value) => {
           const outputValue = normalizeRenderProfile(base.data?.output || 'comfy image');
           const stylePreset = String(base.data?.styleKey || 'realism');
           const freezeStyle = !!base.data?.freezeStyle;
+          const modeSemantics = getModeSemantics(modeValue);
+          const styleSemantics = getStyleSemantics(stylePreset);
 
           const narrativeSource = meaningfulText && meaningfulAudio
             ? 'text + audio'
@@ -3377,7 +3509,9 @@ onClipSec: (nodeId, value) => {
           if (!canGenerateComfyImage({ refsByRole }) && (meaningfulText || meaningfulAudio)) {
             warnings.push('Визуальные сцены будут синтезированы из текста, аудио и режима');
           }
-          if (!meaningfulText && (meaningfulAudio || meaningfulRefRoles.length > 0)) warnings.push('Сюжет будет выведен из аудио и референсов');
+          if (!!meaningfulAudio && !meaningfulText && meaningfulRefRoles.length === 0) warnings.push('Сюжет будет выведен из аудио');
+          if (!meaningfulAudio && !meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из референсов и режима');
+          if (!!meaningfulAudio && !meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из аудио и референсов');
           if (!meaningfulAudio && meaningfulText) warnings.push('Таймфреймы будут построены логически, без музыкального ритма');
           if (outputValue === 'comfy text' && !hasComfyTextPrompt({ meaningfulText })) {
             warnings.push('Для comfy text желательно добавить richer text prompt');
@@ -3405,6 +3539,13 @@ onClipSec: (nodeId, value) => {
             refsByRole,
             narrativeSource,
             timelineSource,
+            modeIntent: modeSemantics.modeIntent,
+            modePromptBias: modeSemantics.modePromptBias,
+            modeSceneStrategy: modeSemantics.modeSceneStrategy,
+            modeContinuityBias: modeSemantics.modeContinuityBias,
+            planningMindset: modeSemantics.planningMindset,
+            styleSummary: styleSemantics.styleSummary,
+            styleContinuity: styleSemantics.styleContinuity,
             primaryImageAnchor: Object.values(refsByRole).flat().find((item) => item?.url) || null,
             warnings: [...critical, ...warnings],
             coverage: {
@@ -3420,11 +3561,15 @@ onClipSec: (nodeId, value) => {
             storySource: narrativeSource,
             cast: castLabels,
             world: `location ${refsByRole.location.length ? 'yes' : 'no'} • props ${refsByRole.props.length ? 'yes' : 'no'} • scale ${anchors.worldScaleContext}`,
-            style: `${stylePreset}${refsByRole.style.length ? ' + style ref' : ' only'}`,
+            style: `${stylePreset}${refsByRole.style.length ? ' + style ref' : ' only'} • ${styleSemantics.styleSummary}`,
             worldCompact: `${refsByRole.location.length ? 'location' : ''}${refsByRole.location.length && refsByRole.props.length ? ' + ' : ''}${refsByRole.props.length ? 'props' : ''}` || 'none',
             styleCompact: `${stylePreset}${refsByRole.style.length ? ' + ref' : ''}`,
             sourceArbitration: narrativeSource,
             outputMode: outputValue,
+            modeBias: modeSemantics.modePromptBias,
+            planningStyle: modeSemantics.planningMindset,
+            sceneStrategy: modeSemantics.modeSceneStrategy,
+            styleBias: styleSemantics.styleSummary,
             pipelineFlow: 'brain → per-scene prompts/rules → scene image → scene video',
           };
 
@@ -3461,6 +3606,13 @@ onClipSec: (nodeId, value) => {
                   summary: brainSummary,
                   sceneRoleModel,
                   referenceSummary,
+                  modeIntent: modeSemantics.modeIntent,
+                  modePromptBias: modeSemantics.modePromptBias,
+                  modeSceneStrategy: modeSemantics.modeSceneStrategy,
+                  modeContinuityBias: modeSemantics.modeContinuityBias,
+                  planningMindset: modeSemantics.planningMindset,
+                  styleSummary: styleSemantics.styleSummary,
+                  styleContinuity: styleSemantics.styleContinuity,
                 };
                 const mockScenes = buildMockComfyScenes(plannerMeta);
                 const globalContinuity = mockScenes[0]?.plannerMeta?.globalContinuity || buildComfyGlobalContinuity({ plannerInput, refsByRole, sceneRoleModel });
@@ -4662,7 +4814,7 @@ const hydrate = useCallback(() => {
                     scenes.length ? <div className="clipSB_planList">{scenes.map((sc) => <div key={sc.sceneId} className="clipSB_planRow"><div className="clipSB_planTime">{sc.title}</div><div className="clipSB_planText">{sc.description}<br/>primary: {sc.primaryRole} • secondary: {(sc.secondaryRoles || []).join(', ')}<br/>continuity: {sc.continuity}<br/>scene output: {sc.sceneOutputRule || 'scene image first'}</div></div>)}</div> : <div className="clipSB_empty">Нет mock сцен. Нажми «Разобрать» в COMFY BRAIN.</div>
                   ) : null}
                   {active === 'PROMPT' ? <div className="clipSB_comfyPrompt"><div className="clipSB_small">{scenes[0]?.imagePrompt || 'no image prompt'}<br />{scenes[0]?.videoPrompt || 'no video prompt'}</div><pre className="clipSB_comfyPromptPre">{JSON.stringify(scenes[0] || {}, null, 2)}</pre></div> : null}
-                  {active === 'DEBUG' ? <div className="clipSB_comfyDebug"><div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div><div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div><div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div><div className="clipSB_small">primary role: {node?.data?.debugFields?.primaryRole || 'character_1'}</div><div className="clipSB_small">secondary roles: {(node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none'}</div><div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div><div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div><div className="clipSB_small">pipeline: {(Array.isArray(node?.data?.pipelineFlow) ? node.data.pipelineFlow.join(' → ') : (Array.isArray(node?.data?.debugFields?.pipelineFlow) ? node.data.debugFields.pipelineFlow.join(' → ') : 'brain → scene image → scene video'))}</div><div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div></div> : null}
+                  {active === 'DEBUG' ? <div className="clipSB_comfyDebug"><div className="clipSB_small">comfy profile: {node?.data?.mode || 'clip'} • {node?.data?.output || 'comfy image'}</div><div className="clipSB_small">narrative source: {node?.data?.narrativeSource || 'none'}</div><div className="clipSB_small">style preset: {node?.data?.stylePreset || 'realism'}</div><div className="clipSB_small">mode intent: {node?.data?.debugFields?.modeIntent || 'none'}</div><div className="clipSB_small">mode bias: {node?.data?.debugFields?.modePromptBias || 'none'}</div><div className="clipSB_small">scene strategy: {node?.data?.debugFields?.modeSceneStrategy || 'none'}</div><div className="clipSB_small">continuity bias: {node?.data?.debugFields?.modeContinuityBias || 'none'}</div><div className="clipSB_small">planning mindset: {node?.data?.debugFields?.planningMindset || 'none'}</div><div className="clipSB_small">style summary: {node?.data?.debugFields?.styleSummary || 'none'}</div><div className="clipSB_small">style continuity: {node?.data?.debugFields?.styleContinuity || 'none'}</div><div className="clipSB_small">primary role: {node?.data?.debugFields?.primaryRole || 'character_1'}</div><div className="clipSB_small">secondary roles: {(node?.data?.debugFields?.secondaryRoles || []).join(', ') || 'none'}</div><div className="clipSB_small">cast: {(node?.data?.debugFields?.cast || []).join(', ') || 'none'}</div><div className="clipSB_small">prompt length: {node?.data?.debugFields?.promptLength || 0} • lines: {node?.data?.debugFields?.promptLines || 0}</div><div className="clipSB_small">pipeline: {(Array.isArray(node?.data?.pipelineFlow) ? node.data.pipelineFlow.join(' → ') : (Array.isArray(node?.data?.debugFields?.pipelineFlow) ? node.data.debugFields.pipelineFlow.join(' → ') : 'brain → scene image → scene video'))}</div><div className="clipSB_small">warnings: {(Array.isArray(node?.data?.warnings) ? node.data.warnings.join(' | ') : '') || 'none'}</div></div> : null}
                   {active === 'VIDEO' ? <div className="clipSB_previewCard"><div className="clipSB_small">future mp4 preview block • status: demo</div></div> : null}
                 </div>
               );
