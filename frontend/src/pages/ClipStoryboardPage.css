@@ -1301,8 +1301,17 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_badge { display:inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,.08); margin-bottom: 8px; }
 .clipSB_grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.clipSB_toggleRow { display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color: rgba(255,255,255,.8); }
+.clipSB_brainLabel { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 0 0 5px; text-transform: uppercase; }
+.clipSB_toggleRow { display:flex; justify-content:flex-start; margin-top:8px; font-size:12px; color: rgba(255,255,255,.8); }
+.clipSB_toggleRow label { display: inline-flex; align-items: center; gap: 6px; }
 .clipSB_input { width:100%; border-radius:10px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color:#fff; padding:8px 10px; box-sizing:border-box; }
+.clipSB_brainSummaryBlock { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.03); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07); display: grid; gap: 4px; }
+.clipSB_brainSummaryRow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 11px; color: rgba(255,255,255,.65); }
+.clipSB_brainSummaryRow strong { color: rgba(255,255,255,.9); font-size: 11px; font-weight: 600; text-align: right; }
+.clipSB_brainWarnings { margin-top: 8px; display: grid; gap: 5px; }
+.clipSB_brainPill { font-size: 11px; line-height: 1.35; padding: 6px 8px; border-radius: 8px; background: rgba(255,194,91,.08); color: rgba(255,233,186,.95); box-shadow: inset 0 0 0 1px rgba(255,194,91,.24); }
+.clipSB_brainPillCritical { background: rgba(255,95,125,.1); color: rgba(255,210,219,.95); box-shadow: inset 0 0 0 1px rgba(255,95,125,.3); }
+.clipSB_brainPillOk { background: rgba(147,221,111,.08); color: rgba(220,248,202,.95); box-shadow: inset 0 0 0 1px rgba(147,221,111,.24); }
 .clipSB_inlineBtns { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
 .clipSB_previewCard { margin-top:8px; border-radius: 12px; padding: 10px; min-height: 120px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); display:flex; align-items:center; justify-content:center; }
 .clipSB_drawerGroupTitle { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 4px 2px; text-transform: uppercase; }

@@ -292,7 +292,17 @@ function getSceneUiDescription(scene) {
 }
 
 
-function buildMockComfyScenes() {
+function buildMockComfyScenes(meta = {}) {
+  const plannerMeta = {
+    mode: String(meta?.mode || "clip"),
+    output: String(meta?.output || "comfy image"),
+    stylePreset: String(meta?.stylePreset || "realism"),
+    narrativeSource: String(meta?.narrativeSource || "none"),
+    timelineSource: String(meta?.timelineSource || "logic"),
+    warnings: Array.isArray(meta?.warnings) ? meta.warnings : [],
+    summary: meta?.summary && typeof meta.summary === "object" ? meta.summary : {},
+  };
+
   return [
     {
       sceneId: 'c1',
@@ -303,6 +313,7 @@ function buildMockComfyScenes() {
       continuity: 'Сохранять холодную палитру и frontal framing.',
       imagePrompt: 'cinematic portrait, neon rim light, premium dark studio',
       videoPrompt: 'slow dolly-in, beat synced cuts, high contrast',
+      plannerMeta,
     },
     {
       sceneId: 'c2',
@@ -313,6 +324,7 @@ function buildMockComfyScenes() {
       continuity: 'Не менять стиль костюмов и ключевой свет.',
       imagePrompt: 'dramatic two-shot, cinematic frame, moody background',
       videoPrompt: 'whip pan transition, medium close-up, kinetic energy',
+      plannerMeta,
     },
     {
       sceneId: 'c3',
@@ -323,6 +335,7 @@ function buildMockComfyScenes() {
       continuity: 'Соблюдать scale-lock и поведенческий профиль.',
       imagePrompt: 'stylized animal companion, soft glow edges, detailed fur',
       videoPrompt: 'gentle orbit camera, natural motion, shallow depth of field',
+      plannerMeta,
     },
     {
       sceneId: 'c4',
@@ -333,6 +346,7 @@ function buildMockComfyScenes() {
       continuity: 'Удерживать formation и outfit consistency.',
       imagePrompt: 'group composition, premium fashion styling, dramatic backlight',
       videoPrompt: 'wide master shot, crane up, finale energy',
+      plannerMeta,
     },
   ];
 }
@@ -1347,12 +1361,13 @@ function RefNode({ id, data }) {
 
 function ComfyBrainNode({ id, data }) {
   const mode = data?.mode || 'clip';
+  const output = data?.output || 'comfy image';
   const styleKey = data?.styleKey || 'realism';
-  const shotLogic = data?.shotLogic || 'cinematic';
   const freezeStyle = !!data?.freezeStyle;
-  const autoDuration = data?.autoDuration !== false;
-  const manualDuration = Number(data?.manualDuration || 30);
   const parseStatus = data?.parseStatus || 'idle';
+  const summary = data?.brainSummary || {};
+  const warnings = Array.isArray(data?.brainWarnings) ? data.brainWarnings : [];
+  const critical = Array.isArray(data?.brainCritical) ? data.brainCritical : [];
 
   return (
     <>
@@ -1361,23 +1376,44 @@ function ComfyBrainNode({ id, data }) {
       ))}
       <Handle type="source" position={Position.Right} id="comfy_plan" className="clipSB_handle" style={handleStyle('comfy_plan')} />
       <NodeShell title="COMFY BRAIN" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧠</span>} className="clipSB_nodeComfyBrain">
-        <div className="clipSB_badge">UI ONLY / PHASE 1</div>
+        <div className="clipSB_badge">CANON v1.2 • PLANNER</div>
         <div className="clipSB_grid2">
-          <select className="clipSB_select" value={mode} onChange={(e) => data?.onMode?.(id, e.target.value)}>
-            <option value="clip">clip</option><option value="kino">kino</option><option value="reklama">reklama</option><option value="scenario">scenario</option>
-          </select>
+          <div>
+            <div className="clipSB_brainLabel">MODE</div>
+            <select className="clipSB_select" value={mode} onChange={(e) => data?.onMode?.(id, e.target.value)}>
+              <option value="clip">clip</option><option value="kino">kino</option><option value="reklama">reklama</option><option value="scenario">scenario</option>
+            </select>
+          </div>
+          <div>
+            <div className="clipSB_brainLabel">OUTPUT</div>
+            <select className="clipSB_select" value={output} onChange={(e) => data?.onOutput?.(id, e.target.value)}>
+              <option value="comfy image">comfy image</option>
+              <option value="comfy text">comfy text</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <div className="clipSB_brainLabel">STYLE</div>
           <select className="clipSB_select" value={styleKey} onChange={(e) => data?.onStyle?.(id, e.target.value)}>
             <option value="realism">realism</option><option value="film">film</option><option value="neon">neon</option><option value="glossy">glossy</option><option value="soft">soft</option>
           </select>
         </div>
-        <select className="clipSB_select" value={shotLogic} onChange={(e) => data?.onShotLogic?.(id, e.target.value)} style={{ marginTop: 8 }}>
-          <option value="cinematic">cinematic</option><option value="music-video">music-video</option><option value="documentary">documentary</option><option value="pov">pov</option><option value="static">static</option>
-        </select>
-        <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freezeStyle</label><label><input type="checkbox" checked={autoDuration} onChange={(e) => data?.onAutoDuration?.(id, e.target.checked)} /> auto duration</label></div>
-        <input className="clipSB_input" type="number" min={5} max={3600} disabled={autoDuration} value={manualDuration} onChange={(e) => data?.onManualDuration?.(id, e.target.value)} />
+        <div className="clipSB_brainSummaryBlock">
+          <div className="clipSB_brainSummaryRow"><span>story source</span><strong>{summary.storySource || 'none'}</strong></div>
+          <div className="clipSB_brainSummaryRow"><span>output</span><strong>{output}</strong></div>
+          <div className="clipSB_brainSummaryRow"><span>cast</span><strong>{summary.cast || 'none connected'}</strong></div>
+          <div className="clipSB_brainSummaryRow"><span>world</span><strong>{summary.world || 'location no • props no'}</strong></div>
+          <div className="clipSB_brainSummaryRow"><span>style</span><strong>{summary.style || styleKey}</strong></div>
+        </div>
+        <div className="clipSB_toggleRow"><label><input type="checkbox" checked={freezeStyle} onChange={(e) => data?.onFreezeStyle?.(id, e.target.checked)} /> freeze style</label></div>
+        <div className="clipSB_brainWarnings">
+          {critical.map((item) => <div key={`critical-${item}`} className="clipSB_brainPill clipSB_brainPillCritical">{item}</div>)}
+          {warnings.map((item) => <div key={`warn-${item}`} className="clipSB_brainPill">{item}</div>)}
+          {!critical.length && !warnings.length ? <div className="clipSB_brainPill clipSB_brainPillOk">Planner ready</div> : null}
+        </div>
         <button className="clipSB_btn" style={{ marginTop: 8 }} onClick={() => data?.onParse?.(id)}>Разобрать</button>
         <div className="clipSB_small">status: {parseStatus}{data?.parsedAt ? ` • ${data.parsedAt}` : ''}</div>
-        <div className="clipSB_small">refs: {Number(data?.connectedRefsCount || 0)} • cast: {Number(data?.connectedCastCount || 0)} • audio: {data?.hasAudio ? 'yes' : 'no'} • text: {data?.hasText ? 'yes' : 'no'}</div>
+        <div className="clipSB_small">source: {summary.storySource || 'none'} • cast: {Number(data?.connectedCastCount || 0)} • world: {summary.worldCompact || 'none'} • style: {summary.styleCompact || styleKey}</div>
       </NodeShell>
     </>
   );
@@ -3121,33 +3157,105 @@ onClipSec: (nodeId, value) => {
           const incoming = (edgesRef.current || []).filter((e) => e.target === n.id);
           const handles = new Set(incoming.map((e) => String(e.targetHandle || '')));
           const connectedRefsCount = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group','ref_location','ref_style','ref_props'].filter((h) => handles.has(h)).length;
-          const connectedCastCount = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group'].filter((h) => handles.has(h)).length;
+          const castHandles = ['ref_character_1','ref_character_2','ref_character_3','ref_animal','ref_group'].filter((h) => handles.has(h));
+          const connectedCastCount = castHandles.length;
+          const hasAudio = handles.has('audio');
+          const hasText = handles.has('text');
+          const hasLocation = handles.has('ref_location');
+          const hasProps = handles.has('ref_props');
+          const hasStyleRef = handles.has('ref_style');
+          const modeValue = String(base.data?.mode || 'clip');
+          const outputValue = String(base.data?.output || 'comfy image');
+          const stylePreset = String(base.data?.styleKey || 'realism');
+
+          const storySource = hasText && hasAudio
+            ? 'text + audio'
+            : hasText
+              ? 'text'
+              : hasAudio
+                ? 'audio'
+                : connectedRefsCount
+                  ? 'refs'
+                  : 'none';
+
+          const castLabels = castHandles.map((h) => ({
+            ref_character_1: 'main',
+            ref_character_2: 'char2',
+            ref_character_3: 'char3',
+            ref_animal: 'animal',
+            ref_group: 'group',
+          }[h] || h));
+
+          const castSummary = castLabels.length ? castLabels.join(' + ') : 'none connected';
+          const worldSummary = `location ${hasLocation ? 'yes' : 'no'} • props ${hasProps ? 'yes' : 'no'}`;
+          const styleSummary = `${stylePreset}${hasStyleRef ? ' + style ref' : ' only'}`;
+
+          const critical = [];
+          const warnings = [];
+          if (storySource === 'none') {
+            critical.push('Недостаточно входных данных');
+          }
+          if (storySource === 'audio') {
+            warnings.push('Сюжет будет выведен из аудио');
+          }
+          if (storySource === 'text') {
+            warnings.push('Тайминг будет логическим, без музыкального ритма');
+          }
+          if (outputValue === 'comfy image' && connectedRefsCount >= 4) {
+            warnings.push('Для comfy image будет выбран 1 главный image anchor');
+          }
+          if (modeValue === 'reklama' && !hasText) {
+            warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
+          }
+
+          const brainSummary = {
+            storySource,
+            cast: castSummary,
+            world: worldSummary,
+            style: styleSummary,
+            worldCompact: `${hasLocation ? 'location' : ''}${hasLocation && hasProps ? ' + ' : ''}${hasProps ? 'props' : ''}` || 'none',
+            styleCompact: `${stylePreset}${hasStyleRef ? ' + ref' : ''}`,
+          };
+
           return {
             ...base,
             data: {
               ...base.data,
+              output: outputValue,
               connectedRefsCount,
               connectedCastCount,
-              hasAudio: handles.has('audio'),
-              hasText: handles.has('text'),
+              hasAudio,
+              hasText,
+              brainSummary,
+              brainWarnings: warnings,
+              brainCritical: critical,
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
+              onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: value } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
-              onShotLogic: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, shotLogic: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
-              onAutoDuration: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, autoDuration: !!checked } } : x))),
-              onManualDuration: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, manualDuration: Math.max(5, Math.min(3600, Number(value) || 30)) } } : x))),
               onParse: (nodeId) => {
                 const now = new Date().toLocaleTimeString();
-                const mockScenes = buildMockComfyScenes();
+                const plannerMeta = {
+                  mode: modeValue,
+                  output: outputValue,
+                  stylePreset,
+                  narrativeSource: storySource,
+                  timelineSource: hasAudio ? 'audio rhythm' : 'logical timing',
+                  warnings: [...critical, ...warnings],
+                  summary: brainSummary,
+                };
+                const mockScenes = buildMockComfyScenes(plannerMeta);
                 setNodes((prev) => prev.map((x) => {
-                  if (x.id === nodeId) return { ...x, data: { ...x.data, parseStatus: 'готово', parsedAt: now, mockScenes } };
+                  if (x.id === nodeId) {
+                    return { ...x, data: { ...x.data, parseStatus: 'готово', parsedAt: now, mockScenes, lastPlannerMeta: plannerMeta } };
+                  }
                   return x;
                 }));
                 const comfyStoryTargets = (edgesRef.current || []).filter((e) => e.source === nodeId && e.sourceHandle === 'comfy_plan').map((e) => e.target);
                 if (comfyStoryTargets.length) {
                   setNodes((prev) => prev.map((x) => (comfyStoryTargets.includes(x.id) && x.type === 'comfyStoryboard')
-                    ? { ...x, data: { ...x.data, mockScenes, sceneCount: mockScenes.length, mode: n.data?.mode || 'clip', parseStatus: 'ready' } }
+                    ? { ...x, data: { ...x.data, mockScenes, sceneCount: mockScenes.length, mode: modeValue, output: outputValue, stylePreset, narrativeSource: storySource, timelineSource: plannerMeta.timelineSource, warnings: plannerMeta.warnings, summary: brainSummary, parseStatus: 'ready' } }
                     : x));
                 }
               },
@@ -3537,7 +3645,7 @@ const hydrate = useCallback(() => {
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyBrain") {
-      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', styleKey: 'realism', shotLogic: 'cinematic', autoDuration: true, manualDuration: 30, parseStatus: 'idle' } };
+      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', output: 'comfy image', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
       node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip' } };
     } else if (type === "comfyVideoPreview") {
