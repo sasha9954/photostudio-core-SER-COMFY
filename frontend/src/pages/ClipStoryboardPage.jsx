@@ -3161,11 +3161,32 @@ onClipSec: (nodeId, value) => {
             return edge ? (nodesNow.find((x) => x.id === edge.source) || null) : null;
           };
 
-          const hasMeaningfulRefForHandle = (handleId, expectedKind) => {
+          const comfyRefConfigByHandle = {
+            ref_character_1: { nodeType: 'refNode', kind: 'ref_character' },
+            ref_location: { nodeType: 'refNode', kind: 'ref_location' },
+            ref_style: { nodeType: 'refNode', kind: 'ref_style' },
+            ref_props: { nodeType: 'refNode', kind: 'ref_items' },
+            ref_character_2: { nodeType: 'refCharacter2' },
+            ref_character_3: { nodeType: 'refCharacter3' },
+            ref_animal: { nodeType: 'refAnimal' },
+            ref_group: { nodeType: 'refGroup' },
+          };
+
+          const hasMeaningfulRefForHandle = (handleId) => {
             const sourceNode = pickConnectedNode(handleId);
-            if (sourceNode?.type !== 'refNode' || sourceNode?.data?.kind !== expectedKind) return false;
-            const normalized = normalizeRefData(sourceNode?.data || {}, expectedKind);
-            if (normalized.refs.length > 0) return true;
+            const cfg = comfyRefConfigByHandle[handleId];
+            if (!cfg || !sourceNode || sourceNode?.type !== cfg.nodeType) return false;
+            if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return false;
+
+            const refs = cfg.nodeType === 'refNode'
+              ? normalizeRefData(sourceNode?.data || {}, cfg.kind || '').refs
+              : (Array.isArray(sourceNode?.data?.refs)
+                ? sourceNode.data.refs
+                  .map((item) => ({ url: String(item?.url || '').trim() }))
+                  .filter((item) => !!item.url)
+                : []);
+
+            if (refs.length > 0) return true;
             return !!String(sourceNode?.data?.url || '').trim();
           };
 
@@ -3175,14 +3196,14 @@ onClipSec: (nodeId, value) => {
           const hasAudio = !!(audioNode?.type === 'audioNode' && (String(audioNode?.data?.audioUrl || '').trim() || String(audioNode?.data?.audioName || '').trim()));
 
           const meaningfulRefByHandle = {
-            ref_character_1: hasMeaningfulRefForHandle('ref_character_1', 'ref_character_1'),
-            ref_character_2: hasMeaningfulRefForHandle('ref_character_2', 'ref_character_2'),
-            ref_character_3: hasMeaningfulRefForHandle('ref_character_3', 'ref_character_3'),
-            ref_animal: hasMeaningfulRefForHandle('ref_animal', 'ref_animal'),
-            ref_group: hasMeaningfulRefForHandle('ref_group', 'ref_group'),
-            ref_location: hasMeaningfulRefForHandle('ref_location', 'ref_location'),
-            ref_style: hasMeaningfulRefForHandle('ref_style', 'ref_style'),
-            ref_props: hasMeaningfulRefForHandle('ref_props', 'ref_props'),
+            ref_character_1: hasMeaningfulRefForHandle('ref_character_1'),
+            ref_character_2: hasMeaningfulRefForHandle('ref_character_2'),
+            ref_character_3: hasMeaningfulRefForHandle('ref_character_3'),
+            ref_animal: hasMeaningfulRefForHandle('ref_animal'),
+            ref_group: hasMeaningfulRefForHandle('ref_group'),
+            ref_location: hasMeaningfulRefForHandle('ref_location'),
+            ref_style: hasMeaningfulRefForHandle('ref_style'),
+            ref_props: hasMeaningfulRefForHandle('ref_props'),
           };
 
           const connectedRefsCount = Object.values(meaningfulRefByHandle).filter(Boolean).length;
