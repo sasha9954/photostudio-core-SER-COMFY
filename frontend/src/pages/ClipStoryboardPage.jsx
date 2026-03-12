@@ -439,6 +439,96 @@ function detectStoryControlMode({ meaningfulText = "", meaningfulAudio = "", ref
   return "insufficient_input";
 }
 
+function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [], edgesNow = [] } = {}) {
+  const incoming = (edgesNow || []).filter((e) => e.target === nodeId);
+  const pickConnectedNode = (handleId) => {
+    const edge = [...incoming].reverse().find((e) => String(e.targetHandle || "") === handleId);
+    return edge ? (nodesNow.find((x) => x.id === edge.source) || null) : null;
+  };
+
+  const comfyRefConfigByHandle = {
+    ref_character_1: { nodeType: "refNode", kind: "ref_character" },
+    ref_location: { nodeType: "refNode", kind: "ref_location" },
+    ref_style: { nodeType: "refNode", kind: "ref_style" },
+    ref_props: { nodeType: "refNode", kind: "ref_items" },
+    ref_character_2: { nodeType: "refCharacter2" },
+    ref_character_3: { nodeType: "refCharacter3" },
+    ref_animal: { nodeType: "refAnimal" },
+    ref_group: { nodeType: "refGroup" },
+  };
+
+  const extractRefsFromSourceNode = (sourceNode, cfg = {}) => {
+    if (!sourceNode || sourceNode?.type !== cfg.nodeType) return [];
+    if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return [];
+    const refs = cfg.nodeType === "refNode"
+      ? normalizeRefData(sourceNode?.data || {}, cfg.kind || "").refs
+      : (Array.isArray(sourceNode?.data?.refs)
+        ? sourceNode.data.refs
+          .map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim() }))
+          .filter((item) => !!item.url)
+        : []);
+    if (refs.length) return refs;
+    const fallbackUrl = String(sourceNode?.data?.url || "").trim();
+    return fallbackUrl ? [{ url: fallbackUrl, name: String(sourceNode?.data?.name || "").trim() }] : [];
+  };
+
+  const refsByRole = {
+    character_1: extractRefsFromSourceNode(pickConnectedNode("ref_character_1"), comfyRefConfigByHandle.ref_character_1),
+    character_2: extractRefsFromSourceNode(pickConnectedNode("ref_character_2"), comfyRefConfigByHandle.ref_character_2),
+    character_3: extractRefsFromSourceNode(pickConnectedNode("ref_character_3"), comfyRefConfigByHandle.ref_character_3),
+    animal: extractRefsFromSourceNode(pickConnectedNode("ref_animal"), comfyRefConfigByHandle.ref_animal),
+    group: extractRefsFromSourceNode(pickConnectedNode("ref_group"), comfyRefConfigByHandle.ref_group),
+    location: extractRefsFromSourceNode(pickConnectedNode("ref_location"), comfyRefConfigByHandle.ref_location),
+    style: extractRefsFromSourceNode(pickConnectedNode("ref_style"), comfyRefConfigByHandle.ref_style),
+    props: extractRefsFromSourceNode(pickConnectedNode("ref_props"), comfyRefConfigByHandle.ref_props),
+  };
+
+  const textNode = pickConnectedNode("text");
+  const audioNode = pickConnectedNode("audio");
+  const meaningfulText = textNode?.type === "textNode" ? String(textNode?.data?.textValue || "").trim() : "";
+  const meaningfulAudio = audioNode?.type === "audioNode"
+    ? String(audioNode?.data?.audioUrl || audioNode?.data?.audioName || "").trim()
+    : "";
+
+  const modeValue = String(nodeData?.mode || "clip");
+  const outputValue = normalizeRenderProfile(nodeData?.output || "comfy image");
+  const stylePreset = String(nodeData?.styleKey || "realism");
+  const freezeStyle = !!nodeData?.freezeStyle;
+  const modeSemantics = getModeSemantics(modeValue);
+  const styleSemantics = getStyleSemantics(stylePreset);
+
+  const narrativeSource = meaningfulText && meaningfulAudio
+    ? "text + audio"
+    : meaningfulText
+      ? "text"
+      : meaningfulAudio
+        ? "audio"
+        : Object.values(refsByRole).some((items) => items.length)
+          ? "refs"
+          : "none";
+  const timelineSource = meaningfulAudio ? "audio rhythm" : "logical timing";
+  const storyControlMode = detectStoryControlMode({ meaningfulText, meaningfulAudio, refsByRole });
+  const narrativeRoles = deriveStoryNarrativeRoles(storyControlMode);
+  const storyMissionSummary = buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
+
+  return {
+    refsByRole,
+    meaningfulText,
+    meaningfulAudio,
+    modeValue,
+    outputValue,
+    stylePreset,
+    freezeStyle,
+    modeSemantics,
+    styleSemantics,
+    narrativeSource,
+    timelineSource,
+    storyControlMode,
+    narrativeRoles,
+    storyMissionSummary,
+  };
+}
+
 function deriveStoryNarrativeRoles(storyControlMode = "insufficient_input") {
   const map = {
     text_override: {
@@ -3589,186 +3679,131 @@ onClipSec: (nodeId, value) => {
 
 
         if (n.type === "comfyBrain") {
-          const nodesNow = nodesRef.current || [];
-          const incoming = (edgesRef.current || []).filter((e) => e.target === n.id);
-          const pickConnectedNode = (handleId) => {
-            const edge = [...incoming].reverse().find((e) => String(e.targetHandle || '') === handleId);
-            return edge ? (nodesNow.find((x) => x.id === edge.source) || null) : null;
+          const buildComfyBrainPresentation = (derived) => {
+            const meaningfulRefRoles = Object.entries(derived.refsByRole).filter(([, refs]) => refs.length > 0).map(([role]) => role);
+            const sceneRoleModel = deriveSceneRoles({ refsByRole: derived.refsByRole });
+            const castLabels = sceneRoleModel.cast.length ? sceneRoleModel.cast.join(' + ') : 'none connected';
+
+            const anchors = {
+              sessionCharacterAnchor: sceneRoleModel.cast.length ? `identity lock: ${sceneRoleModel.cast.join(', ')}` : '',
+              sessionLocationAnchor: derived.refsByRole.location.length ? 'location anchor from location refs' : '',
+              sessionStyleAnchor: derived.refsByRole.style.length ? 'style anchor from style ref' : `${derived.stylePreset} baseline`,
+              worldScaleContext: derived.refsByRole.animal.length ? 'animal_scale' : 'human_world',
+              entityScaleAnchors: derived.refsByRole.animal.length ? { character: 1, animal: 1 } : { character: 1 },
+              propAnchorLabel: inferPropAnchorLabel(derived.refsByRole),
+            };
+
+            const warnings = [];
+            const critical = [];
+            if (derived.narrativeSource === 'none') critical.push('Недостаточно входных данных');
+            if (meaningfulRefRoles.length > 0) warnings.push('Все подключённые ref-ноды участвуют в построении сцен');
+            if (!canGenerateComfyImage({ refsByRole: derived.refsByRole }) && (derived.meaningfulText || derived.meaningfulAudio)) {
+              warnings.push('Визуальные сцены будут синтезированы из текста, аудио и режима');
+            }
+            if (!!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length === 0) warnings.push('Сюжет будет выведен из аудио');
+            if (!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из референсов и режима');
+            if (!!derived.meaningfulAudio && !derived.meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из аудио и референсов');
+            if (!derived.meaningfulAudio && derived.meaningfulText) warnings.push('Таймфреймы будут построены логически, без музыкального ритма');
+            if (derived.storyControlMode === 'text_override' && derived.meaningfulAudio) warnings.push('TEXT задаёт сюжет; AUDIO используется для ритма/эмоционального контура');
+            if (derived.storyControlMode === 'audio_enhanced_by_text') warnings.push('AUDIO даёт story backbone; TEXT усиливает драму и акценты');
+            if (derived.storyControlMode === 'hybrid_balanced') warnings.push('Сюжет формируется совместно из AUDIO и TEXT');
+            if (derived.outputValue === 'comfy text' && !hasComfyTextPrompt({ meaningfulText: derived.meaningfulText })) warnings.push('Для comfy text желательно добавить richer text prompt');
+            if (derived.modeValue === 'reklama' && !derived.meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
+
+            const roleCoverage = {
+              castRoles: sceneRoleModel.cast,
+              worldAnchors: ['location', 'style', 'props'].filter((role) => derived.refsByRole[role]?.length > 0),
+              roleCount: meaningfulRefRoles.length,
+            };
+
+            const referenceSummary = {
+              byRole: Object.fromEntries(Object.entries(derived.refsByRole).map(([role, refs]) => [role, refs.length])),
+              text: meaningfulRefRoles.length ? `refs by role: ${meaningfulRefRoles.join(', ')}` : 'refs by role: none',
+            };
+
+            const plannerInput = {
+              mode: derived.modeValue,
+              output: derived.outputValue,
+              stylePreset: derived.stylePreset,
+              freezeStyle: derived.freezeStyle,
+              meaningfulText: derived.meaningfulText,
+              meaningfulAudio: derived.meaningfulAudio,
+              refsByRole: derived.refsByRole,
+              narrativeSource: derived.narrativeSource,
+              timelineSource: derived.timelineSource,
+              storyControlMode: derived.storyControlMode,
+              storyMissionSummary: derived.storyMissionSummary,
+              textNarrativeRole: derived.narrativeRoles.textNarrativeRole,
+              audioNarrativeRole: derived.narrativeRoles.audioNarrativeRole,
+              modeIntent: derived.modeSemantics.modeIntent,
+              modePromptBias: derived.modeSemantics.modePromptBias,
+              modeSceneStrategy: derived.modeSemantics.modeSceneStrategy,
+              modeContinuityBias: derived.modeSemantics.modeContinuityBias,
+              planningMindset: derived.modeSemantics.planningMindset,
+              styleSummary: derived.styleSemantics.styleSummary,
+              styleContinuity: derived.styleSemantics.styleContinuity,
+              primaryImageAnchor: Object.values(derived.refsByRole).flat().find((item) => item?.url) || null,
+              warnings: [...critical, ...warnings],
+              coverage: {
+                hasText: !!derived.meaningfulText,
+                hasAudio: !!derived.meaningfulAudio,
+                hasVisualAnchors: canGenerateComfyImage({ refsByRole: derived.refsByRole }),
+                roleCoverage,
+              },
+              anchors,
+            };
+
+            const brainSummary = {
+              storySource: derived.narrativeSource,
+              cast: castLabels,
+              world: `location ${derived.refsByRole.location.length ? 'yes' : 'no'} • props ${derived.refsByRole.props.length ? 'yes' : 'no'} • scale ${anchors.worldScaleContext}`,
+              style: `${derived.stylePreset}${derived.refsByRole.style.length ? ' + style ref' : ' only'} • ${derived.styleSemantics.styleSummary}`,
+              worldCompact: `${derived.refsByRole.location.length ? 'location' : ''}${derived.refsByRole.location.length && derived.refsByRole.props.length ? ' + ' : ''}${derived.refsByRole.props.length ? 'props' : ''}` || 'none',
+              styleCompact: `${derived.stylePreset}${derived.refsByRole.style.length ? ' + ref' : ''}`,
+              sourceArbitration: `${derived.narrativeSource} • ${derived.storyControlMode}`,
+              storyMissionSummary: derived.storyMissionSummary,
+              outputMode: derived.outputValue,
+              modeBias: derived.modeSemantics.modePromptBias,
+              planningStyle: derived.modeSemantics.planningMindset,
+              sceneStrategy: derived.modeSemantics.modeSceneStrategy,
+              styleBias: derived.styleSemantics.styleSummary,
+              pipelineFlow: 'brain → per-scene prompts/rules → scene image → scene video',
+            };
+
+            return {
+              meaningfulRefRoles,
+              sceneRoleModel,
+              referenceSummary,
+              warnings,
+              critical,
+              plannerInput,
+              brainSummary,
+            };
           };
 
-          const comfyRefConfigByHandle = {
-            ref_character_1: { nodeType: 'refNode', kind: 'ref_character' },
-            ref_location: { nodeType: 'refNode', kind: 'ref_location' },
-            ref_style: { nodeType: 'refNode', kind: 'ref_style' },
-            ref_props: { nodeType: 'refNode', kind: 'ref_items' },
-            ref_character_2: { nodeType: 'refCharacter2' },
-            ref_character_3: { nodeType: 'refCharacter3' },
-            ref_animal: { nodeType: 'refAnimal' },
-            ref_group: { nodeType: 'refGroup' },
-          };
-
-          const extractRefsFromSourceNode = (sourceNode, cfg = {}) => {
-            if (!sourceNode || sourceNode?.type !== cfg.nodeType) return [];
-            if (cfg.kind && sourceNode?.data?.kind !== cfg.kind) return [];
-            const refs = cfg.nodeType === 'refNode'
-              ? normalizeRefData(sourceNode?.data || {}, cfg.kind || '').refs
-              : (Array.isArray(sourceNode?.data?.refs)
-                ? sourceNode.data.refs
-                  .map((item) => ({ url: String(item?.url || '').trim(), name: String(item?.name || '').trim() }))
-                  .filter((item) => !!item.url)
-                : []);
-            if (refs.length) return refs;
-            const fallbackUrl = String(sourceNode?.data?.url || '').trim();
-            return fallbackUrl ? [{ url: fallbackUrl, name: String(sourceNode?.data?.name || '').trim() }] : [];
-          };
-
-          const refsByRole = {
-            character_1: extractRefsFromSourceNode(pickConnectedNode('ref_character_1'), comfyRefConfigByHandle.ref_character_1),
-            character_2: extractRefsFromSourceNode(pickConnectedNode('ref_character_2'), comfyRefConfigByHandle.ref_character_2),
-            character_3: extractRefsFromSourceNode(pickConnectedNode('ref_character_3'), comfyRefConfigByHandle.ref_character_3),
-            animal: extractRefsFromSourceNode(pickConnectedNode('ref_animal'), comfyRefConfigByHandle.ref_animal),
-            group: extractRefsFromSourceNode(pickConnectedNode('ref_group'), comfyRefConfigByHandle.ref_group),
-            location: extractRefsFromSourceNode(pickConnectedNode('ref_location'), comfyRefConfigByHandle.ref_location),
-            style: extractRefsFromSourceNode(pickConnectedNode('ref_style'), comfyRefConfigByHandle.ref_style),
-            props: extractRefsFromSourceNode(pickConnectedNode('ref_props'), comfyRefConfigByHandle.ref_props),
-          };
-
-          const textNode = pickConnectedNode('text');
-          const audioNode = pickConnectedNode('audio');
-          const meaningfulText = textNode?.type === 'textNode' ? String(textNode?.data?.textValue || '').trim() : '';
-          const meaningfulAudio = audioNode?.type === 'audioNode'
-            ? String(audioNode?.data?.audioUrl || audioNode?.data?.audioName || '').trim()
-            : '';
-          const modeValue = String(base.data?.mode || 'clip');
-          const outputValue = normalizeRenderProfile(base.data?.output || 'comfy image');
-          const stylePreset = String(base.data?.styleKey || 'realism');
-          const freezeStyle = !!base.data?.freezeStyle;
-          const modeSemantics = getModeSemantics(modeValue);
-          const styleSemantics = getStyleSemantics(stylePreset);
-
-          const narrativeSource = meaningfulText && meaningfulAudio
-            ? 'text + audio'
-            : meaningfulText
-              ? 'text'
-              : meaningfulAudio
-                ? 'audio'
-                : Object.values(refsByRole).some((items) => items.length)
-                  ? 'refs'
-                  : 'none';
-          const timelineSource = meaningfulAudio ? 'audio rhythm' : 'logical timing';
-          const storyControlMode = detectStoryControlMode({ meaningfulText, meaningfulAudio, refsByRole });
-          const narrativeRoles = deriveStoryNarrativeRoles(storyControlMode);
-          const storyMissionSummary = buildStoryMissionSummary({ meaningfulText, storyControlMode, mode: modeValue });
-
-          const meaningfulRefRoles = Object.entries(refsByRole).filter(([, refs]) => refs.length > 0).map(([role]) => role);
-          const sceneRoleModel = deriveSceneRoles({ refsByRole });
-          const castLabels = sceneRoleModel.cast.length ? sceneRoleModel.cast.join(' + ') : 'none connected';
-
-          const anchors = {
-            sessionCharacterAnchor: sceneRoleModel.cast.length ? `identity lock: ${sceneRoleModel.cast.join(', ')}` : '',
-            sessionLocationAnchor: refsByRole.location.length ? 'location anchor from location refs' : '',
-            sessionStyleAnchor: refsByRole.style.length ? 'style anchor from style ref' : `${stylePreset} baseline`,
-            worldScaleContext: refsByRole.animal.length ? 'animal_scale' : 'human_world',
-            entityScaleAnchors: refsByRole.animal.length ? { character: 1, animal: 1 } : { character: 1 },
-            propAnchorLabel: inferPropAnchorLabel(refsByRole),
-          };
-
-          const warnings = [];
-          const critical = [];
-          if (narrativeSource === 'none') critical.push('Недостаточно входных данных');
-          if (meaningfulRefRoles.length > 0) {
-            warnings.push('Все подключённые ref-ноды участвуют в построении сцен');
-          }
-          if (!canGenerateComfyImage({ refsByRole }) && (meaningfulText || meaningfulAudio)) {
-            warnings.push('Визуальные сцены будут синтезированы из текста, аудио и режима');
-          }
-          if (!!meaningfulAudio && !meaningfulText && meaningfulRefRoles.length === 0) warnings.push('Сюжет будет выведен из аудио');
-          if (!meaningfulAudio && !meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из референсов и режима');
-          if (!!meaningfulAudio && !meaningfulText && meaningfulRefRoles.length > 0) warnings.push('Сюжет будет выведен из аудио и референсов');
-          if (!meaningfulAudio && meaningfulText) warnings.push('Таймфреймы будут построены логически, без музыкального ритма');
-          if (storyControlMode === 'text_override' && meaningfulAudio) warnings.push('TEXT задаёт сюжет; AUDIO используется для ритма/эмоционального контура');
-          if (storyControlMode === 'audio_enhanced_by_text') warnings.push('AUDIO даёт story backbone; TEXT усиливает драму и акценты');
-          if (storyControlMode === 'hybrid_balanced') warnings.push('Сюжет формируется совместно из AUDIO и TEXT');
-          if (outputValue === 'comfy text' && !hasComfyTextPrompt({ meaningfulText })) {
-            warnings.push('Для comfy text желательно добавить richer text prompt');
-          }
-          if (modeValue === 'reklama' && !meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
-
-          const roleCoverage = {
-            castRoles: sceneRoleModel.cast,
-            worldAnchors: ['location', 'style', 'props'].filter((role) => refsByRole[role]?.length > 0),
-            roleCount: meaningfulRefRoles.length,
-          };
-
-          const referenceSummary = {
-            byRole: Object.fromEntries(Object.entries(refsByRole).map(([role, refs]) => [role, refs.length])),
-            text: meaningfulRefRoles.length ? `refs by role: ${meaningfulRefRoles.join(', ')}` : 'refs by role: none',
-          };
-
-          const plannerInput = {
-            mode: modeValue,
-            output: outputValue,
-            stylePreset,
-            freezeStyle,
-            meaningfulText,
-            meaningfulAudio,
-            refsByRole,
-            narrativeSource,
-            timelineSource,
-            storyControlMode,
-            storyMissionSummary,
-            textNarrativeRole: narrativeRoles.textNarrativeRole,
-            audioNarrativeRole: narrativeRoles.audioNarrativeRole,
-            modeIntent: modeSemantics.modeIntent,
-            modePromptBias: modeSemantics.modePromptBias,
-            modeSceneStrategy: modeSemantics.modeSceneStrategy,
-            modeContinuityBias: modeSemantics.modeContinuityBias,
-            planningMindset: modeSemantics.planningMindset,
-            styleSummary: styleSemantics.styleSummary,
-            styleContinuity: styleSemantics.styleContinuity,
-            primaryImageAnchor: Object.values(refsByRole).flat().find((item) => item?.url) || null,
-            warnings: [...critical, ...warnings],
-            coverage: {
-              hasText: !!meaningfulText,
-              hasAudio: !!meaningfulAudio,
-              hasVisualAnchors: canGenerateComfyImage({ refsByRole }),
-              roleCoverage,
-            },
-            anchors,
-          };
-
-          const brainSummary = {
-            storySource: narrativeSource,
-            cast: castLabels,
-            world: `location ${refsByRole.location.length ? 'yes' : 'no'} • props ${refsByRole.props.length ? 'yes' : 'no'} • scale ${anchors.worldScaleContext}`,
-            style: `${stylePreset}${refsByRole.style.length ? ' + style ref' : ' only'} • ${styleSemantics.styleSummary}`,
-            worldCompact: `${refsByRole.location.length ? 'location' : ''}${refsByRole.location.length && refsByRole.props.length ? ' + ' : ''}${refsByRole.props.length ? 'props' : ''}` || 'none',
-            styleCompact: `${stylePreset}${refsByRole.style.length ? ' + ref' : ''}`,
-            sourceArbitration: `${narrativeSource} • ${storyControlMode}`,
-            storyMissionSummary,
-            outputMode: outputValue,
-            modeBias: modeSemantics.modePromptBias,
-            planningStyle: modeSemantics.planningMindset,
-            sceneStrategy: modeSemantics.modeSceneStrategy,
-            styleBias: styleSemantics.styleSummary,
-            pipelineFlow: 'brain → per-scene prompts/rules → scene image → scene video',
-          };
+          const derived = deriveComfyBrainState({
+            nodeId: n.id,
+            nodeData: base.data,
+            nodesNow: nodesRef.current || [],
+            edgesNow: edgesRef.current || [],
+          });
+          const presentation = buildComfyBrainPresentation(derived);
 
           return {
             ...base,
             data: {
               ...base.data,
-              output: outputValue,
-              connectedRefsCount: meaningfulRefRoles.length,
-              connectedCastCount: sceneRoleModel.cast.length,
-              hasAudio: !!meaningfulAudio,
-              hasText: !!meaningfulText,
-              brainSummary,
-              brainWarnings: warnings,
-              brainCritical: critical,
-              plannerInput,
-              sceneRoleModel,
-              referenceSummary,
+              output: derived.outputValue,
+              connectedRefsCount: presentation.meaningfulRefRoles.length,
+              connectedCastCount: presentation.sceneRoleModel.cast.length,
+              hasAudio: !!derived.meaningfulAudio,
+              hasText: !!derived.meaningfulText,
+              brainSummary: presentation.brainSummary,
+              brainWarnings: presentation.warnings,
+              brainCritical: presentation.critical,
+              plannerInput: presentation.plannerInput,
+              sceneRoleModel: presentation.sceneRoleModel,
+              referenceSummary: presentation.referenceSummary,
               onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, [key]: value } } : x))),
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
@@ -3776,32 +3811,41 @@ onClipSec: (nodeId, value) => {
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
               onParse: (nodeId) => {
                 const now = new Date().toLocaleTimeString();
+                const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                const freshDerived = deriveComfyBrainState({
+                  nodeId,
+                  nodeData: activeNode?.data || base.data,
+                  nodesNow: nodesRef.current || [],
+                  edgesNow: edgesRef.current || [],
+                });
+                const freshPresentation = buildComfyBrainPresentation(freshDerived);
+
                 const plannerMeta = {
-                  plannerInput,
-                  mode: modeValue,
-                  output: outputValue,
-                  stylePreset,
-                  narrativeSource,
-                  timelineSource,
-                  storyControlMode,
-                  storyMissionSummary,
-                  textNarrativeRole: narrativeRoles.textNarrativeRole,
-                  audioNarrativeRole: narrativeRoles.audioNarrativeRole,
-                  warnings: [...critical, ...warnings],
-                  summary: brainSummary,
-                  sceneRoleModel,
-                  referenceSummary,
-                  modeIntent: modeSemantics.modeIntent,
-                  modePromptBias: modeSemantics.modePromptBias,
-                  modeSceneStrategy: modeSemantics.modeSceneStrategy,
-                  modeContinuityBias: modeSemantics.modeContinuityBias,
-                  planningMindset: modeSemantics.planningMindset,
-                  styleSummary: styleSemantics.styleSummary,
-                  styleContinuity: styleSemantics.styleContinuity,
+                  plannerInput: freshPresentation.plannerInput,
+                  mode: freshDerived.modeValue,
+                  output: freshDerived.outputValue,
+                  stylePreset: freshDerived.stylePreset,
+                  narrativeSource: freshDerived.narrativeSource,
+                  timelineSource: freshDerived.timelineSource,
+                  storyControlMode: freshDerived.storyControlMode,
+                  storyMissionSummary: freshDerived.storyMissionSummary,
+                  textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
+                  audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
+                  warnings: [...freshPresentation.critical, ...freshPresentation.warnings],
+                  summary: freshPresentation.brainSummary,
+                  sceneRoleModel: freshPresentation.sceneRoleModel,
+                  referenceSummary: freshPresentation.referenceSummary,
+                  modeIntent: freshDerived.modeSemantics.modeIntent,
+                  modePromptBias: freshDerived.modeSemantics.modePromptBias,
+                  modeSceneStrategy: freshDerived.modeSemantics.modeSceneStrategy,
+                  modeContinuityBias: freshDerived.modeSemantics.modeContinuityBias,
+                  planningMindset: freshDerived.modeSemantics.planningMindset,
+                  styleSummary: freshDerived.styleSemantics.styleSummary,
+                  styleContinuity: freshDerived.styleSemantics.styleContinuity,
                 };
                 const mockScenes = buildMockComfyScenes(plannerMeta);
-                const globalContinuity = mockScenes[0]?.plannerMeta?.globalContinuity || buildComfyGlobalContinuity({ plannerInput, refsByRole, sceneRoleModel });
-                const debugFields = extractComfyDebugFields({ plannerInput, plannerMeta: { ...plannerMeta, globalContinuity } });
+                const globalContinuity = mockScenes[0]?.plannerMeta?.globalContinuity || buildComfyGlobalContinuity({ plannerInput: freshPresentation.plannerInput, refsByRole: freshDerived.refsByRole, sceneRoleModel: freshPresentation.sceneRoleModel });
+                const debugFields = extractComfyDebugFields({ plannerInput: freshPresentation.plannerInput, plannerMeta: { ...plannerMeta, globalContinuity } });
 
                 setNodes((prev) => prev.map((x) => {
                   if (x.id === nodeId) {
@@ -3828,18 +3872,18 @@ onClipSec: (nodeId, value) => {
                           ...x.data,
                           mockScenes,
                           sceneCount: mockScenes.length,
-                          mode: modeValue,
-                          output: outputValue,
-                          stylePreset,
-                          narrativeSource,
-                          timelineSource,
-                          storyControlMode,
-                          storyMissionSummary,
-                          textNarrativeRole: narrativeRoles.textNarrativeRole,
-                          audioNarrativeRole: narrativeRoles.audioNarrativeRole,
+                          mode: freshDerived.modeValue,
+                          output: freshDerived.outputValue,
+                          stylePreset: freshDerived.stylePreset,
+                          narrativeSource: freshDerived.narrativeSource,
+                          timelineSource: freshDerived.timelineSource,
+                          storyControlMode: freshDerived.storyControlMode,
+                          storyMissionSummary: freshDerived.storyMissionSummary,
+                          textNarrativeRole: freshDerived.narrativeRoles.textNarrativeRole,
+                          audioNarrativeRole: freshDerived.narrativeRoles.audioNarrativeRole,
                           warnings: plannerMeta.warnings,
-                          summary: brainSummary,
-                          refsByRoleSummary: referenceSummary,
+                          summary: freshPresentation.brainSummary,
+                          refsByRoleSummary: freshPresentation.referenceSummary,
                           plannerMeta: { ...plannerMeta, globalContinuity },
                           debugFields,
                           pipelineFlow: debugFields.pipelineFlow,
@@ -3852,6 +3896,7 @@ onClipSec: (nodeId, value) => {
             },
           };
         }
+
 
         if (n.type === "comfyStoryboard") {
           return {
