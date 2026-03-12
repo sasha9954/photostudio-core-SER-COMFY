@@ -591,7 +591,15 @@ function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {}, sceneR
     worldContinuity: anchors.sessionLocationAnchor || (Array.isArray(refsByRole.location) && refsByRole.location.length ? "stable location anchor from refs" : "world continuity from textual context"),
     styleContinuity: anchors.sessionStyleAnchor || `${plannerInput.stylePreset || "realism"} style continuity`,
     propContinuity: anchors.propAnchorLabel || ((Array.isArray(refsByRole.props) && refsByRole.props.length) ? "hero prop continuity" : "no locked prop anchor"),
-    moodContinuity: plannerInput.storyControlMode === "audio_primary" ? "mood continuity from audio rhythm" : (plannerInput.storyControlMode === "text_override" ? "mood continuity from text mission" : "mood continuity from text-audio blend"),
+    moodContinuity: plannerInput.storyControlMode === "audio_primary"
+      ? "mood continuity from audio rhythm"
+      : plannerInput.storyControlMode === "text_override"
+        ? "mood continuity from text mission"
+        : plannerInput.storyControlMode === "audio_enhanced_by_text" || plannerInput.storyControlMode === "hybrid_balanced"
+          ? "mood continuity from text-audio blend"
+          : plannerInput.storyControlMode === "refs_mode_generated"
+            ? "mood continuity from refs + mode semantics"
+            : "mood continuity unresolved",
     timelineContinuity: plannerInput.timelineSource === "audio rhythm" ? "timeline anchored to audio cadence" : "timeline from logical progression",
   };
   return {
