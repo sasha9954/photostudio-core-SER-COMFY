@@ -9,6 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"
+PROMPT_SYNC_STATUS_SYNCED = "synced"
+PROMPT_SYNC_STATUS_NEEDS_SYNC = "needs_sync"
+PROMPT_SYNC_STATUS_SYNCING = "syncing"
+PROMPT_SYNC_STATUS_SYNC_ERROR = "sync_error"
 
 
 def _to_float(value: Any) -> float | None:
@@ -190,7 +194,8 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "TEXT is optional support that clarifies intent.\n"
         "REFS are optional anchors for character/location/style/props continuity.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
-        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt,refsUsed.\n"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePromptRu,imagePromptEn,videoPromptRu,videoPromptEn,refsUsed.\n"
+        "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
         "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
         "In debug include segmentationMode and segmentationReason briefly explaining why boundaries were selected.\n"
@@ -326,6 +331,42 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
     if not isinstance(refs_used, dict):
         refs_used = {}
 
+    image_prompt_ru = str(src.get("imagePromptRu") or src.get("imagePrompt") or "").strip()
+    image_prompt_en = str(src.get("imagePromptEn") or "").strip()
+    video_prompt_ru = str(src.get("videoPromptRu") or src.get("videoPrompt") or "").strip()
+    video_prompt_en = str(src.get("videoPromptEn") or "").strip()
+
+    image_missing_langs: list[str] = []
+    video_missing_langs: list[str] = []
+
+    if image_prompt_ru and image_prompt_en:
+        image_sync_status = PROMPT_SYNC_STATUS_SYNCED
+    elif image_prompt_ru or image_prompt_en:
+        image_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
+        if not image_prompt_ru:
+            image_missing_langs.append("ru")
+            image_prompt_ru = image_prompt_en
+        if not image_prompt_en:
+            image_missing_langs.append("en")
+            image_prompt_en = image_prompt_ru
+    else:
+        image_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
+        image_missing_langs.extend(["ru", "en"])
+
+    if video_prompt_ru and video_prompt_en:
+        video_sync_status = PROMPT_SYNC_STATUS_SYNCED
+    elif video_prompt_ru or video_prompt_en:
+        video_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
+        if not video_prompt_ru:
+            video_missing_langs.append("ru")
+            video_prompt_ru = video_prompt_en
+        if not video_prompt_en:
+            video_missing_langs.append("en")
+            video_prompt_en = video_prompt_ru
+    else:
+        video_sync_status = PROMPT_SYNC_STATUS_NEEDS_SYNC
+        video_missing_langs.extend(["ru", "en"])
+
     return {
         "sceneId": str(src.get("sceneId") or f"scene-{idx + 1}"),
         "title": str(src.get("title") or f"Scene {idx + 1}"),
@@ -339,8 +380,18 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
         "primaryRole": str(src.get("primaryRole") or "character_1"),
         "secondaryRoles": src.get("secondaryRoles") if isinstance(src.get("secondaryRoles"), list) else [],
         "continuity": str(src.get("continuity") or ""),
-        "imagePrompt": str(src.get("imagePrompt") or ""),
-        "videoPrompt": str(src.get("videoPrompt") or ""),
+        "imagePrompt": image_prompt_en,
+        "videoPrompt": video_prompt_en,
+        "imagePromptRu": image_prompt_ru,
+        "imagePromptEn": image_prompt_en,
+        "videoPromptRu": video_prompt_ru,
+        "videoPromptEn": video_prompt_en,
+        "imagePromptSyncStatus": image_sync_status,
+        "videoPromptSyncStatus": video_sync_status,
+        "promptMissingLangs": {
+            "image": image_missing_langs,
+            "video": video_missing_langs,
+        },
         "refsUsed": refs_used,
         # Runtime render-state fields are intentionally initialized outside planner contract.
         "imageUrl": "",
@@ -461,6 +512,20 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
+    prompt_contract_warnings: list[str] = []
+    for scene in scenes:
+        scene_id = str(scene.get("sceneId") or "unknown_scene")
+        missing = scene.get("promptMissingLangs") if isinstance(scene.get("promptMissingLangs"), dict) else {}
+        image_missing = missing.get("image") if isinstance(missing.get("image"), list) else []
+        video_missing = missing.get("video") if isinstance(missing.get("video"), list) else []
+        if image_missing:
+            prompt_contract_warnings.append(f"scene:{scene_id}:image_missing_languages:{','.join(sorted(set(str(x) for x in image_missing)))}")
+        if video_missing:
+            prompt_contract_warnings.append(f"scene:{scene_id}:video_missing_languages:{','.join(sorted(set(str(x) for x in video_missing)))}")
+    if prompt_contract_warnings:
+        warnings.append("planner_prompt_language_contract_not_fully_met")
+        warnings.extend(prompt_contract_warnings)
+
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
     segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
     initial_segmentation_debug = dict(segmentation_debug)
@@ -590,6 +655,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "refinementWarnings": refinement_warnings,
             "stillCoarseAfterRefinement": still_coarse_after_refinement,
             "stillCoarseReasons": still_coarse_reasons if still_coarse_after_refinement else [],
+            "promptContractWarnings": prompt_contract_warnings,
         },
     }
     if timing_debug.get("normalizationApplied"):
@@ -613,3 +679,94 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
         first_scene.get("title") if isinstance(first_scene, dict) else None,
     )
     return result
+
+
+def build_comfy_prompt_sync_prompt(payload: dict[str, Any]) -> str:
+    return (
+        "You are a prompt adaptation engine for visual generation. Return strict JSON only.\n"
+        "Fields: ok, translatedPrompt, normalizedPrompt, debug, error.\n"
+        "Rules:\n"
+        "- sourceLang and targetLang are mandatory.\n"
+        "- Convert source text into model-ready prompt in target language.\n"
+        "- Preserve story meaning, style cues, camera and motion intent.\n"
+        "- Keep concise, no explanations, no markdown, no quotes wrappers.\n"
+        "- If promptType=image: prioritize visual composition, subject, light, lens/camera if present.\n"
+        "- If promptType=video: preserve motion, timing, camera movement, atmosphere beats.\n"
+        f"INPUT={json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _extract_text_from_response(resp: dict[str, Any]) -> str:
+    return _extract_text(resp if isinstance(resp, dict) else {})
+
+
+def run_comfy_prompt_sync(payload: dict[str, Any]) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    source_text = str(data.get("sourceText") or "").strip()
+    source_lang = str(data.get("sourceLang") or "ru").strip().lower()
+    target_lang = str(data.get("targetLang") or "en").strip().lower()
+    prompt_type = str(data.get("promptType") or "image").strip().lower()
+    if prompt_type not in {"image", "video"}:
+        prompt_type = "image"
+
+    if not source_text:
+        return {"ok": False, "translatedPrompt": "", "normalizedPrompt": "", "error": "empty_source_text", "debug": {}}
+
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    if not api_key:
+        return {"ok": False, "translatedPrompt": "", "normalizedPrompt": "", "error": "GEMINI_API_KEY missing", "debug": {}}
+
+    normalized_payload = {
+        "sourceText": source_text,
+        "sourceLang": source_lang,
+        "targetLang": target_lang,
+        "promptType": prompt_type,
+        "sceneContext": data.get("sceneContext") if isinstance(data.get("sceneContext"), dict) else {},
+        "stylePreset": str(data.get("stylePreset") or "").strip(),
+        "mode": str(data.get("mode") or "").strip(),
+    }
+
+    body = {
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+        "contents": [{"role": "user", "parts": [{"text": build_comfy_prompt_sync_prompt(normalized_payload)}]}],
+    }
+    model = "gemini-2.5-flash"
+    resp = post_generate_content(api_key, model, body, timeout=90)
+    if isinstance(resp, dict) and resp.get("__http_error__"):
+        return {
+            "ok": False,
+            "translatedPrompt": "",
+            "normalizedPrompt": "",
+            "error": f"gemini_http_error:{resp.get('status')}",
+            "debug": {"status": resp.get("status"), "raw": str(resp.get("text") or "")[:1000]},
+        }
+
+    raw = _extract_text_from_response(resp)
+    parsed = _extract_json(raw)
+    if not isinstance(parsed, dict):
+        return {
+            "ok": False,
+            "translatedPrompt": "",
+            "normalizedPrompt": "",
+            "error": "gemini_invalid_json",
+            "debug": {"raw": raw[:1200]},
+        }
+
+    translated = str(parsed.get("translatedPrompt") or parsed.get("normalizedPrompt") or "").strip()
+    normalized_prompt = str(parsed.get("normalizedPrompt") or translated).strip()
+    if not translated:
+        return {
+            "ok": False,
+            "translatedPrompt": "",
+            "normalizedPrompt": "",
+            "error": "empty_translated_prompt",
+            "debug": {"raw": raw[:1200], "parsed": parsed},
+        }
+
+    return {
+        "ok": bool(parsed.get("ok", True)),
+        "translatedPrompt": translated,
+        "normalizedPrompt": normalized_prompt,
+        "error": str(parsed.get("error") or "").strip() or None,
+        "debug": parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {},
+    }
