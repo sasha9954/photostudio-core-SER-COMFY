@@ -27,6 +27,9 @@ from app.engine.gemini_rest import post_generate_content
 
 router = APIRouter()
 
+COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "required"}
+COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
 
 class ClipImageIn(BaseModel):
     sceneId: str
@@ -56,6 +59,7 @@ class ClipImageRefsIn(BaseModel):
     continuity: str | None = None
     refsUsed: list[str] | dict | None = None
     refDirectives: dict | None = None
+    primaryRole: str | None = None
     plannerMeta: dict | None = None
     propAnchorLabel: str | None = None
     sessionCharacterAnchor: str | None = None
@@ -4199,10 +4203,9 @@ If any of the required descriptive fields are returned in English, the output is
 
 
 def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[str]]:
-    roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
     src = refs_by_role if isinstance(refs_by_role, dict) else {}
     out: dict[str, list[str]] = {}
-    for role in roles:
+    for role in COMFY_REF_ROLES:
         items = src.get(role)
         urls: list[str] = []
         if isinstance(items, list):
@@ -4217,31 +4220,57 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
     return out
 
 
-def _resolve_scene_active_roles_for_image(refs_used: list[str] | dict | None, ref_directives: dict | None, available_refs_by_role: dict[str, list[str]]) -> list[str]:
-    roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
-    available_roles = {role for role in roles if len(available_refs_by_role.get(role) or []) > 0}
+def _resolve_scene_active_roles_for_image(
+    refs_used: list[str] | dict | None,
+    ref_directives: dict | None,
+    available_refs_by_role: dict[str, list[str]],
+    primary_role: str | None = None,
+) -> list[str]:
+    available_roles = {role for role in COMFY_REF_ROLES if len(available_refs_by_role.get(role) or []) > 0}
 
     selected_from_used: list[str] = []
     if isinstance(refs_used, list):
-        selected_from_used = [str(role).strip() for role in refs_used if str(role).strip() in roles]
+        selected_from_used = [str(role).strip() for role in refs_used if str(role).strip() in COMFY_REF_ROLES]
     elif isinstance(refs_used, dict):
-        selected_from_used = [str(role).strip() for role, include in refs_used.items() if str(role).strip() in roles and bool(include)]
-    selected_from_used = [role for role in selected_from_used if role in available_roles]
+        selected_from_used = [str(role).strip() for role, include in refs_used.items() if str(role).strip() in COMFY_REF_ROLES and bool(include)]
+    selected_from_used = [
+        role
+        for role in selected_from_used
+        if role in available_roles and str((ref_directives or {}).get(role) or "") != "omit"
+    ]
 
     selected_from_directives: list[str] = []
     if isinstance(ref_directives, dict):
-        for role, directive in ref_directives.items():
-            clean_role = str(role).strip()
-            clean_directive = str(directive).strip()
-            if clean_role not in roles or clean_role not in available_roles:
+        for role in COMFY_REF_ROLES:
+            directive = str(ref_directives.get(role) or "").strip()
+            if role not in available_roles:
                 continue
-            if clean_directive in {"hero", "supporting", "environment_required", "required", "optional"}:
-                selected_from_directives.append(clean_role)
+            if directive == "omit":
+                continue
+            if directive in COMFY_ACTIVE_DIRECTIVES:
+                selected_from_directives.append(role)
 
     active_roles: list[str] = []
     for role in selected_from_used + selected_from_directives:
         if role not in active_roles:
             active_roles.append(role)
+
+    primary = str(primary_role or "").strip()
+    if not active_roles and primary in available_roles and str((ref_directives or {}).get(primary) or "") != "omit":
+        active_roles = [primary]
+
+    if not active_roles:
+        fallback_role = next(
+            (
+                role
+                for role in COMFY_FALLBACK_ROLE_PRIORITY
+                if role in available_roles and str((ref_directives or {}).get(role) or "") != "omit"
+            ),
+            None,
+        )
+        if fallback_role:
+            active_roles = [fallback_role]
+
     return active_roles
 
 
@@ -4481,11 +4510,17 @@ def clip_image(payload: ClipImageIn):
     comfy_refs_by_role = _clean_refs_by_role_for_image(getattr(refs_obj, "refsByRole", None))
     connected_inputs = getattr(refs_obj, "connectedInputs", None)
     connected_inputs = connected_inputs if isinstance(connected_inputs, dict) else {}
-    comfy_roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
+    comfy_roles = COMFY_REF_ROLES
 
     scene_refs_used = getattr(refs_obj, "refsUsed", None)
     scene_ref_directives = getattr(refs_obj, "refDirectives", None)
-    scene_active_roles = _resolve_scene_active_roles_for_image(scene_refs_used, scene_ref_directives, comfy_refs_by_role)
+    scene_primary_role = str(getattr(refs_obj, "primaryRole", "") or "").strip()
+    scene_active_roles = _resolve_scene_active_roles_for_image(
+        scene_refs_used,
+        scene_ref_directives,
+        comfy_refs_by_role,
+        scene_primary_role,
+    )
     if scene_active_roles:
         comfy_refs_by_role = {
             role: (comfy_refs_by_role.get(role) or []) if role in scene_active_roles else []
