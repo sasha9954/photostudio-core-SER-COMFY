@@ -918,6 +918,55 @@ function summarizeRefsByRole(refsByRole) {
   return { ...summary, activeRoles };
 }
 
+function collectComfyRefDerivationSnapshot({ nodeId = "", nodesNow = [], edgesNow = [] } = {}) {
+  const trackedHandles = [
+    "ref_character_1",
+    "ref_character_2",
+    "ref_character_3",
+    "ref_animal",
+    "ref_group",
+    "ref_location",
+    "ref_style",
+    "ref_props",
+  ];
+  const incoming = (edgesNow || []).filter((edge) => edge.target === nodeId);
+  const incomingByHandle = Object.fromEntries(
+    trackedHandles.map((handleId) => {
+      const matched = [...incoming].reverse().find((edge) => String(edge.targetHandle || "") === handleId) || null;
+      return [handleId, matched];
+    })
+  );
+
+  const connectedSources = Object.fromEntries(
+    Object.entries(incomingByHandle).map(([handleId, edge]) => {
+      const sourceNode = edge ? (nodesNow || []).find((nodeItem) => nodeItem.id === edge.source) || null : null;
+      const rawRefs = Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [];
+      return [
+        handleId,
+        {
+          connected: !!edge,
+          edgeId: edge?.id || null,
+          sourceId: sourceNode?.id || null,
+          sourceType: sourceNode?.type || null,
+          sourceKind: sourceNode?.data?.kind || null,
+          rawRefsCount: rawRefs.length,
+          validRawUrls: rawRefs.filter((item) => !!String(item?.url || "").trim()).length,
+        },
+      ];
+    })
+  );
+
+  return {
+    nodeId,
+    incomingTotal: incoming.length,
+    incomingTracked: Object.values(incomingByHandle).filter(Boolean).length,
+    incomingHandles: Object.fromEntries(
+      Object.entries(incomingByHandle).map(([handleId, edge]) => [handleId, edge ? edge.source : null])
+    ),
+    connectedSources,
+  };
+}
+
 function buildComfySceneContextPrompt({ scene = {}, mode = "clip", stylePreset = "realism", isVideo = false } = {}) {
   const timing = Number.isFinite(Number(scene?.startSec)) && Number.isFinite(Number(scene?.endSec))
     ? `${Number(scene.startSec).toFixed(1)}-${Number(scene.endSec).toFixed(1)}s`
@@ -3792,6 +3841,12 @@ onClipSec: (nodeId, value) => {
                 comfyParseInFlightRef.current.add(nodeId);
                 const startedAt = new Date().toISOString();
                 const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                const preDeriveSnapshot = collectComfyRefDerivationSnapshot({
+                  nodeId,
+                  nodesNow: nodesRef.current || [],
+                  edgesNow: edgesRef.current || [],
+                });
+                console.log("[COMFY DEBUG FRONT] pre-derive snapshot", preDeriveSnapshot);
                 const freshDerived = deriveComfyBrainState({
                   nodeId,
                   nodeData: activeNode?.data || base.data,
@@ -3799,6 +3854,18 @@ onClipSec: (nodeId, value) => {
                   edgesNow: edgesRef.current || [],
                   normalizeRefDataFn: normalizeRefData,
                 });
+                const postDeriveSummary = summarizeRefsByRole(freshDerived?.refsByRole);
+                const droppedHandles = Object.entries(preDeriveSnapshot?.connectedSources || {})
+                  .filter(([handleId, sourceMeta]) => sourceMeta?.connected && (postDeriveSummary?.[String(handleId || "").replace("ref_", "")] || 0) === 0)
+                  .map(([handleId]) => handleId);
+                console.log("[COMFY DEBUG FRONT] post-derive refs summary", postDeriveSummary);
+                if (droppedHandles.length) {
+                  console.warn("[COMFY DEBUG FRONT] derive dropped connected refs", {
+                    nodeId,
+                    droppedHandles,
+                    connectedSources: preDeriveSnapshot?.connectedSources,
+                  });
+                }
                 const freshPresentation = buildComfyBrainPresentation(freshDerived);
 
                 const payload = {
