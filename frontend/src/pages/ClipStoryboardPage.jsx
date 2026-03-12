@@ -1563,6 +1563,8 @@ export default function ClipStoryboardPage() {
   const parseControllerRef = useRef(null);
   const parseTimeoutRef = useRef(null);
   const activeParseNodeRef = useRef(null);
+  const comfyParseSeqRef = useRef(0);
+  const comfyParseInFlightRef = useRef(new Set());
   const scenarioItemRefs = useRef(new Map());
   const scenarioVideoSectionRef = useRef(null);
   const scenarioVideoCardRef = useRef(null);
@@ -1573,6 +1575,43 @@ export default function ClipStoryboardPage() {
   const comfyVideoPollTimerRef = useRef(null);
   const comfyActiveVideoJobRef = useRef(null);
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
+
+  const summarizeComfyPayload = useCallback((payload) => {
+    const refs = payload?.refsByRole && typeof payload.refsByRole === "object" ? payload.refsByRole : {};
+    const refsCounts = Object.fromEntries(
+      Object.entries(refs).map(([role, items]) => [role, Array.isArray(items) ? items.length : 0])
+    );
+    return {
+      mode: payload?.mode || "",
+      output: payload?.output || "",
+      stylePreset: payload?.stylePreset || "",
+      hasText: !!String(payload?.text || "").trim(),
+      hasAudio: !!String(payload?.audioUrl || "").trim(),
+      refsCounts,
+    };
+  }, []);
+
+  const summarizeComfyResponse = useCallback((response) => {
+    const scenes = Array.isArray(response?.scenes) ? response.scenes : [];
+    const firstScene = scenes[0] || null;
+    return {
+      ok: !!response?.ok,
+      scenesCount: scenes.length,
+      warnings: Array.isArray(response?.warnings) ? response.warnings.length : 0,
+      errors: Array.isArray(response?.errors) ? response.errors.length : 0,
+      planMeta: response?.planMeta && typeof response.planMeta === "object"
+        ? {
+            mode: response.planMeta.mode,
+            output: response.planMeta.output,
+            stylePreset: response.planMeta.stylePreset,
+            storyControlMode: response.planMeta.storyControlMode,
+          }
+        : null,
+      firstScene: firstScene
+        ? { sceneId: firstScene.sceneId || null, title: firstScene.title || null }
+        : null,
+    };
+  }, []);
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -3387,6 +3426,14 @@ onClipSec: (nodeId, value) => {
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
               onParse: async (nodeId) => {
+                if (comfyParseInFlightRef.current.has(nodeId)) {
+                  console.info("[COMFY PARSE] skip duplicate run node=%s", nodeId);
+                  return;
+                }
+                const parseId = comfyParseSeqRef.current + 1;
+                comfyParseSeqRef.current = parseId;
+                comfyParseInFlightRef.current.add(nodeId);
+                const startedAt = new Date().toISOString();
                 const now = new Date().toLocaleTimeString();
                 const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                 const freshDerived = deriveComfyBrainState({
@@ -3411,7 +3458,11 @@ onClipSec: (nodeId, value) => {
                   timelineSource: freshDerived.timelineSource,
                   narrativeSource: freshDerived.narrativeSource,
                 };
-                console.log("[COMFY PARSE] payload", payload);
+                console.log(`[COMFY PARSE #${parseId}] payload`, {
+                  nodeId,
+                  startedAt,
+                  ...summarizeComfyPayload(payload),
+                });
 
                 let response;
                 try {
@@ -3422,11 +3473,13 @@ onClipSec: (nodeId, value) => {
                   } else {
                     response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
                   }
-                  console.log("[COMFY PARSE] response", response);
+                  console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
                 } catch (err) {
-                  console.error("[COMFY PARSE] error", err);
+                  console.error(`[COMFY PARSE #${parseId}] error`, err);
                   setNodes((prev) => prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, parseStatus: "error", brainCritical: [String(err?.message || err)], brainWarnings: [] } } : x));
                   return;
+                } finally {
+                  comfyParseInFlightRef.current.delete(nodeId);
                 }
 
                 if (!response?.ok) {
