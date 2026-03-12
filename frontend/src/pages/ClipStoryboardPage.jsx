@@ -824,6 +824,46 @@ function normalizeClipImageRefsPayload(refs = {}) {
   return normalized;
 }
 
+
+function buildComfySceneRefsPayload({ refsByRole = {}, previousSceneImageUrl = "", previousContinuityMemory = null, propAnchorLabel = "" } = {}) {
+  const pickUrls = (roles = []) => roles
+    .flatMap((role) => (Array.isArray(refsByRole?.[role]) ? refsByRole[role] : []))
+    .map((item) => String(item?.url || "").trim())
+    .filter(Boolean);
+
+  return normalizeClipImageRefsPayload({
+    character: pickUrls(["character_1", "character_2", "character_3", "animal", "group"]),
+    location: pickUrls(["location"]),
+    style: pickUrls(["style"]),
+    props: pickUrls(["props"]),
+    previousSceneImageUrl,
+    previousContinuityMemory,
+    propAnchorLabel: String(propAnchorLabel || "").trim() || undefined,
+  });
+}
+
+function buildComfySceneContextPrompt({ scene = {}, mode = "clip", stylePreset = "realism", isVideo = false } = {}) {
+  const timing = Number.isFinite(Number(scene?.startSec)) && Number.isFinite(Number(scene?.endSec))
+    ? `${Number(scene.startSec).toFixed(1)}-${Number(scene.endSec).toFixed(1)}s`
+    : Number.isFinite(Number(scene?.durationSec))
+      ? `${Number(scene.durationSec).toFixed(1)}s`
+      : "";
+  const parts = [
+    `Mode: ${mode}`,
+    `Style preset: ${stylePreset}`,
+    scene?.title ? `Scene title: ${scene.title}` : "",
+    scene?.sceneGoal ? `Scene goal: ${scene.sceneGoal}` : "",
+    scene?.sceneNarrativeStep ? `Narrative step: ${scene.sceneNarrativeStep}` : "",
+    scene?.continuity ? `Continuity: ${scene.continuity}` : "",
+    timing ? `Timing: ${timing}` : "",
+    scene?.primaryRole ? `Primary role: ${scene.primaryRole}` : "",
+    Array.isArray(scene?.secondaryRoles) && scene.secondaryRoles.length ? `Secondary roles: ${scene.secondaryRoles.join(", ")}` : "",
+    scene?.refsUsed && typeof scene.refsUsed === "object" && Object.keys(scene.refsUsed).length ? `Refs used: ${JSON.stringify(scene.refsUsed)}` : "",
+    isVideo && scene?.imageUrl ? `Source image: ${scene.imageUrl}` : "",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
 function stripFunctionsDeep(value) {
   if (typeof value === "function") return undefined;
   if (Array.isArray(value)) {
@@ -1515,6 +1555,7 @@ export default function ClipStoryboardPage() {
   const accountKey = useMemo(() => getAccountKey(user) || "guest", [user]);
   const STORE_KEY = useMemo(() => `ps:clipStoryboard:v1:${accountKey}`, [accountKey]);
   const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
+  const COMFY_VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:comfyVideoJob:v1:${accountKey}`, [accountKey]);
 
   const didHydrateRef = useRef(false);
   const isHydratingRef = useRef(true);
@@ -1529,6 +1570,8 @@ export default function ClipStoryboardPage() {
   const scenarioVideoScrollRafRef = useRef(0);
   const scenarioVideoPollTimerRef = useRef(null);
   const scenarioActiveVideoJobRef = useRef(null);
+  const comfyVideoPollTimerRef = useRef(null);
+  const comfyActiveVideoJobRef = useRef(null);
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
@@ -1722,6 +1765,12 @@ const comfyScenes = useMemo(() => {
 const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
 const comfySafeIndex = comfySelectedIndex < 0 ? 0 : Math.min(comfySelectedIndex, Math.max(0, comfyScenes.length - 1));
 const comfySelectedScene = comfyScenes[comfySafeIndex] || null;
+const comfyModeMeta = getModeDisplayMeta(comfyNode?.data?.mode || "clip");
+const comfyStyleMeta = getStyleDisplayMeta(comfyNode?.data?.stylePreset || "realism");
+const comfyRefsByRole = (comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole && typeof comfyNode?.data?.plannerMeta?.plannerInput?.refsByRole === "object")
+  ? comfyNode.data.plannerMeta.plannerInput.refsByRole
+  : {};
+const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1] || null) : null;
   const [scenarioImageLoading, setScenarioImageLoading] = useState(false);
   const [scenarioImageError, setScenarioImageError] = useState("");
   const [scenarioVideoLoading, setScenarioVideoLoading] = useState(false);
@@ -1902,21 +1951,129 @@ const comfySelectedScene = comfyScenes[comfySafeIndex] || null;
     }));
   }, [comfyNode?.id, setNodes]);
 
+  const stopComfyVideoPolling = useCallback(() => {
+    if (comfyVideoPollTimerRef.current) {
+      clearTimeout(comfyVideoPollTimerRef.current);
+      comfyVideoPollTimerRef.current = null;
+    }
+  }, []);
+
+  const persistActiveComfyVideoJob = useCallback((job) => {
+    if (!job || !job.jobId) {
+      safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+      return;
+    }
+    safeSet(COMFY_VIDEO_JOB_STORE_KEY, JSON.stringify(job));
+  }, [COMFY_VIDEO_JOB_STORE_KEY]);
+
+  const clearActiveComfyVideoJob = useCallback(() => {
+    comfyActiveVideoJobRef.current = null;
+    safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+    stopComfyVideoPolling();
+    setComfyVideoLoading(false);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, stopComfyVideoPolling]);
+
+  const startComfyVideoPolling = useCallback((jobMeta) => {
+    if (!jobMeta?.jobId) return;
+    comfyActiveVideoJobRef.current = { ...jobMeta };
+    persistActiveComfyVideoJob(comfyActiveVideoJobRef.current);
+    setComfyVideoLoading(true);
+    stopComfyVideoPolling();
+
+    const tick = async () => {
+      try {
+        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(jobMeta.jobId)}`, { method: "GET" });
+        if (!out?.ok) throw new Error(out?.hint || out?.code || "video_status_failed");
+        const status = String(out?.status || "").toLowerCase();
+        const nextMeta = {
+          ...(comfyActiveVideoJobRef.current || {}),
+          jobId: jobMeta.jobId,
+          providerJobId: String(out?.providerJobId || comfyActiveVideoJobRef.current?.providerJobId || ""),
+          sceneId: String(out?.sceneId || comfyActiveVideoJobRef.current?.sceneId || ""),
+          status,
+        };
+        comfyActiveVideoJobRef.current = nextMeta;
+        persistActiveComfyVideoJob(nextMeta);
+
+        if (status === "done") {
+          const sceneId = String(nextMeta.sceneId || "");
+          const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
+          if (idx >= 0) {
+            updateComfyScene(idx, {
+              videoUrl: String(out?.videoUrl || ""),
+              mode: String(out?.mode || ""),
+              model: String(out?.model || ""),
+              requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
+              providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
+            });
+          }
+          clearActiveComfyVideoJob();
+          return;
+        }
+
+        if (status === "error" || status === "stopped" || status === "not_found") {
+          setComfyVideoError(String(out?.error || out?.hint || "video_job_failed"));
+          clearActiveComfyVideoJob();
+          return;
+        }
+
+        comfyVideoPollTimerRef.current = setTimeout(tick, 1800);
+      } catch (e) {
+        console.error(e);
+        comfyVideoPollTimerRef.current = setTimeout(tick, 2400);
+      }
+    };
+
+    comfyVideoPollTimerRef.current = setTimeout(tick, 250);
+  }, [clearActiveComfyVideoJob, comfyScenes, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
+
+  useEffect(() => () => stopComfyVideoPolling(), [stopComfyVideoPolling]);
+
+  useEffect(() => {
+    const raw = safeGet(COMFY_VIDEO_JOB_STORE_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed?.jobId) return;
+      startComfyVideoPolling(parsed);
+    } catch {
+      safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+    }
+  }, [COMFY_VIDEO_JOB_STORE_KEY, startComfyVideoPolling]);
+
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
     setComfyImageLoading(true);
     setComfyImageError("");
     try {
       const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
+      const previousSceneImageUrl = String(
+        comfyPreviousScene?.imageUrl || comfyPreviousScene?.endImageUrl || comfyPreviousScene?.startImageUrl || ""
+      ).trim();
+      const contextPrompt = buildComfySceneContextPrompt({
+        scene: comfySelectedScene,
+        mode: comfyNode?.data?.mode || "clip",
+        stylePreset: comfyNode?.data?.stylePreset || "realism",
+      });
+      const imagePrompt = String(comfySelectedScene.imagePrompt || "").trim();
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
         body: {
           sceneId,
-          prompt: String(comfySelectedScene.imagePrompt || '').trim(),
-          sceneDelta: String(comfySelectedScene.imagePrompt || '').trim(),
+          prompt: imagePrompt,
+          sceneDelta: `${imagePrompt}
+
+${contextPrompt}`.trim(),
+          sceneText: contextPrompt,
           style: String(comfyNode?.data?.stylePreset || 'realism'),
           width: 1024,
           height: 1792,
+          refs: buildComfySceneRefsPayload({
+            refsByRole: comfyRefsByRole,
+            previousSceneImageUrl,
+            previousContinuityMemory: comfySelectedScene?.continuity ? { continuity: comfySelectedScene.continuity } : null,
+            propAnchorLabel: inferPropAnchorLabel(comfyRefsByRole),
+          }),
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || 'image_generation_failed');
@@ -1927,7 +2084,7 @@ const comfySelectedScene = comfyScenes[comfySafeIndex] || null;
     } finally {
       setComfyImageLoading(false);
     }
-  }, [comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, updateComfyScene]);
+  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfySelectedScene, updateComfyScene]);
 
   const handleComfyDeleteImage = useCallback(() => {
     setComfyImageError('');
@@ -1940,25 +2097,58 @@ const comfySelectedScene = comfyScenes[comfySafeIndex] || null;
     setComfyVideoError('');
     try {
       const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
-      const out = await fetchJson('/api/clip/video', {
+      const contextPrompt = buildComfySceneContextPrompt({
+        scene: comfySelectedScene,
+        mode: comfyNode?.data?.mode || "clip",
+        stylePreset: comfyNode?.data?.stylePreset || "realism",
+        isVideo: true,
+      });
+      const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
         body: {
           sceneId,
           imageUrl: String(comfySelectedScene.imageUrl || ''),
           videoPrompt: String(comfySelectedScene.videoPrompt || '').trim(),
+          transitionActionPrompt: contextPrompt,
           requestedDurationSec: Number(comfySelectedScene.durationSec) || 3,
+          shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
+          sceneType: String(comfySelectedScene.sceneGoal || ''),
           format: '9:16',
         },
       });
-      if (!out?.ok || !out?.videoUrl) throw new Error(out?.hint || out?.code || 'video_generation_failed');
-      updateComfyScene(comfySafeIndex, { videoUrl: String(out.videoUrl || '') });
+
+      if (out?.ok && out?.jobId) {
+        startComfyVideoPolling({
+          jobId: String(out.jobId),
+          providerJobId: String(out.providerJobId || ''),
+          sceneId,
+          status: 'queued',
+        });
+        return;
+      }
+
+      const legacyOut = await fetchJson('/api/clip/video', {
+        method: 'POST',
+        body: {
+          sceneId,
+          imageUrl: String(comfySelectedScene.imageUrl || ''),
+          videoPrompt: String(comfySelectedScene.videoPrompt || '').trim(),
+          transitionActionPrompt: contextPrompt,
+          requestedDurationSec: Number(comfySelectedScene.durationSec) || 3,
+          shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
+          sceneType: String(comfySelectedScene.sceneGoal || ''),
+          format: '9:16',
+        },
+      });
+      if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || 'video_generation_failed');
+      updateComfyScene(comfySafeIndex, { videoUrl: String(legacyOut.videoUrl || '') });
+      setComfyVideoLoading(false);
     } catch (e) {
       console.error(e);
       setComfyVideoError(String(e?.message || e));
-    } finally {
       setComfyVideoLoading(false);
     }
-  }, [comfySafeIndex, comfySelectedScene, updateComfyScene]);
+  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyDeleteVideo = useCallback(() => {
     setComfyVideoError('');
@@ -4437,7 +4627,7 @@ const hydrate = useCallback(() => {
             <div className="clipSB_scenarioHeader">
               <div>
                 <div className="clipSB_scenarioTitle">COMFY STORYBOARD</div>
-                <div className="clipSB_scenarioMeta">{(comfyNode?.data?.mode || 'clip')} • {(comfyNode?.data?.stylePreset || 'realism')} • сцен: {comfyScenes.length}</div>
+                <div className="clipSB_scenarioMeta">{comfyModeMeta.labelRu} • {comfyStyleMeta.labelRu} • сцен: {comfyScenes.length}</div>
               </div>
               <button className="clipSB_iconBtn" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>×</button>
             </div>
@@ -4484,10 +4674,10 @@ const hydrate = useCallback(() => {
                 ) : (
                   <>
                     <div className="clipSB_comfyInfoGrid">
-                      <div className="clipSB_comfyKv"><span>title</span><strong>{comfySelectedScene.title || '—'}</strong></div>
-                      <div className="clipSB_comfyKv"><span>time</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
-                      <div className="clipSB_comfyKv"><span>purpose</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
-                      <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>continuity</span><strong>{comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—'}</strong></div>
+                      <div className="clipSB_comfyKv"><span>Сцена</span><strong>{comfySelectedScene.title || '—'}</strong></div>
+                      <div className="clipSB_comfyKv"><span>Время</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
+                      <div className="clipSB_comfyKv"><span>Цель</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
+                      <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Континуити</span><strong>{comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—'}</strong></div>
                     </div>
 
                     <div className="clipSB_scenarioEditRow">
@@ -4516,7 +4706,7 @@ const hydrate = useCallback(() => {
 
                     {comfySelectedScene.imageUrl ? (
                       <div className="clipSB_videoBlock">
-                        <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео блок</div>
+                        <div className="clipSB_hint" style={{ marginBottom: 8 }}>Видео блок ({comfyModeMeta.labelRu} / {comfyStyleMeta.labelRu})</div>
                         <div className="clipSB_comfyVideoBase">
                           <img className="clipSB_comfyPreviewImg" src={resolveAssetUrl(comfySelectedScene.imageUrl)} alt="video base" />
                         </div>
@@ -4545,6 +4735,7 @@ const hydrate = useCallback(() => {
                     <details className="clipSB_scenarioEditRow" style={{ marginTop: 8 }}>
                       <summary className="clipSB_hint" style={{ cursor: 'pointer' }}>DEBUG</summary>
                       <div className="clipSB_small" style={{ marginTop: 8 }}>pipeline: {(Array.isArray(comfyNode?.data?.pipelineFlow) ? comfyNode.data.pipelineFlow.join(' → ') : 'brain → scene image → scene video')}</div>
+                      <div className="clipSB_small">режим: {comfyModeMeta.labelRu} • стиль: {comfyStyleMeta.labelRu}</div>
                       <div className="clipSB_small">narrative source: {comfyNode?.data?.narrativeSource || 'none'}</div>
                       <div className="clipSB_small">warnings: {(Array.isArray(comfyNode?.data?.warnings) ? comfyNode.data.warnings.join(' | ') : '') || 'none'}</div>
                     </details>

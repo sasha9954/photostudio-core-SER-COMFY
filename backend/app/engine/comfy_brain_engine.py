@@ -62,7 +62,8 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "TEXT is optional support that clarifies intent.\n"
         "REFS are optional anchors for character/location/style/props continuity.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
-        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt,refsUsed,imageUrl,videoUrl.\n"
+        "sceneOutputRule,primaryRole,secondaryRoles,continuity,imagePrompt,videoPrompt,refsUsed.\n"
+        "Do NOT include runtime render-state fields in planner output (for example imageUrl, videoUrl, audioSliceUrl).\n"
         "Scenes should feel cinematic and watchable; avoid dry static actions unless story requires it.\n"
         f"INPUT={json.dumps(payload, ensure_ascii=False)}"
     )
@@ -175,8 +176,9 @@ def _normalize_scene(scene: dict[str, Any], idx: int) -> dict[str, Any]:
         "imagePrompt": str(src.get("imagePrompt") or ""),
         "videoPrompt": str(src.get("videoPrompt") or ""),
         "refsUsed": refs_used,
-        "imageUrl": str(src.get("imageUrl") or ""),
-        "videoUrl": str(src.get("videoUrl") or ""),
+        # Runtime render-state fields are intentionally initialized outside planner contract.
+        "imageUrl": "",
+        "videoUrl": "",
     }
 
 
@@ -221,20 +223,23 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
+    parsed_errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
+    all_errors = parsed_errors + errors
+
     result = {
-        "ok": len(errors) == 0,
+        "ok": len(all_errors) == 0,
         "planMeta": parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"]},
         "globalContinuity": parsed.get("globalContinuity") if isinstance(parsed.get("globalContinuity"), (dict, str)) else {},
         "scenes": scenes,
         "warnings": (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) + warnings,
-        "errors": (parsed.get("errors") if isinstance(parsed.get("errors"), list) else []) + errors,
+        "errors": all_errors,
         "debug": {
+            **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
             "requestedModel": diagnostics.get("requestedModel") or requested_model,
             "effectiveModel": diagnostics.get("effectiveModel") or requested_model,
             "httpStatus": diagnostics.get("httpStatus"),
             "rawPreview": diagnostics.get("rawPreview") or "",
             "normalizedPayload": normalized,
-            **(parsed.get("debug") if isinstance(parsed.get("debug"), dict) else {}),
         },
     }
     logger.info("[COMFY PLAN] warnings/errors warnings=%s errors=%s", result["warnings"], result["errors"])
