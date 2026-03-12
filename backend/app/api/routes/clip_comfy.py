@@ -24,6 +24,7 @@ class ClipComfyPlanIn(BaseModel):
     freezeStyle: bool = False
     text: str = ""
     audioUrl: str = ""
+    audioDurationSec: float | None = None
     refsByRole: dict[str, list[RefItemIn]] = Field(default_factory=dict)
     storyControlMode: str = ""
     storyMissionSummary: str = ""
