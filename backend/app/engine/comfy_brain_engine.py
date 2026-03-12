@@ -198,6 +198,43 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     )
 
 
+def build_comfy_planner_refinement_prompt(payload: dict[str, Any], previous_scenes: list[dict[str, Any]], refinement_reason: str) -> str:
+    base_prompt = build_comfy_planner_prompt(payload)
+    compact_scene_map = [
+        {
+            "sceneId": str(scene.get("sceneId") or ""),
+            "startSec": _round_sec(_to_float(scene.get("startSec"))),
+            "endSec": _round_sec(_to_float(scene.get("endSec"))),
+            "durationSec": _round_sec(_to_float(scene.get("durationSec"))),
+            "title": str(scene.get("title") or ""),
+            "sceneNarrativeStep": str(scene.get("sceneNarrativeStep") or ""),
+        }
+        for scene in previous_scenes
+    ]
+    refinement_rules = (
+        "SECOND PASS REFINEMENT (SEGMENTATION ONLY):\n"
+        "- Your previous segmentation was too coarse/mechanical and needs refinement.\n"
+        "- Keep the same story direction and continuity. This is NOT a totally new story.\n"
+        "- Refine scene boundaries around meaningful phrase endings and real transition points.\n"
+        "- If a scene is too long, split it into smaller phrase-complete scenes.\n"
+        "- Avoid large generic blocks and avoid equal-duration chunking.\n"
+        "- Prefer shorter meaningful scenes over broad time chunks when in doubt.\n"
+        "- Keep boundaries natural, cinematic, and motivated by transitions.\n"
+        "- Respect audioDurationSec and do not exceed the total audio timeline.\n"
+        "- Preserve narrative continuity while improving segmentation granularity.\n"
+        "- Keep audioStoryMode logic strict:\n"
+        "  * lyrics_music: lyric phrase endings + music transitions.\n"
+        "  * music_only: ignore lyrics semantics, use musical phrasing/energy/structure transitions only.\n"
+        "  * music_plus_text: ignore lyrics semantics, follow TEXT chunks + music transitions.\n"
+    )
+    return (
+        f"{base_prompt}\n\n"
+        f"Refinement trigger reason: {refinement_reason}.\n"
+        f"Previous coarse segmentation snapshot={json.dumps(compact_scene_map, ensure_ascii=False)}\n"
+        f"{refinement_rules}"
+    )
+
+
 def _extract_text(resp: dict[str, Any]) -> str:
     try:
         parts = (((resp or {}).get("candidates") or [])[0].get("content") or {}).get("parts") or []
@@ -345,6 +382,27 @@ def _build_segmentation_debug(scenes: list[dict[str, Any]], audio_story_mode: st
     }
 
 
+def _needs_segmentation_refinement(segmentation_debug: dict[str, Any], audio_duration_sec: float | None, scene_count: int) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    avg_duration = _to_float(segmentation_debug.get("averageSceneDurationSec")) or 0.0
+    duration = _to_float(audio_duration_sec)
+
+    if bool(segmentation_debug.get("suspiciousEqualChunking")):
+        reasons.append("suspicious_equal_chunking")
+    if int(segmentation_debug.get("longSceneCountOver8Sec") or 0) > 0:
+        reasons.append("has_scene_over_8_sec")
+    if avg_duration > 7.0:
+        reasons.append("average_scene_too_long")
+    if duration is not None and 25.0 <= duration <= 35.0 and scene_count < 4:
+        reasons.append("too_few_scenes_for_25_35_sec_track")
+
+    # Mechanical coarse blocks often look both long and near-uniform.
+    if avg_duration >= 6.0 and bool(segmentation_debug.get("suspiciousEqualChunking")):
+        reasons.append("large_uniform_blocks_detected")
+
+    return (len(reasons) > 0), reasons
+
+
 def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     refs_presence = {k: len(v) for k, v in normalized["refsByRole"].items()}
@@ -405,8 +463,57 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
     scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
     segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+    initial_segmentation_debug = dict(segmentation_debug)
+    refinement_applied = False
+    refinement_reasons: list[str] = []
+    refinement_pass_count = 0
+
+    needs_refinement, refinement_reasons = _needs_segmentation_refinement(
+        segmentation_debug,
+        normalized.get("audioDurationSec"),
+        len(scenes),
+    )
+
+    if needs_refinement and len(scenes) > 0 and len(errors) == 0:
+        refinement_applied = True
+        refinement_pass_count = 1
+        refinement_reason_str = ",".join(refinement_reasons)
+        refinement_body = {
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.35},
+            "contents": [{"role": "user", "parts": [{"text": build_comfy_planner_refinement_prompt(normalized, scenes, refinement_reason_str)}]}],
+        }
+        refined_parsed, refined_diagnostics = _call_gemini_plan(api_key, requested_model, refinement_body)
+        refined_http_status = refined_diagnostics.get("httpStatus")
+        if refined_http_status:
+            warnings.append(f"segmentation_refinement_http_error:{refined_http_status}")
+        else:
+            refined_raw_scenes = refined_parsed.get("scenes") if isinstance(refined_parsed.get("scenes"), list) else []
+            refined_scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(refined_raw_scenes)]
+            if len(refined_scenes) > 0:
+                scenes, timing_debug = _normalize_scene_timeline(refined_scenes, normalized.get("audioDurationSec"))
+                segmentation_debug = _build_segmentation_debug(scenes, normalized.get("audioStoryMode") or "lyrics_music", timing_debug)
+                parsed = refined_parsed
+                diagnostics = {
+                    **diagnostics,
+                    "refinement": {
+                        "httpStatus": refined_diagnostics.get("httpStatus"),
+                        "rawPreview": refined_diagnostics.get("rawPreview") or "",
+                    },
+                }
+                warnings.append("segmentation_refined_second_pass")
+            else:
+                warnings.append("segmentation_refinement_returned_no_scenes")
+
     if segmentation_debug.get("suspiciousEqualChunking"):
         warnings.append("segmentation_suspicious_equal_chunks")
+
+    still_coarse, still_coarse_reasons = _needs_segmentation_refinement(
+        segmentation_debug,
+        normalized.get("audioDurationSec"),
+        len(scenes),
+    )
+    if refinement_applied and still_coarse:
+        warnings.append(f"segmentation_still_coarse_after_refinement:{','.join(still_coarse_reasons)}")
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
     parsed_errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
@@ -444,6 +551,11 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "normalizedScenesCount": len(scenes),
             "timing": timing_debug,
             "segmentation": segmentation_debug,
+            "initialSegmentationDebug": initial_segmentation_debug,
+            "finalSegmentationDebug": segmentation_debug,
+            "refinementApplied": refinement_applied,
+            "refinementReason": ",".join(refinement_reasons) if refinement_reasons else None,
+            "refinementPassCount": refinement_pass_count,
         },
     }
     if timing_debug.get("normalizationApplied"):
