@@ -64,12 +64,16 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
     if audio_story_mode not in {"lyrics_music", "music_only", "music_plus_text"}:
         audio_story_mode = "lyrics_music"
 
+    # DEBUG VALIDATION CHECKLIST (manual):
+    # 1) lyrics_music -> same song with lyrics should produce story beats that follow lyrical meaning.
+    # 2) music_only -> same song should avoid lyric-derived plot; beats follow rhythm/energy only.
+    # 3) music_plus_text -> same song + separate TEXT storyline should follow TEXT storyline; audio drives pace/energy.
     audio_story_rules = (
         "AUDIO STORY MODE RULES (STRICT):\n"
-        "- lyrics_music: if track has vocals/lyrics, use lyrics meaning as narrative driver; align scenes to verses/chorus while also using music rhythm and energy.\n"
-        "- music_only: ignore lyrics meaning completely even when vocals exist; build scenes only from rhythm/tempo/energy/dynamics/mood; do not derive plot from sung words.\n"
-        "- music_plus_text: ignore lyrics meaning completely; use AUDIO only for rhythm/emotion/edit pace; derive story beats from TEXT node and keep REFS continuity. If TEXT is empty, build neutral non-lyrics storyboard from music energy.\n"
-        "- If mode is music_only or music_plus_text, never pretend lyrics control story."
+        "- lyrics_music: lyrics semantics are explicitly allowed and should be used as a narrative driver when vocals exist. You may use lyrical meaning, verse/chorus structure, emotional lyrical phrases, and explicit lyrical motifs to shape scene goals and transitions. Build scenes from lyrics+music together, not from music alone.\n"
+        "- music_only: ignore lyrical semantics completely. Do not derive plot, events, world, objects, characters, or story beats from sung words. Do not build storyline from vocal text and do not substitute musical analysis with lyric interpretation. Use only rhythm, tempo, energy, dynamics, pacing, and emotional contour. If vocals exist, treat vocals as musical texture/emotional signal, never as narrative source.\n"
+        "- music_plus_text: lyrics semantics must be ignored completely. TEXT node is the narrative driver for plot/events/world/objects/characters/story beats. AUDIO controls pacing, scene timing, montage rhythm, energy and emotional modulation. If lyrics conflict with TEXT, ignore lyrics semantics and follow TEXT. If TEXT is empty, fall back to a neutral music-driven storyboard without lyrics meaning.\n"
+        "- Non-compliance is an error: for music_only and music_plus_text never claim lyric semantics drove the story."
     )
 
     return (
@@ -209,7 +213,13 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     # TEMP HARD DEBUG STEP (REMOVE AFTER CONFIRMATION):
     # VERIFY EXACT FILE + EXACT MODEL for COMFY planner requests.
     hard_debug_disable_fallback = True
-    logger.info("[COMFY PLAN] request summary mode=%s output=%s style=%s", normalized["mode"], normalized["output"], normalized["stylePreset"])
+    logger.info(
+        "[COMFY PLAN] request summary mode=%s output=%s style=%s audioStoryMode=%s",
+        normalized["mode"],
+        normalized["output"],
+        normalized["stylePreset"],
+        normalized["audioStoryMode"],
+    )
     logger.info("[COMFY PLAN] text/audio/refs presence text=%s audio=%s refs=%s", bool(normalized["text"]), bool(normalized["audioUrl"]), refs_presence)
     logger.warning("[%s] run_comfy_plan entered module_file=%s", debug_signature, module_file)
     print(f"[{debug_signature}] ENTER run_comfy_plan")
@@ -285,9 +295,13 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     }
     first_scene = scenes[0] if scenes else {}
     logger.info(
-        "[%s] result ok=%s scenes=%s warnings=%s errors=%s requestedModel=%s effectiveModel=%s httpStatus=%s firstSceneId=%s firstSceneTitle=%s",
+        "[%s] result ok=%s mode=%s output=%s style=%s audioStoryMode=%s scenes=%s warnings=%s errors=%s requestedModel=%s effectiveModel=%s httpStatus=%s firstSceneId=%s firstSceneTitle=%s",
         debug_signature,
         result["ok"],
+        result.get("planMeta", {}).get("mode"),
+        result.get("planMeta", {}).get("output"),
+        result.get("planMeta", {}).get("stylePreset"),
+        result.get("planMeta", {}).get("audioStoryMode"),
         len(scenes),
         len(result["warnings"]),
         len(result["errors"]),
