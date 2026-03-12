@@ -875,6 +875,10 @@ body.ps_clip_fullscreen .mainCol {
   min-height: 0;
 }
 
+.clipSB_scenarioBody > * {
+  min-width: 0;
+}
+
 .clipSB_scenarioList{
   padding: 12px;
   border-right: 1px solid rgba(255,255,255,0.08);
@@ -1456,7 +1460,7 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_comfySection {
   border-radius: 12px;
-  padding: 10px;
+  padding: 12px;
   margin-bottom: 10px;
   background: rgba(255,255,255,.03);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
@@ -1541,7 +1545,20 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_comfyEditor {
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.clipSB_comfyEditor > .clipSB_comfySection,
+.clipSB_comfyEditor > .clipSB_scenarioEditRow,
+.clipSB_comfyEditor > details.clipSB_scenarioEditRow {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 
