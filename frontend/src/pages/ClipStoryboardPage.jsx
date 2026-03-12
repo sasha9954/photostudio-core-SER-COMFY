@@ -909,6 +909,15 @@ function buildComfySceneRefsPayload({
   });
 }
 
+function summarizeRefsByRole(refsByRole) {
+  const roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"];
+  const summary = Object.fromEntries(
+    roles.map((role) => [role, Array.isArray(refsByRole?.[role]) ? refsByRole[role].length : 0])
+  );
+  const activeRoles = roles.filter((role) => summary[role] > 0);
+  return { ...summary, activeRoles };
+}
+
 function buildComfySceneContextPrompt({ scene = {}, mode = "clip", stylePreset = "realism", isVideo = false } = {}) {
   const timing = Number.isFinite(Number(scene?.startSec)) && Number.isFinite(Number(scene?.endSec))
     ? `${Number(scene.startSec).toFixed(1)}-${Number(scene.endSec).toFixed(1)}s`
@@ -2389,6 +2398,34 @@ const comfyShowVideoSection = Boolean(
         || ""
       ).trim();
       const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || {};
+      const refsByRoleForImage = plannerInput?.refsByRole || comfyRefsByRole;
+      const refsPayloadForImage = {
+        refsByRole: refsByRoleForImage,
+        previousSceneImageUrl,
+        previousContinuityMemory: comfySelectedScene?.continuity ? { continuity: comfySelectedScene.continuity } : null,
+        propAnchorLabel: inferPropAnchorLabel(refsByRoleForImage),
+        text: plannerInput?.text || comfyNode?.data?.text || "",
+        audioUrl: plannerInput?.audioUrl || comfyNode?.data?.audioUrl || "",
+        mode: plannerInput?.mode || comfyNode?.data?.mode || "",
+        stylePreset: plannerInput?.stylePreset || comfyNode?.data?.stylePreset || "",
+        sceneId,
+        sceneGoal: plannerInput?.sceneGoal || comfySelectedScene?.sceneGoal || "",
+        sceneNarrativeStep: plannerInput?.sceneNarrativeStep || comfySelectedScene?.sceneNarrativeStep || "",
+        continuity: plannerInput?.continuity || comfySelectedScene?.continuity || "",
+        plannerMeta: comfyNode?.data?.plannerMeta || null,
+      };
+      const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
+
+      console.log("[COMFY DEBUG FRONT] /clip/image plannerInput", plannerInput);
+      console.log("[COMFY DEBUG FRONT] /clip/image plannerInput.refsByRole", plannerInput?.refsByRole);
+      console.log("[COMFY DEBUG FRONT] /clip/image plannerInput.refsByRole counts", summarizeRefsByRole(plannerInput?.refsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole", comfyRefsByRole);
+      console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole counts", summarizeRefsByRole(comfyRefsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image refs payload for buildComfySceneRefsPayload", refsPayloadForImage);
+      console.log("[COMFY DEBUG FRONT] /clip/image refs payload refsByRole counts", summarizeRefsByRole(refsPayloadForImage?.refsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image final refs before request", refsForImageRequest);
+      console.log("[COMFY DEBUG FRONT] /clip/image final refsByRole counts before request", summarizeRefsByRole(refsForImageRequest?.refsByRole));
+
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
         body: {
@@ -2401,21 +2438,7 @@ ${contextPrompt}`.trim(),
           style: String(plannerInput?.stylePreset || comfyNode?.data?.stylePreset || 'realism'),
           width: 1024,
           height: 1792,
-          refs: buildComfySceneRefsPayload({
-            refsByRole: plannerInput?.refsByRole || comfyRefsByRole,
-            previousSceneImageUrl,
-            previousContinuityMemory: comfySelectedScene?.continuity ? { continuity: comfySelectedScene.continuity } : null,
-            propAnchorLabel: inferPropAnchorLabel(plannerInput?.refsByRole || comfyRefsByRole),
-            text: plannerInput?.text || comfyNode?.data?.text || "",
-            audioUrl: plannerInput?.audioUrl || comfyNode?.data?.audioUrl || "",
-            mode: plannerInput?.mode || comfyNode?.data?.mode || "",
-            stylePreset: plannerInput?.stylePreset || comfyNode?.data?.stylePreset || "",
-            sceneId,
-            sceneGoal: plannerInput?.sceneGoal || comfySelectedScene?.sceneGoal || "",
-            sceneNarrativeStep: plannerInput?.sceneNarrativeStep || comfySelectedScene?.sceneNarrativeStep || "",
-            continuity: plannerInput?.continuity || comfySelectedScene?.continuity || "",
-            plannerMeta: comfyNode?.data?.plannerMeta || null,
-          }),
+          refs: refsForImageRequest,
         },
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || 'image_generation_failed');
@@ -3794,7 +3817,16 @@ onClipSec: (nodeId, value) => {
                   narrativeSource: freshDerived.narrativeSource,
                 };
                 console.log("[COMFY DEBUG FRONT] derived refsByRole", freshDerived?.refsByRole);
+                console.log("[COMFY DEBUG FRONT] derived refs counts", summarizeRefsByRole(freshDerived?.refsByRole));
+                console.log("[COMFY DEBUG FRONT] derived refs active roles", summarizeRefsByRole(freshDerived?.refsByRole)?.activeRoles || []);
                 console.log("[COMFY DEBUG FRONT] payload refsByRole before /clip/comfy/plan", payload?.refsByRole);
+                console.log("[COMFY DEBUG FRONT] payload refs counts before /clip/comfy/plan", summarizeRefsByRole(payload?.refsByRole));
+                console.log("[COMFY DEBUG FRONT] payload essentials before /clip/comfy/plan", {
+                  text: payload?.text || "",
+                  audioUrl: payload?.audioUrl || "",
+                  mode: payload?.mode || "",
+                  stylePreset: payload?.stylePreset || "",
+                });
                 console.log(`[COMFY PARSE #${parseId}] payload`, {
                   nodeId,
                   startedAt,
@@ -3823,7 +3855,9 @@ onClipSec: (nodeId, value) => {
                     response = await fetchJson(`/api/clip/comfy/plan`, { method: "POST", body: payload });
                   }
                   console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refsByRole", response?.planMeta?.plannerInput?.refsByRole);
+                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan response plannerInput refs counts", summarizeRefsByRole(response?.planMeta?.plannerInput?.refsByRole));
                   console.log("[COMFY DEBUG FRONT] /clip/comfy/plan full planMeta", response?.planMeta);
+                  console.log("[COMFY DEBUG FRONT] /clip/comfy/plan scenes count", Array.isArray(response?.scenes) ? response.scenes.length : 0);
                   console.log(`[COMFY PARSE #${parseId}] response`, summarizeComfyResponse(response));
                 } catch (err) {
                   console.error(`[COMFY PARSE #${parseId}] error`, err);
