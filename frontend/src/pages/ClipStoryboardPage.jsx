@@ -1596,19 +1596,19 @@ export default function ClipStoryboardPage() {
   const summarizeComfyResponse = useCallback((response) => {
     const scenes = Array.isArray(response?.scenes) ? response.scenes : [];
     const firstScene = scenes[0] || null;
+    const planMeta = response?.planMeta && typeof response.planMeta === "object"
+      ? response.planMeta
+      : {};
     return {
       ok: !!response?.ok,
+      mode: planMeta.mode || null,
+      output: planMeta.output || null,
+      stylePreset: planMeta.stylePreset || null,
+      audioStoryMode: planMeta.audioStoryMode || null,
+      storyControlMode: planMeta.storyControlMode || null,
       scenesCount: scenes.length,
       warnings: Array.isArray(response?.warnings) ? response.warnings.length : 0,
       errors: Array.isArray(response?.errors) ? response.errors.length : 0,
-      planMeta: response?.planMeta && typeof response.planMeta === "object"
-        ? {
-            mode: response.planMeta.mode,
-            output: response.planMeta.output,
-            stylePreset: response.planMeta.stylePreset,
-            storyControlMode: response.planMeta.storyControlMode,
-          }
-        : null,
       firstScene: firstScene
         ? { sceneId: firstScene.sceneId || null, title: firstScene.title || null }
         : null,
@@ -3327,6 +3327,7 @@ onClipSec: (nodeId, value) => {
             if (derived.audioStoryMode === 'lyrics_music' && derived.meaningfulAudio) warnings.push('Audio story mode: lyrics+music (можно использовать смысл слов песни).');
             if (derived.audioStoryMode === 'music_only' && derived.meaningfulAudio) warnings.push('Audio story mode: music_only (lyrics игнорируются, сюжет только из музыки/энергии).');
             if (derived.audioStoryMode === 'music_plus_text' && derived.meaningfulAudio) warnings.push('Audio story mode: music_plus_text (lyrics игнорируются, сюжет берётся из TEXT).');
+            if (derived.audioStoryMode === 'music_plus_text' && !derived.meaningfulText) warnings.push('music_plus_text выбран, но TEXT пустой: lyrics будут проигнорированы, storyboard будет построен только по музыке/энергии');
             if (derived.outputValue === 'comfy text' && !String(derived.meaningfulText || '').trim()) warnings.push('Для comfy text желательно добавить richer text prompt');
             if (derived.modeValue === 'reklama' && !derived.meaningfulText) warnings.push('Для reklama желательно добавить рекламный тезис в TEXT');
 
@@ -3792,6 +3793,10 @@ const hydrate = useCallback(() => {
             data.scenarioKey = scenarioKey;
             data.isParsing = false;
             delete data.activeParseToken;
+          }
+
+          if (n.type === "comfyBrain") {
+            data.audioStoryMode = normalizeAudioStoryMode(data.audioStoryMode || "lyrics_music");
           }
 
           if (n.type === "audioNode") {
