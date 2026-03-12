@@ -2489,8 +2489,10 @@ const comfyShowVideoSection = Boolean(
     setComfyImageError('');
     try {
       const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
+      const comfyCurrentSceneById = comfyScenes.find((scene) => String(scene?.sceneId || '').trim() === sceneId) || null;
+      const comfySceneForImageContract = comfyCurrentSceneById || comfySelectedScene;
       const contextPrompt = buildComfySceneContextPrompt({
-        scene: comfySelectedScene,
+        scene: comfySceneForImageContract,
         mode: comfyNode?.data?.mode || "clip",
         stylePreset: comfyNode?.data?.stylePreset || "realism",
       });
@@ -2521,28 +2523,28 @@ const comfyShowVideoSection = Boolean(
       const refsPayloadForImage = {
         refsByRole: refsByRoleForImage,
         previousSceneImageUrl,
-        previousContinuityMemory: comfySelectedScene?.continuity ? { continuity: comfySelectedScene.continuity } : null,
+        previousContinuityMemory: comfySceneForImageContract?.continuity ? { continuity: comfySceneForImageContract.continuity } : null,
         propAnchorLabel: inferPropAnchorLabel(refsByRoleForImage),
         text: plannerInput?.text || comfyNode?.data?.text || "",
         audioUrl: plannerInput?.audioUrl || comfyNode?.data?.audioUrl || "",
         mode: plannerInput?.mode || comfyNode?.data?.mode || "",
         stylePreset: plannerInput?.stylePreset || comfyNode?.data?.stylePreset || "",
         sceneId,
-        sceneGoal: plannerInput?.sceneGoal || comfySelectedScene?.sceneGoal || "",
-        sceneNarrativeStep: plannerInput?.sceneNarrativeStep || comfySelectedScene?.sceneNarrativeStep || "",
-        continuity: plannerInput?.continuity || comfySelectedScene?.continuity || "",
+        sceneGoal: comfySceneForImageContract?.sceneGoal || plannerInput?.sceneGoal || "",
+        sceneNarrativeStep: comfySceneForImageContract?.sceneNarrativeStep || plannerInput?.sceneNarrativeStep || "",
+        continuity: comfySceneForImageContract?.continuity || plannerInput?.continuity || "",
         plannerMeta: comfyNode?.data?.plannerMeta || null,
-        refsUsed: Array.isArray(comfySelectedScene?.refsUsed) ? comfySelectedScene.refsUsed : [],
-        refDirectives: comfySelectedScene?.refDirectives && typeof comfySelectedScene.refDirectives === 'object' ? comfySelectedScene.refDirectives : null,
-        primaryRole: comfySelectedScene?.primaryRole || "",
-        secondaryRoles: Array.isArray(comfySelectedScene?.secondaryRoles) ? comfySelectedScene.secondaryRoles : [],
-        heroEntityId: comfySelectedScene?.heroEntityId || "",
-        supportEntityIds: Array.isArray(comfySelectedScene?.supportEntityIds) ? comfySelectedScene.supportEntityIds : [],
-        mustAppear: Array.isArray(comfySelectedScene?.mustAppear) ? comfySelectedScene.mustAppear : [],
-        mustNotAppear: Array.isArray(comfySelectedScene?.mustNotAppear) ? comfySelectedScene.mustNotAppear : [],
-        environmentLock: typeof comfySelectedScene?.environmentLock === 'boolean' ? comfySelectedScene.environmentLock : null,
-        styleLock: typeof comfySelectedScene?.styleLock === 'boolean' ? comfySelectedScene.styleLock : null,
-        identityLock: typeof comfySelectedScene?.identityLock === 'boolean' ? comfySelectedScene.identityLock : null,
+        refsUsed: Array.isArray(comfySceneForImageContract?.refsUsed) ? comfySceneForImageContract.refsUsed : [],
+        refDirectives: comfySceneForImageContract?.refDirectives && typeof comfySceneForImageContract.refDirectives === 'object' ? comfySceneForImageContract.refDirectives : null,
+        primaryRole: comfySceneForImageContract?.primaryRole || "",
+        secondaryRoles: Array.isArray(comfySceneForImageContract?.secondaryRoles) ? comfySceneForImageContract.secondaryRoles : [],
+        heroEntityId: comfySceneForImageContract?.heroEntityId || "",
+        supportEntityIds: Array.isArray(comfySceneForImageContract?.supportEntityIds) ? comfySceneForImageContract.supportEntityIds : [],
+        mustAppear: Array.isArray(comfySceneForImageContract?.mustAppear) ? comfySceneForImageContract.mustAppear : [],
+        mustNotAppear: Array.isArray(comfySceneForImageContract?.mustNotAppear) ? comfySceneForImageContract.mustNotAppear : [],
+        environmentLock: typeof comfySceneForImageContract?.environmentLock === 'boolean' ? comfySceneForImageContract.environmentLock : null,
+        styleLock: typeof comfySceneForImageContract?.styleLock === 'boolean' ? comfySceneForImageContract.styleLock : null,
+        identityLock: typeof comfySceneForImageContract?.identityLock === 'boolean' ? comfySceneForImageContract.identityLock : null,
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
 
@@ -2551,6 +2553,17 @@ const comfyShowVideoSection = Boolean(
       console.log("[COMFY DEBUG FRONT] /clip/image plannerInput.refsByRole counts", summarizeRefsByRole(plannerInput?.refsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole", comfyRefsByRole);
       console.log("[COMFY DEBUG FRONT] /clip/image comfyRefsByRole counts", summarizeRefsByRole(comfyRefsByRole));
+      console.log("[COMFY DEBUG FRONT] /clip/image selected scene vs current scene", {
+        sceneId,
+        selectedHeroEntityId: comfySelectedScene?.heroEntityId || null,
+        currentHeroEntityId: comfyCurrentSceneById?.heroEntityId || null,
+        selectedRefsUsed: Array.isArray(comfySelectedScene?.refsUsed) ? comfySelectedScene.refsUsed : [],
+        currentRefsUsed: Array.isArray(comfyCurrentSceneById?.refsUsed) ? comfyCurrentSceneById.refsUsed : [],
+        selectedPrimaryRole: comfySelectedScene?.primaryRole || "",
+        currentPrimaryRole: comfyCurrentSceneById?.primaryRole || "",
+        selectedSceneGoal: comfySelectedScene?.sceneGoal || "",
+        currentSceneGoal: comfyCurrentSceneById?.sceneGoal || "",
+      });
       console.log("[COMFY DEBUG FRONT] /clip/image refs payload for buildComfySceneRefsPayload", refsPayloadForImage);
       console.log("[COMFY DEBUG FRONT] /clip/image refs payload refsByRole counts", summarizeRefsByRole(refsPayloadForImage?.refsByRole));
       console.log("[COMFY DEBUG FRONT] /clip/image stage refsByRoleForImage.character_1 count", Array.isArray(refsByRoleForImage?.character_1) ? refsByRoleForImage.character_1.length : 0);
@@ -2605,7 +2618,7 @@ ${contextPrompt}`.trim(),
     } finally {
       setComfyImageLoading(false);
     }
-  }, [comfyNode?.data, comfyNode?.id, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, normalizeRefData, updateComfyScene]);
+  }, [comfyNode?.data, comfyNode?.id, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfyScenes, comfySelectedScene, ensureComfyPromptSynced, normalizeRefData, updateComfyScene]);
 
   const handleComfyDeleteImage = useCallback(() => {
     setComfyImageError('');
