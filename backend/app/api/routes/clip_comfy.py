@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
-from app.engine.comfy_brain_engine import run_comfy_plan
+from app.engine.comfy_brain_engine import run_comfy_plan, run_comfy_prompt_sync
 
 import json
 import logging
@@ -16,6 +16,17 @@ class RefItemIn(BaseModel):
     url: str = ""
     name: str = ""
 
+
+
+
+class ClipComfyPromptSyncIn(BaseModel):
+    sourceText: str = ""
+    sourceLang: str = "ru"
+    targetLang: str = "en"
+    promptType: str = "image"
+    sceneContext: dict[str, Any] = Field(default_factory=dict)
+    stylePreset: str = ""
+    mode: str = ""
 
 class ClipComfyPlanIn(BaseModel):
     mode: str = "clip"
@@ -61,3 +72,9 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
         for role, items in (payload.refsByRole or {}).items()
     }
     return run_comfy_plan(req)
+
+
+@router.post("/clip/comfy/prompt-sync")
+async def clip_comfy_prompt_sync(payload: ClipComfyPromptSyncIn) -> dict[str, Any]:
+    req = payload.model_dump(mode="json")
+    return run_comfy_prompt_sync(req)

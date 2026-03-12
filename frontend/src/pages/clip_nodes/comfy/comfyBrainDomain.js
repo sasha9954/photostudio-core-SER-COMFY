@@ -18,6 +18,45 @@ const VISUAL_ANCHOR_ROLES = ["character_1", "character_2", "character_3", "anima
 const STORY_OVERRIDE_MARKERS = ["не по песне", "другой сюжет", "separate story", "different story", "not literal lyrics"];
 const STORY_ENHANCEMENT_MARKERS = ["усили", "усилить", "enhance", "intensify", "emphasize", "make more cinematic"];
 
+export const PROMPT_SYNC_STATUS = {
+  synced: "synced",
+  needsSync: "needs_sync",
+  syncing: "syncing",
+  syncError: "sync_error",
+};
+
+function computePromptSync({ ru = "", en = "" } = {}) {
+  const ruText = String(ru || "").trim();
+  const enText = String(en || "").trim();
+  if (ruText && enText) return PROMPT_SYNC_STATUS.synced;
+  return PROMPT_SYNC_STATUS.needsSync;
+}
+
+export function normalizeComfyScenePrompts(scene = {}) {
+  const imagePromptRu = String(scene?.imagePromptRu || scene?.imagePrompt || "").trim();
+  const imagePromptEn = String(scene?.imagePromptEn || scene?.imagePrompt || "").trim();
+  const videoPromptRu = String(scene?.videoPromptRu || scene?.videoPrompt || "").trim();
+  const videoPromptEn = String(scene?.videoPromptEn || scene?.videoPrompt || "").trim();
+  const imagePromptSyncStatus = [PROMPT_SYNC_STATUS.synced, PROMPT_SYNC_STATUS.needsSync, PROMPT_SYNC_STATUS.syncing, PROMPT_SYNC_STATUS.syncError].includes(scene?.imagePromptSyncStatus)
+    ? scene.imagePromptSyncStatus
+    : computePromptSync({ ru: imagePromptRu, en: imagePromptEn });
+  const videoPromptSyncStatus = [PROMPT_SYNC_STATUS.synced, PROMPT_SYNC_STATUS.needsSync, PROMPT_SYNC_STATUS.syncing, PROMPT_SYNC_STATUS.syncError].includes(scene?.videoPromptSyncStatus)
+    ? scene.videoPromptSyncStatus
+    : computePromptSync({ ru: videoPromptRu, en: videoPromptEn });
+  return {
+    ...scene,
+    imagePromptRu,
+    imagePromptEn,
+    videoPromptRu,
+    videoPromptEn,
+    imagePrompt: imagePromptEn,
+    videoPrompt: videoPromptEn,
+    imagePromptSyncStatus,
+    videoPromptSyncStatus,
+  };
+}
+
+
 export function normalizeRenderProfile(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return RENDER_PROFILE_OPTIONS.includes(normalized) ? normalized : "comfy image";
@@ -125,26 +164,38 @@ export function buildComfyGlobalContinuity({ plannerInput = {}, refsByRole = {},
 export function buildComfyScenesFromPlanner({ plannerInput = {}, plannerMeta = {} } = {}) {
   const count = Number(plannerMeta?.summary?.sceneCount || 6);
   const defaultDuration = 3;
-  return Array.from({ length: Math.max(1, Math.min(12, count)) }).map((_, idx) => ({
-    sceneId: `comfy-scene-${idx + 1}`,
-    title: `Scene ${idx + 1}`,
-    startSec: idx * defaultDuration,
-    endSec: (idx + 1) * defaultDuration,
-    durationSec: defaultDuration,
-    sceneNarrativeStep: `step_${idx + 1}`,
-    sceneGoal: plannerInput.storyMissionSummary || "advance story",
-    storyMission: plannerInput.storyMissionSummary || "",
-    sceneOutputRule: "scene image first",
-    primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",
-    secondaryRoles: plannerMeta?.sceneRoleModel?.secondarySubjects || [],
-    continuity: plannerMeta?.globalContinuity || "",
-    imagePrompt: `Create frame ${idx + 1} in ${plannerInput.stylePreset || "realism"} style. ${plannerInput.storyMissionSummary || ""}`,
-    videoPrompt: `Animate frame ${idx + 1} with coherent transition and rhythm cues.`,
-    refsUsed: {},
-    imageUrl: "",
-    videoUrl: "",
-    plannerMeta,
-  }));
+  return Array.from({ length: Math.max(1, Math.min(12, count)) }).map((_, idx) => {
+    const imagePromptRu = `Кадр ${idx + 1} в стиле ${plannerInput.stylePreset || "realism"}. ${plannerInput.storyMissionSummary || ""}`.trim();
+    const imagePromptEn = `Create frame ${idx + 1} in ${plannerInput.stylePreset || "realism"} style. ${plannerInput.storyMissionSummary || ""}`.trim();
+    const videoPromptRu = `Анимируй кадр ${idx + 1} с согласованным движением камеры и ритмом.`;
+    const videoPromptEn = `Animate frame ${idx + 1} with coherent transition and rhythm cues.`;
+    return {
+      sceneId: `comfy-scene-${idx + 1}`,
+      title: `Scene ${idx + 1}`,
+      startSec: idx * defaultDuration,
+      endSec: (idx + 1) * defaultDuration,
+      durationSec: defaultDuration,
+      sceneNarrativeStep: `step_${idx + 1}`,
+      sceneGoal: plannerInput.storyMissionSummary || "advance story",
+      storyMission: plannerInput.storyMissionSummary || "",
+      sceneOutputRule: "scene image first",
+      primaryRole: plannerMeta?.sceneRoleModel?.primarySubject || "character_1",
+      secondaryRoles: plannerMeta?.sceneRoleModel?.secondarySubjects || [],
+      continuity: plannerMeta?.globalContinuity || "",
+      imagePrompt: imagePromptEn,
+      videoPrompt: videoPromptEn,
+      imagePromptRu,
+      imagePromptEn,
+      videoPromptRu,
+      videoPromptEn,
+      imagePromptSyncStatus: PROMPT_SYNC_STATUS.synced,
+      videoPromptSyncStatus: PROMPT_SYNC_STATUS.synced,
+      refsUsed: {},
+      imageUrl: "",
+      videoUrl: "",
+      plannerMeta,
+    };
+  });
 }
 
 export function buildMockComfyScenes(meta = {}) {

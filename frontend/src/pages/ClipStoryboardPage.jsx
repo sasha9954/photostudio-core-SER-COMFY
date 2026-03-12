@@ -34,6 +34,8 @@ import {
   buildMockComfyScenes,
   deriveComfyBrainState,
   extractComfyDebugFields,
+  normalizeComfyScenePrompts,
+  PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 
 
@@ -556,6 +558,14 @@ function getScenePrimaryFramePrompt(scene) {
 function getSceneTransitionPrompt(scene) {
   return String(scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
 }
+
+const COMFY_SYNC_STATUS_LABELS = {
+  [PROMPT_SYNC_STATUS.synced]: "synced",
+  [PROMPT_SYNC_STATUS.syncing]: "syncing...",
+  [PROMPT_SYNC_STATUS.needsSync]: "needs sync",
+  [PROMPT_SYNC_STATUS.syncError]: "sync error",
+};
+
 
 const SCENE_ROLE_FLOW = ["establishing", "reveal", "escalation", "hidden_detail", "payoff", "ending"];
 
@@ -1825,7 +1835,7 @@ const comfyNode = useMemo(() => {
 
 const comfyScenes = useMemo(() => {
   const arr = comfyNode?.data?.mockScenes;
-  return Array.isArray(arr) ? arr : [];
+  return Array.isArray(arr) ? arr.map((scene) => normalizeComfyScenePrompts(scene)) : [];
 }, [comfyNode]);
 
 const comfySelectedIndex = Number.isFinite(comfyEditor.selected) ? comfyEditor.selected : 0;
@@ -1846,6 +1856,7 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const [comfyImageError, setComfyImageError] = useState("");
   const [comfyVideoLoading, setComfyVideoLoading] = useState(false);
   const [comfyVideoError, setComfyVideoError] = useState("");
+  const [comfyPromptSyncError, setComfyPromptSyncError] = useState("");
   const [assemblyBuildState, setAssemblyBuildState] = useState("idle");
   const [assemblyError, setAssemblyError] = useState("");
   const [assemblyInfo, setAssemblyInfo] = useState("");
@@ -2017,6 +2028,74 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
     }));
   }, [comfyNode?.id, setNodes]);
 
+  const syncComfyPrompt = useCallback(async ({ idx, promptType, force = false } = {}) => {
+    if (!comfySelectedScene || idx < 0) return null;
+    const isImage = promptType === "image";
+    const ruField = isImage ? "imagePromptRu" : "videoPromptRu";
+    const enField = isImage ? "imagePromptEn" : "videoPromptEn";
+    const statusField = isImage ? "imagePromptSyncStatus" : "videoPromptSyncStatus";
+    const ruText = String(comfySelectedScene?.[ruField] || "").trim();
+    const currentStatus = String(comfySelectedScene?.[statusField] || "");
+
+    if (!ruText) {
+      updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError });
+      throw new Error(isImage ? "Пустой imagePromptRu" : "Пустой videoPromptRu");
+    }
+
+    if (!force && currentStatus === PROMPT_SYNC_STATUS.synced && String(comfySelectedScene?.[enField] || "").trim()) {
+      return String(comfySelectedScene?.[enField] || "").trim();
+    }
+
+    updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncing });
+    setComfyPromptSyncError("");
+    try {
+      const out = await fetchJson('/api/clip/comfy/prompt-sync', {
+        method: 'POST',
+        body: {
+          sourceText: ruText,
+          sourceLang: 'ru',
+          targetLang: 'en',
+          promptType,
+          stylePreset: String(comfyNode?.data?.stylePreset || 'realism'),
+          mode: String(comfyNode?.data?.mode || 'clip'),
+          sceneContext: {
+            sceneId: String(comfySelectedScene?.sceneId || ''),
+            title: String(comfySelectedScene?.title || ''),
+            continuity: String(comfySelectedScene?.continuity || ''),
+            sceneNarrativeStep: String(comfySelectedScene?.sceneNarrativeStep || ''),
+            sceneGoal: String(comfySelectedScene?.sceneGoal || ''),
+          },
+        },
+      });
+      const translated = String(out?.normalizedPrompt || out?.translatedPrompt || "").trim();
+      if (!out?.ok || !translated) throw new Error(out?.error || out?.hint || 'prompt_sync_failed');
+      updateComfyScene(idx, {
+        [enField]: translated,
+        [isImage ? 'imagePrompt' : 'videoPrompt']: translated,
+        [statusField]: PROMPT_SYNC_STATUS.synced,
+      });
+      return translated;
+    } catch (e) {
+      updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError });
+      setComfyPromptSyncError(String(e?.message || e));
+      throw e;
+    }
+  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySelectedScene, updateComfyScene]);
+
+  const ensureComfyPromptSynced = useCallback(async ({ idx, promptType } = {}) => {
+    if (!comfySelectedScene || idx < 0) return "";
+    const isImage = promptType === "image";
+    const statusField = isImage ? "imagePromptSyncStatus" : "videoPromptSyncStatus";
+    const enField = isImage ? "imagePromptEn" : "videoPromptEn";
+    const status = String(comfySelectedScene?.[statusField] || "");
+    const enText = String(comfySelectedScene?.[enField] || "").trim();
+    if (status === PROMPT_SYNC_STATUS.syncing) {
+      throw new Error("Синхронизация prompt уже выполняется");
+    }
+    if (status === PROMPT_SYNC_STATUS.synced && enText) return enText;
+    return await syncComfyPrompt({ idx, promptType, force: true });
+  }, [comfySelectedScene, syncComfyPrompt]);
+
   const stopComfyVideoPolling = useCallback(() => {
     if (comfyVideoPollTimerRef.current) {
       clearTimeout(comfyVideoPollTimerRef.current);
@@ -2121,7 +2200,7 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
         mode: comfyNode?.data?.mode || "clip",
         stylePreset: comfyNode?.data?.stylePreset || "realism",
       });
-      const imagePrompt = String(comfySelectedScene.imagePrompt || "").trim();
+      const imagePrompt = await ensureComfyPromptSynced({ idx: comfySafeIndex, promptType: 'image' });
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
         body: {
@@ -2150,7 +2229,7 @@ ${contextPrompt}`.trim(),
     } finally {
       setComfyImageLoading(false);
     }
-  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfySelectedScene, updateComfyScene]);
+  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfyPreviousScene?.endImageUrl, comfyPreviousScene?.imageUrl, comfyPreviousScene?.startImageUrl, comfyRefsByRole, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, updateComfyScene]);
 
   const handleComfyDeleteImage = useCallback(() => {
     setComfyImageError('');
@@ -2169,12 +2248,13 @@ ${contextPrompt}`.trim(),
         stylePreset: comfyNode?.data?.stylePreset || "realism",
         isVideo: true,
       });
+      const syncedVideoPrompt = await ensureComfyPromptSynced({ idx: comfySafeIndex, promptType: 'video' });
       const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
         body: {
           sceneId,
           imageUrl: String(comfySelectedScene.imageUrl || ''),
-          videoPrompt: String(comfySelectedScene.videoPrompt || '').trim(),
+          videoPrompt: syncedVideoPrompt,
           transitionActionPrompt: contextPrompt,
           requestedDurationSec: Number(comfySelectedScene.durationSec) || 3,
           shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
@@ -2198,7 +2278,7 @@ ${contextPrompt}`.trim(),
         body: {
           sceneId,
           imageUrl: String(comfySelectedScene.imageUrl || ''),
-          videoPrompt: String(comfySelectedScene.videoPrompt || '').trim(),
+          videoPrompt: syncedVideoPrompt,
           transitionActionPrompt: contextPrompt,
           requestedDurationSec: Number(comfySelectedScene.durationSec) || 3,
           shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
@@ -2214,7 +2294,7 @@ ${contextPrompt}`.trim(),
       setComfyVideoError(String(e?.message || e));
       setComfyVideoLoading(false);
     }
-  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, startComfyVideoPolling, updateComfyScene]);
+  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyDeleteVideo = useCallback(() => {
     setComfyVideoError('');
@@ -2222,8 +2302,20 @@ ${contextPrompt}`.trim(),
   }, [comfySafeIndex, updateComfyScene]);
 
   const handleComfyImagePromptChange = useCallback((value) => {
-    updateComfyScene(comfySafeIndex, { imagePrompt: value });
-  }, [comfySafeIndex, updateComfyScene]);
+    updateComfyScene(comfySafeIndex, {
+      imagePromptRu: value,
+      imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
+      imagePrompt: String(comfySelectedScene?.imagePromptEn || "").trim(),
+    });
+  }, [comfySafeIndex, comfySelectedScene?.imagePromptEn, updateComfyScene]);
+
+  const handleComfyVideoPromptChange = useCallback((value) => {
+    updateComfyScene(comfySafeIndex, {
+      videoPromptRu: value,
+      videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
+      videoPrompt: String(comfySelectedScene?.videoPromptEn || "").trim(),
+    });
+  }, [comfySafeIndex, comfySelectedScene?.videoPromptEn, updateComfyScene]);
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
@@ -4809,13 +4901,17 @@ const hydrate = useCallback(() => {
                     </div>
 
                     <div className="clipSB_comfySection clipSB_scenarioEditRow">
-                      <div className="clipSB_comfyBlockTitle">Image prompt</div>
+                      <div className="clipSB_comfyBlockTitle">Image prompt (RU) · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.imagePromptSyncStatus] || '—'}</div>
                       <textarea
                         className="clipSB_textarea clipSB_comfyTextarea"
-                        value={String(comfySelectedScene.imagePrompt || '')}
+                        value={String(comfySelectedScene.imagePromptRu || '')}
                         onChange={(e) => handleComfyImagePromptChange(e.target.value)}
                         placeholder="Опиши визуал сцены для генерации изображения"
                       />
+                      <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.imagePromptEn || '—')}</div>
+                      {comfySelectedScene.imagePromptSyncStatus === PROMPT_SYNC_STATUS.syncError ? (
+                        <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={() => syncComfyPrompt({ idx: comfySafeIndex, promptType: 'image', force: true })}>Retry sync image</button>
+                      ) : null}
                     </div>
 
                     <div className="clipSB_comfySection">
@@ -4831,10 +4927,11 @@ const hydrate = useCallback(() => {
 
                     <div className="clipSB_comfySection">
                       <div className="clipSB_comfyActions">
-                      <button className="clipSB_btn" onClick={handleComfyGenerateImage} disabled={comfyImageLoading}>{comfyImageLoading ? 'Создаю...' : 'Создать изображение'}</button>
+                      <button className="clipSB_btn" onClick={handleComfyGenerateImage} disabled={comfyImageLoading || comfySelectedScene.imagePromptSyncStatus === PROMPT_SYNC_STATUS.syncing}>{comfyImageLoading ? 'Создаю...' : (comfySelectedScene.imagePromptSyncStatus === PROMPT_SYNC_STATUS.syncing ? 'Синхронизация...' : 'Создать изображение')}</button>
                       <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteImage} disabled={comfyImageLoading}>Удалить изображение</button>
                       </div>
                       {comfyImageError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyImageError}</div> : null}
+                      {comfyPromptSyncError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>sync: {comfyPromptSyncError}</div> : null}
                     </div>
 
                     {comfySelectedScene.imageUrl ? (
@@ -4844,16 +4941,20 @@ const hydrate = useCallback(() => {
                           <img className="clipSB_comfyPreviewImg" src={resolveAssetUrl(comfySelectedScene.imageUrl)} alt="video base" />
                         </div>
                         <div className="clipSB_scenarioEditRow" style={{ marginTop: 8 }}>
-                          <div className="clipSB_hint">Video prompt</div>
+                          <div className="clipSB_hint">Video prompt (RU) · {COMFY_SYNC_STATUS_LABELS[comfySelectedScene.videoPromptSyncStatus] || '—'}</div>
                           <textarea
                             className="clipSB_textarea clipSB_comfyTextarea"
-                            value={String(comfySelectedScene.videoPrompt || '')}
-                            onChange={(e) => updateComfyScene(comfySafeIndex, { videoPrompt: e.target.value })}
+                            value={String(comfySelectedScene.videoPromptRu || '')}
+                            onChange={(e) => handleComfyVideoPromptChange(e.target.value)}
                             placeholder="Опиши действие камеры и движение в кадре"
                           />
+                          <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.videoPromptEn || '—')}</div>
+                          {comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncError ? (
+                            <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={() => syncComfyPrompt({ idx: comfySafeIndex, promptType: 'video', force: true })}>Retry sync video</button>
+                          ) : null}
                         </div>
                         <div className="clipSB_comfyActions">
-                          <button className="clipSB_btn" onClick={handleComfyGenerateVideo} disabled={comfyVideoLoading}>{comfyVideoLoading ? 'Делаю...' : 'Сделать видео'}</button>
+                          <button className="clipSB_btn" onClick={handleComfyGenerateVideo} disabled={comfyVideoLoading || comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncing}>{comfyVideoLoading ? 'Делаю...' : (comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncing ? 'Синхронизация...' : 'Сделать видео')}</button>
                           <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteVideo} disabled={comfyVideoLoading}>Удалить видео</button>
                         </div>
                         {comfyVideoError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyVideoError}</div> : null}
