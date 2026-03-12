@@ -552,11 +552,11 @@ function getSceneTypeBadge(type) {
 }
 
 function getScenePrimaryFramePrompt(scene) {
-  return String(scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
+  return String(scene?.imagePromptRu || scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
 }
 
 function getSceneTransitionPrompt(scene) {
-  return String(scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
+  return String(scene?.videoPromptRu || scene?.transitionActionPrompt || scene?.videoPrompt || "").trim();
 }
 
 const COMFY_SYNC_STATUS_LABELS = {
@@ -1606,6 +1606,8 @@ export default function ClipStoryboardPage() {
   const scenarioActiveVideoJobRef = useRef(null);
   const comfyVideoPollTimerRef = useRef(null);
   const comfyActiveVideoJobRef = useRef(null);
+  const comfyPromptSyncTimersRef = useRef(new Map());
+  const comfyPromptSyncInFlightRef = useRef(new Map());
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
 
   const summarizeComfyPayload = useCallback((payload) => {
@@ -2028,73 +2030,127 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
     }));
   }, [comfyNode?.id, setNodes]);
 
-  const syncComfyPrompt = useCallback(async ({ idx, promptType, force = false } = {}) => {
-    if (!comfySelectedScene || idx < 0) return null;
+  const getComfySceneSnapshot = useCallback((idx) => {
+    if (!comfyNode?.id || idx < 0) return null;
+    const nodeNow = (nodesRef.current || []).find((n) => n.id === comfyNode.id);
+    const scenesNow = Array.isArray(nodeNow?.data?.mockScenes) ? nodeNow.data.mockScenes : [];
+    const sceneNow = scenesNow[idx];
+    return sceneNow ? normalizeComfyScenePrompts(sceneNow) : null;
+  }, [comfyNode?.id]);
+
+  const syncComfyPrompt = useCallback(async ({ idx, promptType, force = false, ruTextOverride = null } = {}) => {
+    if (idx < 0) return null;
     const isImage = promptType === "image";
     const ruField = isImage ? "imagePromptRu" : "videoPromptRu";
     const enField = isImage ? "imagePromptEn" : "videoPromptEn";
     const statusField = isImage ? "imagePromptSyncStatus" : "videoPromptSyncStatus";
-    const ruText = String(comfySelectedScene?.[ruField] || "").trim();
-    const currentStatus = String(comfySelectedScene?.[statusField] || "");
+    const errorField = isImage ? "imagePromptSyncError" : "videoPromptSyncError";
+    const promptField = isImage ? "imagePrompt" : "videoPrompt";
+    const snapshot = getComfySceneSnapshot(idx);
+    if (!snapshot) return null;
+    const ruText = String((ruTextOverride ?? snapshot?.[ruField]) || "").trim();
+    const currentStatus = String(snapshot?.[statusField] || "");
+    const currentEnText = String(snapshot?.[enField] || "").trim();
 
     if (!ruText) {
-      updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError });
-      throw new Error(isImage ? "Пустой imagePromptRu" : "Пустой videoPromptRu");
+      const emptyError = isImage ? "Пустой imagePromptRu" : "Пустой videoPromptRu";
+      updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError, [errorField]: emptyError });
+      setComfyPromptSyncError(emptyError);
+      throw new Error(emptyError);
     }
 
-    if (!force && currentStatus === PROMPT_SYNC_STATUS.synced && String(comfySelectedScene?.[enField] || "").trim()) {
-      return String(comfySelectedScene?.[enField] || "").trim();
+    if (!force && currentStatus === PROMPT_SYNC_STATUS.synced && currentEnText) {
+      return currentEnText;
     }
 
-    updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncing });
-    setComfyPromptSyncError("");
-    try {
-      const out = await fetchJson('/api/clip/comfy/prompt-sync', {
-        method: 'POST',
-        body: {
-          sourceText: ruText,
-          sourceLang: 'ru',
-          targetLang: 'en',
-          promptType,
-          stylePreset: String(comfyNode?.data?.stylePreset || 'realism'),
-          mode: String(comfyNode?.data?.mode || 'clip'),
-          sceneContext: {
-            sceneId: String(comfySelectedScene?.sceneId || ''),
-            title: String(comfySelectedScene?.title || ''),
-            continuity: String(comfySelectedScene?.continuity || ''),
-            sceneNarrativeStep: String(comfySelectedScene?.sceneNarrativeStep || ''),
-            sceneGoal: String(comfySelectedScene?.sceneGoal || ''),
+    const syncKey = `${idx}:${promptType}`;
+    if (comfyPromptSyncInFlightRef.current.has(syncKey)) {
+      return comfyPromptSyncInFlightRef.current.get(syncKey);
+    }
+
+    const syncPromise = (async () => {
+      updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncing, [errorField]: "" });
+      setComfyPromptSyncError("");
+      try {
+        const out = await fetchJson('/api/clip/comfy/prompt-sync', {
+          method: 'POST',
+          body: {
+            sourceText: ruText,
+            sourceLang: 'ru',
+            targetLang: 'en',
+            promptType,
+            stylePreset: String(comfyNode?.data?.stylePreset || 'realism'),
+            mode: String(comfyNode?.data?.mode || 'clip'),
+            sceneContext: {
+              sceneId: String(snapshot?.sceneId || ''),
+              title: String(snapshot?.title || ''),
+              continuity: String(snapshot?.continuity || ''),
+              sceneNarrativeStep: String(snapshot?.sceneNarrativeStep || ''),
+              sceneGoal: String(snapshot?.sceneGoal || ''),
+            },
           },
-        },
-      });
-      const translated = String(out?.normalizedPrompt || out?.translatedPrompt || "").trim();
-      if (!out?.ok || !translated) throw new Error(out?.error || out?.hint || 'prompt_sync_failed');
-      updateComfyScene(idx, {
-        [enField]: translated,
-        [isImage ? 'imagePrompt' : 'videoPrompt']: translated,
-        [statusField]: PROMPT_SYNC_STATUS.synced,
-      });
-      return translated;
-    } catch (e) {
-      updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError });
-      setComfyPromptSyncError(String(e?.message || e));
-      throw e;
-    }
-  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySelectedScene, updateComfyScene]);
+        });
+        const translated = String(out?.normalizedPrompt || out?.translatedPrompt || "").trim();
+        if (!out?.ok || !translated) throw new Error(out?.error || out?.hint || 'prompt_sync_failed');
+        updateComfyScene(idx, {
+          [enField]: translated,
+          [promptField]: translated,
+          [statusField]: PROMPT_SYNC_STATUS.synced,
+          [errorField]: "",
+        });
+        return translated;
+      } catch (e) {
+        const message = String(e?.message || e);
+        updateComfyScene(idx, { [statusField]: PROMPT_SYNC_STATUS.syncError, [errorField]: message });
+        setComfyPromptSyncError(message);
+        throw e;
+      } finally {
+        comfyPromptSyncInFlightRef.current.delete(syncKey);
+      }
+    })();
+
+    comfyPromptSyncInFlightRef.current.set(syncKey, syncPromise);
+    return await syncPromise;
+  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, getComfySceneSnapshot, updateComfyScene]);
 
   const ensureComfyPromptSynced = useCallback(async ({ idx, promptType } = {}) => {
-    if (!comfySelectedScene || idx < 0) return "";
+    if (idx < 0) return "";
     const isImage = promptType === "image";
     const statusField = isImage ? "imagePromptSyncStatus" : "videoPromptSyncStatus";
     const enField = isImage ? "imagePromptEn" : "videoPromptEn";
-    const status = String(comfySelectedScene?.[statusField] || "");
-    const enText = String(comfySelectedScene?.[enField] || "").trim();
+    const snapshot = getComfySceneSnapshot(idx);
+    if (!snapshot) return "";
+    const status = String(snapshot?.[statusField] || "");
+    const enText = String(snapshot?.[enField] || "").trim();
     if (status === PROMPT_SYNC_STATUS.syncing) {
+      const key = `${idx}:${promptType}`;
+      const inflight = comfyPromptSyncInFlightRef.current.get(key);
+      if (inflight) return await inflight;
       throw new Error("Синхронизация prompt уже выполняется");
     }
     if (status === PROMPT_SYNC_STATUS.synced && enText) return enText;
     return await syncComfyPrompt({ idx, promptType, force: true });
-  }, [comfySelectedScene, syncComfyPrompt]);
+  }, [getComfySceneSnapshot, syncComfyPrompt]);
+
+  const scheduleComfyPromptSync = useCallback(({ idx, promptType, ruText }) => {
+    if (idx < 0) return;
+    const key = `${idx}:${promptType}`;
+    const existingTimer = comfyPromptSyncTimersRef.current.get(key);
+    if (existingTimer) clearTimeout(existingTimer);
+    const timerId = setTimeout(() => {
+      comfyPromptSyncTimersRef.current.delete(key);
+      syncComfyPrompt({ idx, promptType, force: true, ruTextOverride: ruText }).catch((e) => {
+        console.error(e);
+      });
+    }, 650);
+    comfyPromptSyncTimersRef.current.set(key, timerId);
+  }, [syncComfyPrompt]);
+
+  useEffect(() => () => {
+    comfyPromptSyncTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    comfyPromptSyncTimersRef.current.clear();
+    comfyPromptSyncInFlightRef.current.clear();
+  }, []);
 
   const stopComfyVideoPolling = useCallback(() => {
     if (comfyVideoPollTimerRef.current) {
@@ -2144,13 +2200,7 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
           const sceneId = String(nextMeta.sceneId || "");
           const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
           if (idx >= 0) {
-            updateComfyScene(idx, {
-              videoUrl: String(out?.videoUrl || ""),
-              mode: String(out?.mode || ""),
-              model: String(out?.model || ""),
-              requestedDurationSec: normalizeDurationSec(out?.requestedDurationSec),
-              providerDurationSec: normalizeDurationSec(out?.providerDurationSec),
-            });
+            updateComfyScene(idx, { videoUrl: String(out?.videoUrl || "") });
           }
           clearActiveComfyVideoJob();
           return;
@@ -2189,28 +2239,29 @@ const comfyPreviousScene = comfySafeIndex > 0 ? (comfyScenes[comfySafeIndex - 1]
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
     setComfyImageLoading(true);
-    setComfyImageError("");
+    setComfyImageError('');
     try {
       const sceneId = String(comfySelectedScene.sceneId || `comfy-scene-${comfySafeIndex + 1}`);
-      const previousSceneImageUrl = String(
-        comfyPreviousScene?.imageUrl || comfyPreviousScene?.endImageUrl || comfyPreviousScene?.startImageUrl || ""
-      ).trim();
       const contextPrompt = buildComfySceneContextPrompt({
         scene: comfySelectedScene,
         mode: comfyNode?.data?.mode || "clip",
         stylePreset: comfyNode?.data?.stylePreset || "realism",
       });
       const imagePrompt = await ensureComfyPromptSynced({ idx: comfySafeIndex, promptType: 'image' });
+      const previousSceneImageUrl = String(
+        comfyPreviousScene?.endImageUrl
+        || comfyPreviousScene?.imageUrl
+        || comfyPreviousScene?.startImageUrl
+        || ""
+      ).trim();
       const out = await fetchJson('/api/clip/image', {
         method: 'POST',
         body: {
           sceneId,
-          prompt: imagePrompt,
-          sceneDelta: `${imagePrompt}
-
-${contextPrompt}`.trim(),
-          sceneText: contextPrompt,
-          style: String(comfyNode?.data?.stylePreset || 'realism'),
+          sceneDelta: imagePrompt,
+          contextPrompt,
+          mode: String(comfyNode?.data?.mode || 'clip'),
+          stylePreset: String(comfyNode?.data?.stylePreset || 'realism'),
           width: 1024,
           height: 1792,
           refs: buildComfySceneRefsPayload({
@@ -2302,20 +2353,24 @@ ${contextPrompt}`.trim(),
   }, [comfySafeIndex, updateComfyScene]);
 
   const handleComfyImagePromptChange = useCallback((value) => {
+    const nextRu = String(value || '');
     updateComfyScene(comfySafeIndex, {
-      imagePromptRu: value,
+      imagePromptRu: nextRu,
       imagePromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
-      imagePrompt: String(comfySelectedScene?.imagePromptEn || "").trim(),
+      imagePromptSyncError: '',
     });
-  }, [comfySafeIndex, comfySelectedScene?.imagePromptEn, updateComfyScene]);
+    scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'image', ruText: nextRu });
+  }, [comfySafeIndex, scheduleComfyPromptSync, updateComfyScene]);
 
   const handleComfyVideoPromptChange = useCallback((value) => {
+    const nextRu = String(value || '');
     updateComfyScene(comfySafeIndex, {
-      videoPromptRu: value,
+      videoPromptRu: nextRu,
       videoPromptSyncStatus: PROMPT_SYNC_STATUS.needsSync,
-      videoPrompt: String(comfySelectedScene?.videoPromptEn || "").trim(),
+      videoPromptSyncError: '',
     });
-  }, [comfySafeIndex, comfySelectedScene?.videoPromptEn, updateComfyScene]);
+    scheduleComfyPromptSync({ idx: comfySafeIndex, promptType: 'video', ruText: nextRu });
+  }, [comfySafeIndex, scheduleComfyPromptSync, updateComfyScene]);
 
   const handleGenerateScenarioImage = useCallback(async (slot = "single") => {
     if (!scenarioSelected) return;
@@ -4909,8 +4964,11 @@ const hydrate = useCallback(() => {
                         placeholder="Опиши визуал сцены для генерации изображения"
                       />
                       <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.imagePromptEn || '—')}</div>
+                      {(String(comfySelectedScene.imagePromptSyncError || '').trim()) ? (
+                        <div className="clipSB_hint" style={{ marginTop: 6, color: '#ff8a8a' }}>{String(comfySelectedScene.imagePromptSyncError || '')}</div>
+                      ) : null}
                       {comfySelectedScene.imagePromptSyncStatus === PROMPT_SYNC_STATUS.syncError ? (
-                        <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={() => syncComfyPrompt({ idx: comfySafeIndex, promptType: 'image', force: true })}>Retry sync image</button>
+                        <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={async () => { try { await syncComfyPrompt({ idx: comfySafeIndex, promptType: 'image', force: true }); } catch (e) { console.error(e); } }}>Retry sync image</button>
                       ) : null}
                     </div>
 
@@ -4931,7 +4989,7 @@ const hydrate = useCallback(() => {
                       <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteImage} disabled={comfyImageLoading}>Удалить изображение</button>
                       </div>
                       {comfyImageError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyImageError}</div> : null}
-                      {comfyPromptSyncError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>sync: {comfyPromptSyncError}</div> : null}
+                      {(String(comfySelectedScene.imagePromptSyncError || '').trim() || comfyPromptSyncError) ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>sync: {String(comfySelectedScene.imagePromptSyncError || comfyPromptSyncError || '')}</div> : null}
                     </div>
 
                     {comfySelectedScene.imageUrl ? (
@@ -4949,8 +5007,11 @@ const hydrate = useCallback(() => {
                             placeholder="Опиши действие камеры и движение в кадре"
                           />
                           <div className="clipSB_small" style={{ marginTop: 6 }}>EN (model): {String(comfySelectedScene.videoPromptEn || '—')}</div>
+                          {(String(comfySelectedScene.videoPromptSyncError || '').trim()) ? (
+                            <div className="clipSB_hint" style={{ marginTop: 6, color: '#ff8a8a' }}>{String(comfySelectedScene.videoPromptSyncError || '')}</div>
+                          ) : null}
                           {comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncError ? (
-                            <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={() => syncComfyPrompt({ idx: comfySafeIndex, promptType: 'video', force: true })}>Retry sync video</button>
+                            <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={async () => { try { await syncComfyPrompt({ idx: comfySafeIndex, promptType: 'video', force: true }); } catch (e) { console.error(e); } }}>Retry sync video</button>
                           ) : null}
                         </div>
                         <div className="clipSB_comfyActions">
