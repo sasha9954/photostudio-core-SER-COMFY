@@ -190,6 +190,8 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     api_key = (settings.GEMINI_API_KEY or "").strip()
     requested_model = (settings.GEMINI_TEXT_MODEL or FALLBACK_GEMINI_MODEL).strip()
+    logger.info("[COMFY PLAN] requested_model=%s", requested_model)
+    logger.info("[COMFY PLAN] effective_model_before_request=%s", requested_model)
     if not api_key:
         return {"ok": False, "planMeta": {}, "globalContinuity": {}, "scenes": [], "warnings": [], "errors": ["GEMINI_API_KEY missing"], "debug": {"requestedModel": requested_model, "effectiveModel": None, "httpStatus": None, "rawPreview": "", "normalizedPayload": normalized}}
 
@@ -203,6 +205,7 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
 
     if diagnostics["httpStatus"] == 404 and requested_model != FALLBACK_GEMINI_MODEL:
+        logger.info("[COMFY PLAN] fallback_from=%s fallback_to=%s", requested_model, FALLBACK_GEMINI_MODEL)
         warnings.append(f"gemini_model_fallback:{requested_model}->{FALLBACK_GEMINI_MODEL}")
         parsed_fb, diagnostics_fb = _call_gemini_plan(api_key, FALLBACK_GEMINI_MODEL, body)
         diagnostics = {
@@ -242,5 +245,15 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "normalizedPayload": normalized,
         },
     }
-    logger.info("[COMFY PLAN] warnings/errors warnings=%s errors=%s", result["warnings"], result["errors"])
+    first_scene = scenes[0] if scenes else {}
+    logger.info(
+        "[COMFY PLAN] result ok=%s scenes=%s warnings=%s errors=%s normalizedScenesCount=%s firstSceneId=%s firstSceneTitle=%s",
+        result["ok"],
+        len(scenes),
+        len(result["warnings"]),
+        len(result["errors"]),
+        len(scenes),
+        first_scene.get("sceneId") if isinstance(first_scene, dict) else None,
+        first_scene.get("title") if isinstance(first_scene, dict) else None,
+    )
     return result

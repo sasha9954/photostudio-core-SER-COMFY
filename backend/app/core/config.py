@@ -1,9 +1,11 @@
 from pathlib import Path
+import logging
 
 from pydantic_settings import BaseSettings
 
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     PS_ENV: str = "dev"
@@ -48,3 +50,4 @@ settings = Settings()
 # temporary debug
 print("[CONFIG] env_file =", ENV_FILE)
 print("[CONFIG] KIE_API_KEY loaded =", bool(settings.KIE_API_KEY))
+logger.info("[CONFIG] GEMINI_TEXT_MODEL = %s", settings.GEMINI_TEXT_MODEL)
