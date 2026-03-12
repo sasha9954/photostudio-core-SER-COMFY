@@ -216,6 +216,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
   const stylePreset = String(nodeData?.styleKey || "realism").toLowerCase();
   const freezeStyle = !!nodeData?.freezeStyle;
   const meaningfulAudio = audioNode?.type === "audioNode" ? String(audioNode?.data?.audioUrl || "").trim() : "";
+  const audioDurationRaw = Number(audioNode?.data?.audioDurationSec || 0);
+  const meaningfulAudioDurationSec = Number.isFinite(audioDurationRaw) && audioDurationRaw > 0 ? audioDurationRaw : null;
   const meaningfulText = textNode?.type === "textNode" ? String(textNode?.data?.textValue || "").trim() : "";
   const storyControlMode = detectStoryControlMode({ meaningfulText, meaningfulAudio, refsByRole });
   const narrativeRoles = deriveStoryNarrativeRoles(storyControlMode);
@@ -233,6 +235,7 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     freezeStyle,
     meaningfulText,
     meaningfulAudio,
+    meaningfulAudioDurationSec,
     refsByRole,
     storyControlMode,
     narrativeRoles,

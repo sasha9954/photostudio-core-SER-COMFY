@@ -11,6 +11,18 @@ logger = logging.getLogger(__name__)
 FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"
 
 
+def _to_float(value: Any) -> float | None:
+    try:
+        n = float(value)
+    except Exception:
+        return None
+    return n if n == n and n != float("inf") and n != float("-inf") else None
+
+
+def _round_sec(value: float | None) -> float | None:
+    return round(float(value), 3) if value is not None else None
+
+
 def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[dict[str, str]]]:
     roles = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
     src = refs_by_role if isinstance(refs_by_role, dict) else {}
@@ -51,11 +63,85 @@ def normalize_comfy_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
         "freezeStyle": bool(data.get("freezeStyle")),
         "text": str(data.get("text") or "").strip(),
         "audioUrl": str(data.get("audioUrl") or "").strip(),
+        "audioDurationSec": _to_float(data.get("audioDurationSec")),
         "refsByRole": _clean_refs_by_role(data.get("refsByRole")),
         "storyControlMode": str(data.get("storyControlMode") or "").strip(),
         "storyMissionSummary": str(data.get("storyMissionSummary") or "").strip(),
         "timelineSource": str(data.get("timelineSource") or "").strip(),
         "narrativeSource": str(data.get("narrativeSource") or "").strip(),
+    }
+
+
+def _normalize_scene_timeline(scenes: list[dict[str, Any]], audio_duration_sec: float | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    safe_audio_duration = _to_float(audio_duration_sec)
+    if safe_audio_duration is None or safe_audio_duration <= 0:
+        total_sum = sum(max(0.0, _to_float(scene.get("durationSec")) or 0.0) for scene in scenes)
+        timeline_end = max((_to_float(scene.get("endSec")) or 0.0) for scene in scenes) if scenes else 0.0
+        return scenes, {
+            "audioDurationSec": None,
+            "timelineDurationSec": _round_sec(timeline_end),
+            "sceneDurationTotalSec": _round_sec(total_sum),
+            "sceneCount": len(scenes),
+            "normalizationApplied": False,
+            "normalizationReason": None,
+            "timelineScale": 1.0,
+        }
+
+    original_end = max((_to_float(scene.get("endSec")) or 0.0) for scene in scenes) if scenes else 0.0
+    original_sum = sum(max(0.0, _to_float(scene.get("durationSec")) or 0.0) for scene in scenes)
+    needs_fix = original_end > (safe_audio_duration + 0.25)
+    scale = 1.0
+    reason = None
+    if needs_fix and original_end > 0:
+        scale = safe_audio_duration / original_end
+        reason = f"timeline_scaled_to_audio:{_round_sec(original_end)}->{_round_sec(safe_audio_duration)}"
+
+    normalized: list[dict[str, Any]] = []
+    cursor = 0.0
+    for idx, scene in enumerate(scenes):
+        start = _to_float(scene.get("startSec"))
+        end = _to_float(scene.get("endSec"))
+        duration = _to_float(scene.get("durationSec"))
+
+        if start is not None and end is not None and end >= start:
+            next_start = start * scale if needs_fix else start
+            next_end = end * scale if needs_fix else end
+        else:
+            guessed_duration = duration if duration is not None and duration > 0 else 0.0
+            if guessed_duration <= 0 and safe_audio_duration > 0:
+                guessed_duration = safe_audio_duration / max(1, len(scenes))
+            next_start = cursor
+            next_end = cursor + guessed_duration
+
+        next_start = max(0.0, min(safe_audio_duration, next_start))
+        next_end = max(next_start, min(safe_audio_duration, next_end))
+
+        if idx == len(scenes) - 1:
+            next_end = safe_audio_duration
+            next_start = min(next_start, next_end)
+
+        cursor = next_end
+        normalized.append(
+            {
+                **scene,
+                "startSec": _round_sec(next_start),
+                "endSec": _round_sec(next_end),
+                "durationSec": _round_sec(max(0.0, next_end - next_start)),
+            }
+        )
+
+    normalized_end = max((_to_float(scene.get("endSec")) or 0.0) for scene in normalized) if normalized else 0.0
+    normalized_sum = sum(max(0.0, _to_float(scene.get("durationSec")) or 0.0) for scene in normalized)
+    return normalized, {
+        "audioDurationSec": _round_sec(safe_audio_duration),
+        "timelineDurationSec": _round_sec(normalized_end),
+        "sceneDurationTotalSec": _round_sec(normalized_sum),
+        "sceneCount": len(normalized),
+        "normalizationApplied": bool(reason),
+        "normalizationReason": reason,
+        "timelineScale": _round_sec(scale),
+        "originalTimelineDurationSec": _round_sec(original_end),
+        "originalSceneDurationTotalSec": _round_sec(original_sum),
     }
 
 
@@ -82,6 +168,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         f"Selected audioStoryMode={audio_story_mode}.\n"
         f"{audio_story_rules}\n"
         "AUDIO is primary source for rhythm, emotional contour, dramatic shifts and timing.\n"
+        "If INPUT.audioDurationSec is provided and > 0, scene timeline MUST stay inside [0, audioDurationSec].\n"
         "TEXT is optional support that clarifies intent.\n"
         "REFS are optional anchors for character/location/style/props continuity.\n"
         "Each scene must include: sceneId,title,startSec,endSec,durationSec,sceneNarrativeStep,sceneGoal,storyMission,"
@@ -263,19 +350,27 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     scenes = [_normalize_scene(scene, idx) for idx, scene in enumerate(raw_scenes)]
+    scenes, timing_debug = _normalize_scene_timeline(scenes, normalized.get("audioDurationSec"))
     logger.info("[COMFY PLAN] normalized scenes count=%s", len(scenes))
 
     parsed_errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
     all_errors = parsed_errors + errors
 
+    plan_meta = (
+        {
+            **({"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "audioStoryMode": normalized["audioStoryMode"]}),
+            **(parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {}),
+        }
+    )
+    plan_meta.update({
+        "audioDurationSec": timing_debug.get("audioDurationSec"),
+        "timelineDurationSec": timing_debug.get("timelineDurationSec"),
+        "sceneDurationTotalSec": timing_debug.get("sceneDurationTotalSec"),
+    })
+
     result = {
         "ok": len(all_errors) == 0,
-        "planMeta": (
-            {
-                **({"mode": normalized["mode"], "output": normalized["output"], "stylePreset": normalized["stylePreset"], "audioStoryMode": normalized["audioStoryMode"]}),
-                **(parsed.get("planMeta") if isinstance(parsed.get("planMeta"), dict) else {}),
-            }
-        ),
+        "planMeta": plan_meta,
         "globalContinuity": parsed.get("globalContinuity") if isinstance(parsed.get("globalContinuity"), (dict, str)) else {},
         "scenes": scenes,
         "warnings": (parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []) + warnings,
@@ -291,8 +386,11 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "normalizedPayload": normalized,
             "fallbackFrom": diagnostics.get("fallbackFrom"),
             "normalizedScenesCount": len(scenes),
+            "timing": timing_debug,
         },
     }
+    if timing_debug.get("normalizationApplied"):
+        result["warnings"].append(str(timing_debug.get("normalizationReason") or "timeline_normalized_to_audio"))
     first_scene = scenes[0] if scenes else {}
     logger.info(
         "[%s] result ok=%s mode=%s output=%s style=%s audioStoryMode=%s scenes=%s warnings=%s errors=%s requestedModel=%s effectiveModel=%s httpStatus=%s firstSceneId=%s firstSceneTitle=%s",

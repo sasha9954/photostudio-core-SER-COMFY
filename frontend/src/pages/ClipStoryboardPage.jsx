@@ -911,6 +911,27 @@ function notify(detail) {
 }
 
 
+function formatContinuityForDisplay(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+    try {
+      return JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      return text.replace(/,\s*/g, ",\n").replace(/;\s*/g, ";\n");
+    }
+  }
+  return text.replace(/,\s*/g, ",\n").replace(/;\s*/g, ";\n");
+}
+
 async function getAudioDurationSec(url) {
   // Browser-side duration probe (metadata only)
   return await new Promise((resolve) => {
@@ -3349,6 +3370,7 @@ onClipSec: (nodeId, value) => {
               freezeStyle: derived.freezeStyle,
               meaningfulText: derived.meaningfulText,
               meaningfulAudio: derived.meaningfulAudio,
+              audioDurationSec: derived.meaningfulAudioDurationSec,
               refsByRole: derived.refsByRole,
               narrativeSource: derived.narrativeSource,
               timelineSource: derived.timelineSource,
@@ -3460,6 +3482,7 @@ onClipSec: (nodeId, value) => {
                   freezeStyle: freshDerived.freezeStyle,
                   text: freshDerived.meaningfulText || "",
                   audioUrl: freshDerived.meaningfulAudio || "",
+                  audioDurationSec: freshDerived.meaningfulAudioDurationSec,
                   refsByRole: freshDerived.refsByRole,
                   storyControlMode: freshDerived.storyControlMode,
                   storyMissionSummary: freshDerived.storyMissionSummary,
@@ -4747,14 +4770,14 @@ const hydrate = useCallback(() => {
                       onClick={() => setComfyEditor((state) => ({ ...state, selected: index }))}
                     >
                       <div className="clipSB_scenarioItemTop">
-                        <div className="clipSB_scenarioItemTime">{scene.sceneId || `scene ${index + 1}`}</div>
+                        <div className="clipSB_comfySceneId">{scene.sceneId || `scene ${index + 1}`}</div>
                         <div className="clipSB_comfyReadyIcons">
                           {hasImage ? <span className="clipSB_tag clipSB_tagOk">image-ready</span> : null}
                           {hasVideo ? <span className="clipSB_tag clipSB_tagOk">video-ready</span> : null}
                         </div>
                       </div>
-                      <div className="clipSB_scenarioItemText">{scene.title || `Сцена ${index + 1}`}</div>
-                      <div className="clipSB_small">{timing}</div>
+                      <div className="clipSB_comfySceneTitle">{scene.title || `Сцена ${index + 1}`}</div>
+                      <div className="clipSB_comfySceneTiming">{timing}</div>
                     </button>
                   );
                 })}
@@ -4765,15 +4788,21 @@ const hydrate = useCallback(() => {
                   <div className="clipSB_empty">Выбери сцену слева.</div>
                 ) : (
                   <>
-                    <div className="clipSB_comfyInfoGrid">
-                      <div className="clipSB_comfyKv"><span>Сцена</span><strong>{comfySelectedScene.title || '—'}</strong></div>
-                      <div className="clipSB_comfyKv"><span>Время</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
-                      <div className="clipSB_comfyKv"><span>Цель</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
-                      <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Континуити</span><strong>{comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—'}</strong></div>
+                    <div className="clipSB_comfySection clipSB_comfyTopSection">
+                      <div className="clipSB_comfyInfoGrid">
+                        <div className="clipSB_comfyKv"><span>Сцена</span><strong>{comfySelectedScene.title || '—'}</strong></div>
+                        <div className="clipSB_comfyKv"><span>Время</span><strong>{Number.isFinite(Number(comfySelectedScene.startSec)) && Number.isFinite(Number(comfySelectedScene.endSec)) ? `${Number(comfySelectedScene.startSec).toFixed(1)}–${Number(comfySelectedScene.endSec).toFixed(1)}s` : `${Number(comfySelectedScene.durationSec || 0).toFixed(1)}s`}</strong></div>
+                        <div className="clipSB_comfyKv clipSB_comfyKvWide"><span>Цель</span><strong>{comfySelectedScene.sceneGoal || comfySelectedScene.sceneNarrativeStep || '—'}</strong></div>
+                      </div>
                     </div>
 
-                    <div className="clipSB_scenarioEditRow">
-                      <div className="clipSB_hint">Image prompt</div>
+                    <div className="clipSB_comfySection">
+                      <div className="clipSB_comfyBlockTitle">Континуити</div>
+                      <pre className="clipSB_comfyContinuity">{formatContinuityForDisplay(comfySelectedScene.continuity || comfyNode?.data?.plannerMeta?.globalContinuity || '—')}</pre>
+                    </div>
+
+                    <div className="clipSB_comfySection clipSB_scenarioEditRow">
+                      <div className="clipSB_comfyBlockTitle">Image prompt</div>
                       <textarea
                         className="clipSB_textarea clipSB_comfyTextarea"
                         value={String(comfySelectedScene.imagePrompt || '')}
@@ -4782,19 +4811,24 @@ const hydrate = useCallback(() => {
                       />
                     </div>
 
-                    <div className="clipSB_comfyPreviewBox">
+                    <div className="clipSB_comfySection">
+                      <div className="clipSB_comfyBlockTitle">Preview</div>
+                      <div className="clipSB_comfyPreviewBox">
                       {comfySelectedScene.imageUrl ? (
                         <img className="clipSB_comfyPreviewImg" src={resolveAssetUrl(comfySelectedScene.imageUrl)} alt={comfySelectedScene.title || 'scene'} />
                       ) : (
                         <div className="clipSB_comfyPreviewEmpty">Изображение сцены пока не создано</div>
                       )}
+                      </div>
                     </div>
 
-                    <div className="clipSB_comfyActions">
+                    <div className="clipSB_comfySection">
+                      <div className="clipSB_comfyActions">
                       <button className="clipSB_btn" onClick={handleComfyGenerateImage} disabled={comfyImageLoading}>{comfyImageLoading ? 'Создаю...' : 'Создать изображение'}</button>
                       <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteImage} disabled={comfyImageLoading}>Удалить изображение</button>
+                      </div>
+                      {comfyImageError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyImageError}</div> : null}
                     </div>
-                    {comfyImageError ? <div className="clipSB_hint" style={{ color: '#ff8a8a' }}>{comfyImageError}</div> : null}
 
                     {comfySelectedScene.imageUrl ? (
                       <div className="clipSB_videoBlock">
@@ -4829,6 +4863,9 @@ const hydrate = useCallback(() => {
                       <div className="clipSB_small" style={{ marginTop: 8 }}>pipeline: {(Array.isArray(comfyNode?.data?.pipelineFlow) ? comfyNode.data.pipelineFlow.join(' → ') : 'brain → scene image → scene video')}</div>
                       <div className="clipSB_small">режим: {comfyModeMeta.labelRu} • стиль: {comfyStyleMeta.labelRu}</div>
                       <div className="clipSB_small">narrative source: {comfyNode?.data?.narrativeSource || 'none'}</div>
+                      <div className="clipSB_small">audioDurationSec: {comfyNode?.data?.plannerMeta?.audioDurationSec ?? '—'}</div>
+                      <div className="clipSB_small">timelineDurationSec: {comfyNode?.data?.plannerMeta?.timelineDurationSec ?? '—'}</div>
+                      <div className="clipSB_small">sceneDurationTotalSec: {comfyNode?.data?.plannerMeta?.sceneDurationTotalSec ?? '—'}</div>
                       <div className="clipSB_small">warnings: {(Array.isArray(comfyNode?.data?.warnings) ? comfyNode.data.warnings.join(' | ') : '') || 'none'}</div>
                     </details>
                   </>
