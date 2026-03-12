@@ -15,6 +15,8 @@ PROMPT_SYNC_STATUS_SYNCING = "syncing"
 PROMPT_SYNC_STATUS_SYNC_ERROR = "sync_error"
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 COMFY_REF_DIRECTIVES = {"hero", "supporting", "environment_required", "required", "optional", "omit"}
+COMFY_ACTIVE_DIRECTIVES = {"hero", "supporting", "environment_required", "required"}
+COMFY_FALLBACK_ROLE_PRIORITY = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
 
 
 def _to_float(value: Any) -> float | None:
@@ -48,6 +50,42 @@ def _clean_refs_by_role(refs_by_role: dict[str, Any] | None) -> dict[str, list[d
     return out
 
 
+def _resolve_scene_active_roles(
+    refs_used: list[str] | dict[str, Any] | None,
+    directives: dict[str, str],
+    available_roles: set[str],
+    primary_role: str,
+) -> list[str]:
+    selected_from_used: list[str] = []
+    if isinstance(refs_used, list):
+        selected_from_used = [str(role).strip() for role in refs_used if str(role).strip() in COMFY_REF_ROLES]
+    elif isinstance(refs_used, dict):
+        selected_from_used = [str(role).strip() for role, include in refs_used.items() if str(role).strip() in COMFY_REF_ROLES and bool(include)]
+    selected_from_used = [role for role in selected_from_used if role in available_roles and directives.get(role) != "omit"]
+
+    selected_from_directives = [
+        role
+        for role in COMFY_REF_ROLES
+        if role in available_roles and directives.get(role) in COMFY_ACTIVE_DIRECTIVES and directives.get(role) != "omit"
+    ]
+
+    active_roles: list[str] = []
+    for role in selected_from_used + selected_from_directives:
+        if role not in active_roles:
+            active_roles.append(role)
+
+    if not active_roles and primary_role in available_roles and directives.get(primary_role) != "omit":
+        active_roles = [primary_role]
+    if not active_roles:
+        fallback_role = next(
+            (role for role in COMFY_FALLBACK_ROLE_PRIORITY if role in available_roles and directives.get(role) != "omit"),
+            None,
+        )
+        if fallback_role:
+            active_roles = [fallback_role]
+    return active_roles
+
+
 def _normalize_scene_ref_roles(src: dict[str, Any], available_refs_by_role: dict[str, list[dict[str, str]]] | None) -> tuple[list[str], dict[str, str], str, list[str]]:
     available = available_refs_by_role if isinstance(available_refs_by_role, dict) else {}
     available_roles = {role for role in COMFY_REF_ROLES if isinstance(available.get(role), list) and len(available.get(role) or []) > 0}
@@ -62,8 +100,7 @@ def _normalize_scene_ref_roles(src: dict[str, Any], available_refs_by_role: dict
 
     primary_role = str(src.get("primaryRole") or "").strip()
     if primary_role not in COMFY_REF_ROLES or primary_role not in available_roles:
-        fallback_priority = ["character_1", "character_2", "character_3", "group", "animal", "location", "props", "style"]
-        primary_role = next((role for role in fallback_priority if role in available_roles), "character_1")
+        primary_role = next((role for role in COMFY_FALLBACK_ROLE_PRIORITY if role in available_roles), "character_1")
 
     secondary_roles_raw = src.get("secondaryRoles")
     secondary_roles = [
@@ -102,21 +139,12 @@ def _normalize_scene_ref_roles(src: dict[str, Any], available_refs_by_role: dict
             else:
                 directives[role] = "supporting"
 
-    active_directive_values = {"hero", "supporting", "environment_required", "required"}
-    active_roles = [role for role in COMFY_REF_ROLES if role in available_roles and directives.get(role) in active_directive_values]
-    for role in refs_used:
-        if role in available_roles and role not in active_roles:
-            active_roles.append(role)
-
-    if not active_roles and primary_role in available_roles:
-        active_roles = [primary_role]
-        directives[primary_role] = "hero" if primary_role in {"character_1", "character_2", "character_3", "group", "animal"} else "required"
+    active_roles = _resolve_scene_active_roles(refs_used, directives, available_roles, primary_role)
 
     if primary_role not in active_roles and active_roles:
         primary_role = active_roles[0]
         directives[primary_role] = "hero" if primary_role in {"character_1", "character_2", "character_3", "group", "animal"} else "required"
 
-    secondary_roles = [role for role in active_roles if role != primary_role]
     return active_roles, directives, primary_role, secondary_roles
 
 
@@ -765,15 +793,10 @@ def _build_scene_refs_debug(scenes: list[dict[str, Any]], refs_by_role: dict[str
     out: list[dict[str, Any]] = []
     for scene in scenes:
         ref_directives = scene.get("refDirectives") if isinstance(scene.get("refDirectives"), dict) else {}
-        refs_used = scene.get("refsUsed") if isinstance(scene.get("refsUsed"), list) else []
-        active_roles = [
-            role for role in COMFY_REF_ROLES
-            if role in available_summary
-            and available_summary.get(role, 0) > 0
-            and ref_directives.get(role) in {"hero", "supporting", "environment_required", "required"}
-        ]
-        if not active_roles:
-            active_roles = [role for role in refs_used if role in COMFY_REF_ROLES]
+        refs_used = scene.get("refsUsed") if isinstance(scene.get("refsUsed"), (list, dict)) else []
+        available_roles = {role for role, count in available_summary.items() if count > 0}
+        primary_role = str(scene.get("primaryRole") or "").strip()
+        active_roles = _resolve_scene_active_roles(refs_used, ref_directives, available_roles, primary_role)
         out.append({
             "sceneId": str(scene.get("sceneId") or ""),
             "availableRefsByRoleSummary": available_summary,
