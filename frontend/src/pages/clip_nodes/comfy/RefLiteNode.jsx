@@ -1,5 +1,6 @@
 import React from "react";
 import { Handle, Position, NodeShell, handleStyle, resolveAssetUrl, useRef } from "./comfyNodeShared";
+import { formatRefProfileDetails } from "./refProfileDetails";
 
 const REF_STATUS_LABELS = {
   empty: "пусто",
@@ -8,60 +9,6 @@ const REF_STATUS_LABELS = {
   ready: "готово",
   error: "ошибка",
 };
-
-function formatRefProfileDetails(profile) {
-  if (!profile || typeof profile !== "object") return [];
-
-  const scalar = (value) => {
-    if (value === null || value === undefined) return "";
-    if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
-    if (typeof value === "object") {
-      return Object.values(value).flatMap((item) => (Array.isArray(item) ? item : [item])).map((item) => String(item || "").trim()).filter(Boolean).join(", ");
-    }
-    return String(value).trim();
-  };
-
-  const pick = (...keys) => keys.map((key) => scalar(profile?.[key])).find(Boolean) || "";
-  const type = String(profile?.type || profile?.kind || "").toLowerCase();
-
-  const pushLine = (label, value, acc) => {
-    const normalized = scalar(value);
-    if (normalized) acc.push(`- ${label}: ${normalized}`);
-  };
-
-  const lines = [];
-  pushLine("тип", pick("type", "kind", "entityType", "category"), lines);
-
-  if (type.includes("human") || type.includes("person") || type.includes("character") || type.includes("человек")) {
-    pushLine("пол/подача", pick("genderPresentation", "gender", "presentation", "sex"), lines);
-    pushLine("возраст", pick("age", "ageRange"), lines);
-    pushLine("волосы", pick("hair", "hairStyle"), lines);
-    pushLine("одежда", pick("clothing", "outfit", "wardrobe"), lines);
-    pushLine("особенности", pick("features", "distinctiveFeatures", "marks"), lines);
-  } else if (type.includes("animal") || type.includes("pet") || type.includes("живот")) {
-    pushLine("вид", pick("species", "animalType", "breed"), lines);
-    pushLine("окрас", pick("color", "coatColor", "furColor"), lines);
-    pushLine("особенности", pick("features", "distinctiveFeatures", "marks"), lines);
-  } else if (type.includes("location") || type.includes("place") || type.includes("локац")) {
-    pushLine("место", pick("place", "location", "scene", "setting"), lines);
-    pushLine("поверхность", pick("surface", "ground"), lines);
-    pushLine("окружение", pick("environment", "surroundings", "context"), lines);
-  } else if (type.includes("style") || type.includes("aesthetic") || type.includes("стил")) {
-    pushLine("направление", pick("direction", "styleDirection", "genre"), lines);
-    pushLine("свет", pick("lighting", "light"), lines);
-    pushLine("атмосфера", pick("mood", "atmosphere"), lines);
-  } else {
-    pushLine("категория", pick("category", "itemType", "objectType"), lines);
-    pushLine("цвет", pick("color", "palette"), lines);
-    pushLine("материал", pick("material", "materials"), lines);
-    pushLine("форма", pick("shape", "form"), lines);
-  }
-
-  if (lines.length) return lines;
-  return Object.entries(profile)
-    .filter(([, value]) => value !== null && value !== undefined && String(scalar(value)).trim())
-    .map(([key, value]) => `- ${key}: ${scalar(value)}`);
-}
 
 export default function RefLiteNode({ id, data, title, className, handleId }) {
   const inputRef = useRef(null);
