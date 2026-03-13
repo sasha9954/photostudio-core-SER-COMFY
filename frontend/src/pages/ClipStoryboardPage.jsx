@@ -2763,11 +2763,35 @@ const comfyShowVideoSection = Boolean(
         || comfyPreviousScene?.startImageUrl
         || ""
       ).trim();
+      const nodesNow = nodesRef.current || [];
+      const edgesNow = edgesRef.current || [];
+      const linkedBrainEdge = edgesNow.find((edge) => {
+        if (!edge || edge.target !== comfyNode?.id) return false;
+        if (edge.sourceHandle !== "comfy_plan" || edge.targetHandle !== "comfy_plan") return false;
+        const sourceNode = nodesNow.find((node) => node.id === edge.source);
+        return sourceNode?.type === "comfyBrain";
+      });
+      const linkedComfyBrainNode = linkedBrainEdge
+        ? (nodesNow.find((node) => node.id === linkedBrainEdge.source && node.type === "comfyBrain") || null)
+        : null;
+      if (!linkedComfyBrainNode) {
+        console.warn("[COMFY DEBUG FRONT] /clip/image comfyBrain not found for storyboard, fallback derive through comfyStoryboard", {
+          storyboardNodeId: comfyNode?.id || null,
+          fallback: "comfyStoryboard",
+        });
+      }
+      const deriveNode = linkedComfyBrainNode || comfyNode;
+      console.log("[COMFY DEBUG FRONT] /clip/image derive source node", {
+        deriveNodeType: deriveNode?.type || null,
+        deriveNodeId: deriveNode?.id || null,
+        storyboardNodeId: comfyNode?.id || null,
+        foundBrainNodeId: linkedComfyBrainNode?.id || null,
+      });
       const liveDerived = deriveComfyBrainState({
-        nodeId: comfyNode?.id,
-        nodeData: comfyNode?.data || {},
-        nodesNow: nodesRef.current || [],
-        edgesNow: edgesRef.current || [],
+        nodeId: deriveNode?.id,
+        nodeData: deriveNode?.data || {},
+        nodesNow,
+        edgesNow,
         normalizeRefDataFn: normalizeRefData,
       });
       const plannerInput = {
