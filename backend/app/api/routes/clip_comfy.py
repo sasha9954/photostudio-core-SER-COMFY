@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -76,6 +77,24 @@ def _extract_profile_tokens(profile: dict[str, Any] | None) -> str:
     return " ".join(tokens).strip().lower()
 
 
+def _has_any_token(tokens: str, variants: list[str]) -> bool:
+    for variant in variants:
+        needle = str(variant).strip().lower()
+        if not needle:
+            continue
+        if " " in needle:
+            if needle in tokens:
+                return True
+            continue
+        if needle.isascii() and needle.isalpha():
+            if re.search(rf"\b{re.escape(needle)}\b", tokens):
+                return True
+            continue
+        if needle in tokens:
+            return True
+    return False
+
+
 def _build_human_label(profile: dict[str, Any] | None) -> str:
     source = profile if isinstance(profile, dict) else {}
     visual_profile = source.get("visualProfile") if isinstance(source.get("visualProfile"), dict) else {}
@@ -88,66 +107,139 @@ def _build_human_label(profile: dict[str, Any] | None) -> str:
     )
     gender = str(raw_gender).strip().lower()
 
-    female_tokens = {"female", "woman", "girl", "feminine", "жен", "женщина", "девушка"}
-    male_tokens = {"male", "man", "boy", "masculine", "муж", "мужчина", "парень"}
+    tokens = f"{_extract_profile_tokens(profile)} {gender}".strip()
 
-    if any(token in gender for token in female_tokens):
-        base = "женщина"
-    elif any(token in gender for token in male_tokens):
-        base = "мужчина"
-    else:
-        base = "персонаж"
+    female_child_tokens = [
+        "little girl",
+        "young girl",
+        "female child",
+        "female kid",
+        "девочка",
+        "ребёнок женского пола",
+        "girl",
+    ]
+    male_child_tokens = [
+        "little boy",
+        "young boy",
+        "male child",
+        "male kid",
+        "мальчик",
+        "ребёнок мужского пола",
+        "boy",
+    ]
+    common_child_tokens = [
+        "teenager neutral",
+        "teenager",
+        "toddler",
+        "child",
+        "kid",
+        "teen",
+        "ребёнок",
+        "подросток",
+    ]
+    adult_female_tokens = [
+        "young woman",
+        "adult woman",
+        "feminine",
+        "female",
+        "woman",
+        "женщина",
+        "девушка",
+    ]
+    adult_male_tokens = [
+        "young man",
+        "adult man",
+        "masculine",
+        "male",
+        "man",
+        "мужчина",
+        "парень",
+    ]
 
-    return base
+    if _has_any_token(tokens, female_child_tokens):
+        return "девочка"
+    if _has_any_token(tokens, male_child_tokens):
+        return "мальчик"
+    if _has_any_token(tokens, common_child_tokens):
+        return "ребёнок"
+    if _has_any_token(tokens, adult_female_tokens):
+        return "женщина"
+    if _has_any_token(tokens, adult_male_tokens):
+        return "мужчина"
+    return "персонаж"
 
 
 def _build_animal_label(profile: dict[str, Any] | None) -> str:
     tokens = _extract_profile_tokens(profile)
-    if any(token in tokens for token in ["кот", "cat", "feline"]):
-        return "кот"
-    if any(token in tokens for token in ["собак", "dog", "canine"]):
-        return "собака"
-    if any(token in tokens for token in ["волк", "wolf"]):
+    if _has_any_token(tokens, ["волк", "wolf"]):
         return "волк"
+    if _has_any_token(tokens, ["кот", "кошка", "cat", "feline"]):
+        return "кот"
+    if _has_any_token(tokens, ["собак", "dog", "canine"]):
+        return "собака"
+    if _has_any_token(tokens, ["лошад", "horse", "equine"]):
+        return "лошадь"
+    if _has_any_token(tokens, ["птиц", "bird", "avian"]):
+        return "птица"
     return "животное"
 
 
 def _build_props_label(profile: dict[str, Any] | None) -> str:
     tokens = _extract_profile_tokens(profile)
-    if any(token in tokens for token in ["машин", "car", "automobile", "sedan", "suv"]):
-        return "машина"
-    if any(token in tokens for token in ["мото", "motorcycle", "bike"]):
+    if _has_any_token(tokens, ["motorcycle", "motorbike", "мотоцикл"]):
         return "мотоцикл"
-    if any(token in tokens for token in ["camera", "камера"]):
+    if _has_any_token(tokens, ["bicycle", "bike", "велосипед"]):
+        return "велосипед"
+    if _has_any_token(tokens, ["машин", "авто", "car", "automobile", "sedan", "suv", "coupe", "hatchback", "truck", "pickup", "van"]):
+        return "машина"
+    if _has_any_token(tokens, ["photo camera", "mirrorless", "dslr", "camera", "камера", "фотоаппарат"]):
         return "камера"
-    if any(token in tokens for token in ["телефон", "phone", "smartphone", "iphone", "android"]):
+    if _has_any_token(tokens, ["smartphone", "android phone", "mobile phone", "iphone", "phone", "телефон", "смартфон"]):
         return "телефон"
-    if any(token in tokens for token in ["tech", "device", "gadget", "техник"]):
+    if _has_any_token(tokens, ["laptop", "notebook computer", "computer", "desktop", "pc", "ноутбук", "компьютер"]):
+        return "компьютер"
+    if _has_any_token(tokens, ["shotgun", "rifle", "pistol", "gun", "weapon", "оружие", "пистолет", "винтовка"]):
+        return "оружие"
+    if _has_any_token(tokens, ["drill", "hammer", "wrench", "saw", "tool", "инструмент", "дрель", "молоток"]):
+        return "инструмент"
+    if _has_any_token(tokens, ["device", "gadget", "machine", "equipment", "техника", "устройство", "оборудование", "tech"]):
         return "техника"
     return "предмет"
 
 
 def _build_location_label(profile: dict[str, Any] | None) -> str:
     tokens = _extract_profile_tokens(profile)
-    if any(token in tokens for token in ["город", "city", "urban", "downtown"]):
-        return "город"
-    if any(token in tokens for token in ["квартир", "apartment", "flat", "interior"]):
-        return "квартира"
-    if any(token in tokens for token in ["лес", "forest", "woodland", "jungle"]):
-        return "лес"
-    if any(token in tokens for token in ["марс", "mars"]):
+    if _has_any_token(tokens, ["марс", "mars", "martian"]):
         return "Марс"
+    if _has_any_token(tokens, ["spaceship", "orbital", "sci-fi planet surface", "space", "космос"]):
+        return "космос"
+    if _has_any_token(tokens, ["cityscape", "downtown", "street", "city", "urban", "город", "улица"]):
+        return "город"
+    if _has_any_token(tokens, ["home interior", "living room", "bedroom", "kitchen", "apartment", "flat", "квартир", "дом", "комната"]):
+        return "квартира"
+    if _has_any_token(tokens, ["interior workspace", "studio interior", "hallway", "office", "офис", "кабинет", "студия"]):
+        return "помещение"
+    if _has_any_token(tokens, ["лес", "forest", "woodland", "jungle", "trees", "джунгли"]):
+        return "лес"
+    if _has_any_token(tokens, ["desert", "dunes", "barren sand", "пустыня"]):
+        return "пустыня"
+    if _has_any_token(tokens, ["riverbank", "beach", "shore", "coast", "ocean", "sea", "море", "берег", "пляж", "река"]):
+        return "берег"
     return "локация"
 
 
 def _build_style_label(profile: dict[str, Any] | None) -> str:
     tokens = _extract_profile_tokens(profile)
-    if any(token in tokens for token in ["реал", "realism", "photoreal", "naturalistic"]):
-        return "реализм"
-    if any(token in tokens for token in ["кино", "cinema", "cinematic", "film"]):
-        return "кино"
-    if any(token in tokens for token in ["неон", "neon", "cyberpunk", "glow"]):
+    if _has_any_token(tokens, ["synthwave", "cyberpunk", "glow", "neon", "неон"]):
         return "неон"
+    if _has_any_token(tokens, ["movie-like", "filmic", "cinematic", "cinema", "кино"]):
+        return "кино"
+    if _has_any_token(tokens, ["photorealistic", "photoreal", "realistic", "realism", "naturalistic", "реализм", "реал"]):
+        return "реализм"
+    if _has_any_token(tokens, ["dreamy", "pastel", "gentle", "soft", "мягкий"]):
+        return "мягкий"
+    if _has_any_token(tokens, ["fashion glossy", "polished commercial", "glossy", "глянец"]):
+        return "глянец"
     return "стиль"
 
 
