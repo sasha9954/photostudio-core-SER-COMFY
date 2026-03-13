@@ -37,6 +37,7 @@ import {
   normalizeComfyScenePrompts,
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
+import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 
 
 // -------------------------
@@ -1605,6 +1606,9 @@ function RefNode({ id, data }) {
   const isReady = refStatus === "ready";
   const shortLabel = String(data?.refShortLabel || "").trim();
   const analysisError = String(data?.refAnalysisError || "").trim();
+  const detailsOpen = !!data?.refDetailsOpen;
+  const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
+  const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
 
   const openPicker = () => {
     if (!canAddMore) return;
@@ -1657,6 +1661,16 @@ function RefNode({ id, data }) {
         {isDraft ? <div className="clipSB_refWarningBadge">⚠ Нажмите «Добавить», чтобы подтвердить реф</div> : null}
         {isError ? <div className="clipSB_refErrorBadge">⚠ {analysisError || "Не удалось проанализировать реф"}</div> : null}
         {isReady && shortLabel ? <div className="clipSB_refReadyBadge">label: {shortLabel}</div> : null}
+        {canToggleDetails ? (
+          <button className="clipSB_refToggleDetails" onClick={() => data?.onToggleDetails?.(id)}>
+            {detailsOpen ? "Скрыть описание" : "Показать описание"}
+          </button>
+        ) : null}
+        {canToggleDetails && detailsOpen ? (
+          <div className="clipSB_refDetailsBox">
+            {detailsLines.map((line, idx) => <div key={`${id}-details-${idx}`} className="clipSB_refDetailsLine">{line}</div>)}
+          </div>
+        ) : null}
 
         <div style={{ display: "flex", gap: 8 }}>
           <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>
