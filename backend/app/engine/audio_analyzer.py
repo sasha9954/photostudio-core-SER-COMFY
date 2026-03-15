@@ -349,3 +349,95 @@ def analyze_audio(path: str, debug: bool = False) -> dict:
         "energyPeaks": energy_peaks,
         "sections": sections,
     }
+
+
+def derive_audio_semantic_profile(analysis: Dict[str, object] | None) -> Dict[str, object]:
+    """Build deterministic semantic hints from structural audio analysis (no ASR)."""
+    data = analysis if isinstance(analysis, dict) else {}
+    duration = float(data.get("duration") or 0.0)
+    bpm = float(data.get("bpm") or 0.0)
+    sections = data.get("sections") if isinstance(data.get("sections"), list) else []
+    vocal_phrases = data.get("vocalPhrases") if isinstance(data.get("vocalPhrases"), list) else []
+    pauses = data.get("pausePoints") if isinstance(data.get("pausePoints"), list) else []
+    energy_peaks = data.get("energyPeaks") if isinstance(data.get("energyPeaks"), list) else []
+
+    section_types = [str((section or {}).get("type") or "").strip().lower() for section in sections if isinstance(section, dict)]
+    chorus_count = sum(1 for sec in section_types if "chorus" in sec or "hook" in sec)
+    verse_count = sum(1 for sec in section_types if "verse" in sec)
+    intro_present = bool(section_types and "intro" in section_types[0])
+
+    hints: List[str] = []
+    summary_parts: List[str] = []
+
+    if intro_present:
+        hints.append("intro atmosphere")
+        summary_parts.append("intro atmosphere")
+    if chorus_count > 0:
+        hints.append("rising energy toward chorus")
+        summary_parts.append("rising energy toward chorus")
+    elif verse_count > 1:
+        hints.append("steady verse-driven progression")
+        summary_parts.append("steady verse-driven progression")
+
+    duration_min = max(duration / 60.0, 1e-6)
+    vocal_density = len(vocal_phrases) / duration_min
+    if vocal_density >= 28:
+        hints.append("dense vocal delivery")
+        summary_parts.append("dense vocal delivery with short gaps")
+    elif vocal_density >= 14:
+        hints.append("consistent vocal narration")
+        summary_parts.append("consistent vocal presence")
+    elif len(vocal_phrases) > 0:
+        hints.append("sparse vocal phrases")
+        summary_parts.append("spare vocal phrasing")
+    else:
+        hints.append("instrumental-forward structure")
+        summary_parts.append("instrumental-forward structure")
+
+    pause_density = len(pauses) / duration_min
+    if pause_density >= 10:
+        hints.append("frequent pauses between phrases")
+    elif len(pauses) > 0:
+        hints.append("measured phrase pauses")
+
+    peak_density = len(energy_peaks) / duration_min
+    if peak_density >= 10:
+        hints.append("repeated high-energy peaks")
+        summary_parts.append("repeated high-energy peaks")
+    elif peak_density >= 5:
+        hints.append("clear dynamic accents")
+        summary_parts.append("clear dynamic accents")
+    elif len(energy_peaks) > 0:
+        hints.append("restrained dynamic contour")
+        summary_parts.append("restrained dynamic contour")
+
+    if bpm >= 140:
+        hints.append("fast momentum pacing")
+    elif bpm >= 100:
+        hints.append("mid-tempo cinematic pacing")
+    elif bpm > 0:
+        hints.append("slow-burn pacing")
+
+    if section_types and section_types[-1] in {"intro", "verse"}:
+        hints.append("soft release ending")
+        summary_parts.append("softer release")
+    elif chorus_count > 0:
+        hints.append("strong chorus emphasis")
+
+    dedup_hints = list(dict.fromkeys([h for h in hints if h]))[:8]
+    summary = ", ".join(dict.fromkeys([p for p in summary_parts if p]))
+    if not summary:
+        summary = "audio-led structure with evolving intensity and cinematic pacing"
+
+    return {
+        "audioSemanticSummary": summary,
+        "audioSemanticHints": dedup_hints,
+        "semanticStats": {
+            "sectionCount": len(sections),
+            "vocalPhraseCount": len(vocal_phrases),
+            "pausePointCount": len(pauses),
+            "energyPeakCount": len(energy_peaks),
+            "bpm": _safe_float(bpm),
+            "duration": _safe_float(duration),
+        },
+    }
