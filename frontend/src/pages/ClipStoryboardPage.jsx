@@ -6021,7 +6021,12 @@ const hydrate = useCallback(() => {
                       <div className="clipSB_small">cameraLanguage: {String(comfyNode?.data?.plannerMeta?.worldBible?.cameraLanguage || '—')}</div>
                       <div className="clipSB_small">emotionalArc: {String(comfyNode?.data?.plannerMeta?.worldBible?.emotionalArc || '—')}</div>
                       <div className="clipSB_small">storySource: {String(comfyNode?.data?.plannerMeta?.storySource || comfyNode?.data?.comfyDebug?.analysis?.storySource || '—')}</div>
+                      <div className="clipSB_small">textSource: {String(comfyNode?.data?.plannerMeta?.textSource || comfyNode?.data?.comfyDebug?.analysis?.textSource || '—')}</div>
                       <div className="clipSB_small">exactLyricsAvailable: {String(Boolean(comfyNode?.data?.plannerMeta?.exactLyricsAvailable ?? comfyNode?.data?.comfyDebug?.analysis?.exactLyricsAvailable))}</div>
+                      <div className="clipSB_small">transcriptAvailable: {String(Boolean(comfyNode?.data?.plannerMeta?.transcriptAvailable ?? comfyNode?.data?.comfyDebug?.analysis?.transcriptAvailable))}</div>
+                      <div className="clipSB_small">usedSemanticFallback: {String(Boolean(comfyNode?.data?.plannerMeta?.usedSemanticFallback ?? comfyNode?.data?.comfyDebug?.analysis?.usedSemanticFallback))}</div>
+                      <div className="clipSB_small">semanticHintCount: {String(comfyNode?.data?.plannerMeta?.semanticHintCount ?? comfyNode?.data?.comfyDebug?.analysis?.semanticHintCount ?? '—')}</div>
+                      <div className="clipSB_small">audioSemanticSummary: {String(comfyNode?.data?.comfyDebug?.analysis?.audioSemanticSummary || '—')}</div>
                       <div className="clipSB_small">closeupSceneCount: {String(comfyNode?.data?.plannerMeta?.closeupSceneCount ?? comfyNode?.data?.comfyDebug?.analysis?.closeupSceneCount ?? '—')}</div>
                       <div className="clipSB_small">sceneTypeHistogram: {formatSceneTypeHistogram(comfyNode?.data?.plannerMeta?.sceneTypeHistogram || comfyNode?.data?.comfyDebug?.analysis?.sceneTypeHistogram)}</div>
                     </div>

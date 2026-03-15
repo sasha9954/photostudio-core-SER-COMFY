@@ -298,7 +298,16 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
         role: [item.model_dump(mode="json") for item in items]
         for role, items in (payload.refsByRole or {}).items()
     }
-    logger.info("[clip_comfy_plan] normalized-audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s", req.get("audioStoryMode"), bool(req.get("text")), bool(req.get("lyricsText")), bool(req.get("transcriptText")), bool(req.get("spokenTextHint")))
+    logger.info(
+        "[clip_comfy_plan] normalized-audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s semanticHints=%s semanticSummary=%s",
+        req.get("audioStoryMode"),
+        bool(req.get("text")),
+        bool(req.get("lyricsText")),
+        bool(req.get("transcriptText")),
+        bool(req.get("spokenTextHint")),
+        bool(req.get("audioSemanticHints")),
+        bool(req.get("audioSemanticSummary")),
+    )
     return run_comfy_plan(req)
 
 

@@ -10,6 +10,7 @@ import requests
 
 from app.core.static_paths import ASSETS_DIR
 from app.engine.audio_analyzer import analyze_audio
+from app.engine.audio_text_preprocessor import preprocess_audio_text
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 CAST_ROLES = ["character_1", "character_2", "character_3", "animal", "group"]
@@ -242,7 +243,7 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def _collect_text_inputs(payload: dict[str, Any]) -> tuple[str, str, str]:
+def _collect_text_inputs(payload: dict[str, Any]) -> tuple[str, str]:
     text_fields = [
         ("text", payload.get("text")),
         ("lyricsText", payload.get("lyricsText")),
@@ -251,18 +252,11 @@ def _collect_text_inputs(payload: dict[str, Any]) -> tuple[str, str, str]:
         ("lyrics", payload.get("lyrics")),
         ("transcript", payload.get("transcript")),
     ]
-    primary_text = ""
-    source = ""
     for key, value in text_fields:
         clean = _compact_text(value)
         if clean:
-            primary_text = clean
-            source = key
-            break
-
-    exact_lyrics = _compact_text(payload.get("lyricsText") or payload.get("lyrics"))
-    spoken_hint = _compact_text(payload.get("transcriptText") or payload.get("spokenTextHint") or payload.get("transcript"))
-    return primary_text, source, (exact_lyrics or spoken_hint)
+            return clean, key
+    return "", ""
 
 
 def _collect_semantic_hints(payload: dict[str, Any]) -> str:
@@ -443,12 +437,31 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
 
     boundaries = _extract_boundaries(duration, analysis)
     scenes: list[dict[str, Any]] = []
-    text, text_source, semantic_or_spoken_hint = _collect_text_inputs(payload)
+    text, text_source = _collect_text_inputs(payload)
     story_mode = str(payload.get("audioStoryMode") or "lyrics_music").strip() or "lyrics_music"
-    semantic_hint = _collect_semantic_hints(payload)
+    preprocess = preprocess_audio_text(payload=payload, analysis=analysis)
+
+    normalized_lyrics = _compact_text(preprocess.get("lyricsText"))
+    normalized_transcript = _compact_text(preprocess.get("transcriptText"))
+    spoken_hint = _compact_text(preprocess.get("spokenTextHint"))
+    semantic_summary = _compact_text(preprocess.get("audioSemanticSummary"))
+    semantic_hint = _collect_semantic_hints({
+        "audioSemanticHints": preprocess.get("audioSemanticHints"),
+        "audioSemanticSummary": semantic_summary,
+        "spokenTextHint": spoken_hint,
+    })
+
+    if not text:
+        text = normalized_lyrics or normalized_transcript or spoken_hint
+        if text:
+            text_source = str(preprocess.get("textSource") or "existing_text")
 
     text_beats = _split_text_beats(text, max(1, len(boundaries) - 1))
-    exact_lyrics_available = bool(_compact_text(payload.get("lyricsText") or payload.get("lyrics")))
+    exact_lyrics_available = bool(preprocess.get("exactLyricsAvailable"))
+    transcript_available = bool(normalized_transcript)
+    semantic_hint_count = len(preprocess.get("audioSemanticHints") or []) if isinstance(preprocess.get("audioSemanticHints"), list) else 0
+    used_semantic_fallback = False
+
     vocal_count = len(analysis.get("vocalPhrases") or [])
     story_source = "audio_driven"
     if text and vocal_count:
@@ -457,10 +470,9 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         story_source = "lyrics_hint" if text_source in {"lyricsText", "lyrics"} else "text_driven"
     elif semantic_hint:
         story_source = "semantic_fallback"
+        used_semantic_fallback = True
+        text_source = str(preprocess.get("textSource") or "semantic_fallback")
         text_beats = _split_text_beats(semantic_hint, max(1, len(boundaries) - 1))
-    elif semantic_or_spoken_hint:
-        story_source = "lyrics_hint"
-        text_beats = _split_text_beats(semantic_or_spoken_hint, max(1, len(boundaries) - 1))
 
     prev_scene_type: str | None = None
 
@@ -640,7 +652,11 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "timelineSource": payload.get("timelineSource") or "audio_structure",
             "narrativeSource": payload.get("narrativeSource") or story_source,
             "storySource": story_source,
+            "textSource": str(preprocess.get("textSource") or text_source or "none"),
             "exactLyricsAvailable": exact_lyrics_available,
+            "transcriptAvailable": transcript_available,
+            "usedSemanticFallback": used_semantic_fallback,
+            "semanticHintCount": semantic_hint_count,
             "textualBeatCount": len(text_beats),
             "closeupSceneCount": closeup_scene_count,
             "sceneTypeHistogram": scene_type_histogram,
@@ -660,7 +676,12 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 "pausePointCount": len(analysis.get("pausePoints") or []),
                 "phraseBoundaryCount": len(analysis.get("phraseBoundaries") or []),
                 "storySource": story_source,
+                "textSource": str(preprocess.get("textSource") or text_source or "none"),
                 "exactLyricsAvailable": exact_lyrics_available,
+                "transcriptAvailable": transcript_available,
+                "usedSemanticFallback": used_semantic_fallback,
+                "semanticHintCount": semantic_hint_count,
+                "audioSemanticSummary": semantic_summary,
                 "textualBeatCount": len(text_beats),
                 "closeupSceneCount": closeup_scene_count,
                 "sceneTypeHistogram": scene_type_histogram,

@@ -615,15 +615,27 @@ def run_comfy_plan(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_comfy_payload(payload)
     if normalized.get("mode") == "clip":
         logger.info(
-            "[COMFY PLAN][clip] audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s audio=%s",
+            "[COMFY PLAN][clip] audioStoryMode=%s text=%s lyricsText=%s transcriptText=%s spokenHint=%s semanticHints=%s semanticSummary=%s audio=%s",
             normalized.get("audioStoryMode"),
             bool(normalized.get("text")),
             bool(normalized.get("lyricsText")),
             bool(normalized.get("transcriptText")),
             bool(normalized.get("spokenTextHint")),
+            bool(normalized.get("audioSemanticHints")),
+            bool(normalized.get("audioSemanticSummary")),
             bool(normalized.get("audioUrl")),
         )
-        return plan_comfy_clip(normalized)
+        clip_result = plan_comfy_clip(normalized)
+        clip_meta = clip_result.get("planMeta") if isinstance(clip_result, dict) else {}
+        logger.info(
+            "[COMFY PLAN][clip] resolved textSource=%s exactLyricsAvailable=%s transcriptAvailable=%s usedSemanticFallback=%s semanticHintCount=%s",
+            (clip_meta or {}).get("textSource"),
+            (clip_meta or {}).get("exactLyricsAvailable"),
+            (clip_meta or {}).get("transcriptAvailable"),
+            (clip_meta or {}).get("usedSemanticFallback"),
+            (clip_meta or {}).get("semanticHintCount"),
+        )
+        return clip_result
 
     reference_profiles = build_reference_profiles(normalized.get("refsByRole") or {})
     normalized["referenceProfiles"] = reference_profiles
