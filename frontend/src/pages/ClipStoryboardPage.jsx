@@ -2331,6 +2331,19 @@ const comfyShowVideoSection = Boolean(
   || comfyHasActiveVideoJobForScene
 );
 
+useEffect(() => {
+  const activeSceneId = String(comfyActiveVideoJobRef.current?.sceneId || "").trim();
+  const hasActiveSceneJob = Boolean(
+    comfySelectedSceneId
+    && activeSceneId
+    && comfySelectedSceneId === activeSceneId
+  );
+  if (!hasActiveSceneJob) {
+    setComfyVideoLoading(false);
+  }
+  setComfyVideoError("");
+}, [comfySelectedSceneId]);
+
   const openLightbox = useCallback((url, sourceRect = null) => {
     if (lightboxCloseTimerRef.current) {
       clearTimeout(lightboxCloseTimerRef.current);
@@ -3039,6 +3052,13 @@ ${contextPrompt}`.trim(),
         isVideo: true,
       });
       const syncedVideoPrompt = await ensureComfyPromptSynced({ idx: comfySafeIndex, promptType: 'video' });
+      console.log('[COMFY VIDEO START]', {
+        sceneId,
+        provider: 'comfy_remote',
+        imageUrl: String(comfySelectedScene.imageUrl || ''),
+        hasExistingVideo: Boolean(String(comfySelectedScene.videoUrl || '').trim()),
+        hasActiveSceneJob: comfyHasActiveVideoJobForScene,
+      });
       const out = await fetchJson('/api/clip/video/start', {
         method: 'POST',
         body: {
@@ -3086,12 +3106,16 @@ ${contextPrompt}`.trim(),
       setComfyVideoError(String(e?.message || e));
       setComfyVideoLoading(false);
     }
-  }, [comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, startComfyVideoPolling, updateComfyScene]);
+  }, [comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyDeleteVideo = useCallback(() => {
     setComfyVideoError('');
+    if (String(comfyActiveVideoJobRef.current?.sceneId || '') === String(comfySelectedScene?.sceneId || '')) {
+      clearActiveComfyVideoJob();
+    }
+    setComfyVideoLoading(false);
     updateComfyScene(comfySafeIndex, { videoUrl: '' });
-  }, [comfySafeIndex, updateComfyScene]);
+  }, [clearActiveComfyVideoJob, comfySafeIndex, comfySelectedScene?.sceneId, updateComfyScene]);
 
   const handleComfyImagePromptChange = useCallback((value) => {
     const nextRu = String(value || '');
@@ -6041,22 +6065,44 @@ const hydrate = useCallback(() => {
                               <button className="clipSB_btn clipSB_btnSecondary" style={{ marginTop: 8 }} onClick={async () => { try { await syncComfyPrompt({ idx: comfySafeIndex, promptType: 'video', force: true }); } catch (e) { console.error(e); } }}>Retry sync video</button>
                             ) : null}
                             <div className="clipSB_comfyActions">
-                              <button className="clipSB_btn" onClick={handleComfyGenerateVideo} disabled={!comfySelectedScene.imageUrl || comfyVideoLoading || comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncing}>{comfyVideoLoading ? 'Делаю...' : (comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncing ? 'Синхронизация...' : 'Сделать видео')}</button>
+                              <button
+                                className="clipSB_btn"
+                                onClick={handleComfyGenerateVideo}
+                                disabled={
+                                  !comfySelectedScene.imageUrl
+                                  || comfyVideoLoading
+                                  || comfyHasActiveVideoJobForScene
+                                  || Boolean(String(comfySelectedScene.videoUrl || '').trim())
+                                  || comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncing
+                                }
+                              >
+                                {(comfyVideoLoading || comfyHasActiveVideoJobForScene) ? 'Делаю...' : (comfySelectedScene.videoPromptSyncStatus === PROMPT_SYNC_STATUS.syncing ? 'Синхронизация...' : 'Сделать видео')}
+                              </button>
                               <button className="clipSB_btn clipSB_btnSecondary" onClick={handleComfyDeleteVideo} disabled={comfyVideoLoading}>Удалить видео</button>
                             </div>
                           </div>
                           <div className="clipSB_comfySplitCol">
                             <div className="clipSB_hint">Video preview / status</div>
-                            <div className="clipSB_comfyPreviewBox">
+                            <div className="clipSB_videoPreviewWrap">
                               {comfySelectedScene.videoUrl ? (
-                                <video className="clipSB_scenarioPreview" src={resolveAssetUrl(comfySelectedScene.videoUrl)} controls />
-                              ) : (comfyVideoLoading || comfyHasActiveVideoJobForScene) ? (
-                                <div className="clipSB_comfyPreviewEmpty">Генерация видео…</div>
+                                <video className="clipSB_videoPlayer" src={resolveAssetUrl(comfySelectedScene.videoUrl)} controls />
+                              ) : comfySelectedScene.imageUrl ? (
+                                <img
+                                  className="clipSB_videoPoster"
+                                  src={resolveAssetUrl(comfySelectedScene.imageUrl)}
+                                  alt={comfySelectedScene.title || 'video source preview'}
+                                />
                               ) : !comfySelectedScene.imageUrl ? (
                                 <div className="clipSB_comfyPreviewEmpty">Сначала создайте изображение для этой сцены</div>
                               ) : (
                                 <div className="clipSB_comfyPreviewEmpty">Видео ещё не создано</div>
                               )}
+
+                              {(comfyVideoLoading || comfyHasActiveVideoJobForScene) && comfySelectedScene.imageUrl && !comfySelectedScene.videoUrl ? (
+                                <div className="clipSB_videoOverlay">
+                                  <span className="clipSB_videoLoadingPulse">Генерация видео...</span>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
