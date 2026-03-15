@@ -236,10 +236,12 @@ def run_comfy_image_to_video(
     if upload_err or not uploaded_name:
         return None, f"upload_failed:{upload_err or 'unknown_upload_error'}"
 
+    effective_prompt = str(prompt or "").strip()
+
     patched_workflow, patch_err = _patch_workflow_inputs(
         workflow,
         image_name=uploaded_name,
-        prompt=str(prompt or "").strip(),
+        prompt=effective_prompt,
         width=int(width),
         height=int(height),
         length=int(length),
@@ -247,6 +249,19 @@ def run_comfy_image_to_video(
     )
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
+
+    print(
+        "[comfy_remote] patched workflow values",
+        {
+            "uploaded_name": uploaded_name,
+            "effective_prompt": effective_prompt,
+            "image": patched_workflow["269"]["inputs"]["image"],
+            "prompt": patched_workflow["267:266"]["inputs"]["value"],
+            "width": patched_workflow["267:257"]["inputs"]["value"],
+            "height": patched_workflow["267:258"]["inputs"]["value"],
+            "length": patched_workflow["267:225"]["inputs"]["value"],
+        },
+    )
 
     prompt_id, submit_err = submit_comfy_prompt(patched_workflow)
     if submit_err or not prompt_id:
