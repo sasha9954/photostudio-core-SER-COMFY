@@ -2469,6 +2469,17 @@ def _extract_semantic_whitelist(*, text: str, session_world_anchors: dict[str, s
     }
 
 
+def _tokenize_semantic(text: str) -> set[str]:
+    tokens = re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9]+", str(text or "").lower())
+    stopwords = {
+        "the", "and", "or", "in", "on", "at", "to", "of", "for", "with", "from", "into",
+        "same", "world", "location", "environment", "scene", "shot", "cinematic", "main",
+        "a", "an", "is", "are", "this", "that", "through", "over", "under", "by",
+        "и", "в", "на", "с", "по", "к", "у", "за", "для", "из", "под", "над", "как", "что",
+    }
+    return {t for t in tokens if len(t) > 2 and t not in stopwords}
+
+
 def _scene_semantic_guardrail(
     *,
     scene: dict,
@@ -2489,32 +2500,94 @@ def _scene_semantic_guardrail(
         str(scene.get("sceneNarrative") or ""),
     ]).lower()
 
+    concept_token_map: dict[str, tuple[str, ...]] = {
+        "sky": ("sky", "cloud", "horizon", "небо", "обла", "гориз"),
+        "night": ("night", "moon", "star", "ноч", "луна", "звезд"),
+        "wind": ("wind", "breeze", "ветер"),
+        "open_space": ("field", "distance", "wide landscape", "horizon", "поле", "даль", "простор"),
+        "emotion": ("emotion", "feeling", "lonely", "heart", "чувств", "одинок", "сердц"),
+        "light": ("light", "sun", "glow", "свет", "солн", "сия"),
+        "city": ("city", "street", "stage", "город", "улиц", "сцен"),
+        "nature": ("mountain", "forest", "sea", "water", "гор", "лес", "море", "вода"),
+    }
+    tech_terms = [
+        "robot", "android", "cyberpunk", "hologram", "computer", "terminal", "server", "processor",
+        "interface", "digital grid", "matrix", "virtual reality",
+    ]
+
     grounding_text = " ".join([
         (source_text or "").lower(),
         " ".join(str(v or "").lower() for v in (session_world_anchors or {}).values()),
         str(prop_anchor_label or "").lower(),
         " ".join((semantic_whitelist or {}).get("anchorTokens") or []),
     ])
+    source_text_l = (source_text or "").lower()
 
     found_ungrounded = [term for term in banned_terms if term in token_space and term not in grounding_text]
-    if not found_ungrounded:
+    fallback_reason: str | None = None
+    if found_ungrounded:
+        fallback_reason = "banned_object"
+
+    if fallback_reason is None:
+        scene_environment_tokens = _tokenize_semantic(str(scene.get("environment") or ""))
+        anchor_environment_tokens = _tokenize_semantic(
+            " ".join([
+                str((session_world_anchors or {}).get("location") or ""),
+                str((session_world_anchors or {}).get("style") or ""),
+            ])
+        )
+        if scene_environment_tokens and anchor_environment_tokens:
+            has_environment_overlap = any(
+                s == a or s.startswith(a) or a.startswith(s) or s in a or a in s
+                for s in scene_environment_tokens
+                for a in anchor_environment_tokens
+            )
+            if not has_environment_overlap:
+                fallback_reason = "ungrounded_environment"
+
+    if fallback_reason is None:
+        concepts = [str(c).strip().lower() for c in (semantic_whitelist or {}).get("concepts") or [] if str(c).strip()]
+        if concepts:
+            concept_grounded = False
+            for concept in concepts:
+                for cue in concept_token_map.get(concept, (concept,)):
+                    if cue and cue in token_space:
+                        concept_grounded = True
+                        break
+                if concept_grounded:
+                    break
+            if not concept_grounded:
+                fallback_reason = "domain_mismatch"
+
+    if fallback_reason is None:
+        scene_has_tech = any(term in token_space for term in tech_terms)
+        lyrics_has_tech_cues = any(
+            cue in source_text_l
+            for cue in [*tech_terms, "technology", "tech", "digital", "cyber", "computer", "robot"]
+        )
+        if scene_has_tech and not lyrics_has_tech_cues:
+            fallback_reason = "domain_mismatch"
+
+    if fallback_reason is None:
         return scene, False
 
     fallback_environment = str(session_world_anchors.get("location") or session_world_anchors.get("style") or "same main location with continuity")
-    fallback_narrative = f"The performer remains in the same story world ({fallback_environment}) to preserve lyrical continuity."
+    fallback_narrative = f"The scene stays in the same world location ({fallback_environment}) and continues the emotional moment from the lyrics."
     patched = dict(scene)
     patched["visualDescription"] = fallback_narrative
-    patched["reason"] = "Semantic fallback: keep the same location/world continuity when ungrounded objects are detected."
+    patched["reason"] = f"Semantic fallback ({fallback_reason}): keep location and emotional continuity from lyrics."
     patched["visualPrompt"] = f"cinematic shot in {fallback_environment}, consistent world continuity, no unrelated objects"
     patched["environment"] = fallback_environment
+    patched["semanticGuardrailTriggered"] = True
+    patched["semanticGuardrailReason"] = fallback_reason
     if not str(patched.get("sceneNarrative") or "").strip():
         patched["sceneNarrative"] = fallback_narrative
     if not str(patched.get("sceneGoal") or "").strip():
         patched["sceneGoal"] = "Maintain the same story world while advancing the lyric emotion"
     if not str(patched.get("characterAction") or "").strip():
-        patched["characterAction"] = "Performer continues emotional action in place"
+        patched["characterAction"] = "continues the emotional action introduced in the previous scene"
     if not str(patched.get("cameraMotion") or "").strip():
-        patched["cameraMotion"] = "Alternative angle in the same location"
+        patched["cameraMotion"] = "alternate cinematic angle in the same environment"
     return patched, True
 
 
