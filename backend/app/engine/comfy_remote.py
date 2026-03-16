@@ -119,7 +119,7 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
     if not isinstance(history_payload, dict):
         return None, "history_not_dict"
 
-    print("[COMFY REMOTE] history top-level keys", list(history_payload.keys()))
+    logger.info("[COMFY REMOTE] history top-level keys=%s", list(history_payload.keys()))
 
     def _extract_file_ref(candidate) -> str | None:
         if isinstance(candidate, str):
@@ -148,9 +148,9 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
         if not isinstance(outputs, dict):
             continue
 
-        print(f"[COMFY REMOTE] outputs keys for history '{history_key}'", list(outputs.keys()))
+        logger.info("[COMFY REMOTE] outputs keys history=%s keys=%s", history_key, list(outputs.keys()))
         if "75" in outputs:
-            print("[COMFY REMOTE] outputs['75']", outputs.get("75"))
+            logger.info("[COMFY REMOTE] outputs[75]=%s", outputs.get("75"))
 
         for node_id, node_output in outputs.items():
             if not isinstance(node_output, dict):
@@ -162,19 +162,12 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
                     for item in items:
                         file_ref = _extract_file_ref(item)
                         if file_ref:
-                            print("[COMFY REMOTE] matched output", {
-                                "node_id": node_id,
-                                "list_key": list_key,
-                                "file_ref": file_ref,
-                            })
+                            logger.info("[COMFY REMOTE] matched output node_id=%s list_key=%s file_ref=%s", node_id, list_key, file_ref)
                             return file_ref, None
 
             file_ref = _extract_file_ref(node_output)
             if file_ref:
-                print("[COMFY REMOTE] matched direct output", {
-                    "node_id": node_id,
-                    "file_ref": file_ref,
-                })
+                logger.info("[COMFY REMOTE] matched direct output node_id=%s file_ref=%s", node_id, file_ref)
                 return file_ref, None
 
     return None, "video_output_missing"
@@ -285,8 +278,8 @@ def run_comfy_image_to_video(
     if patch_err or not patched_workflow:
         return None, f"workflow_patch_failed:{patch_err or 'unknown_patch_error'}"
 
-    print(
-        "[COMFY REMOTE] patched workflow values",
+    logger.info(
+        "[COMFY REMOTE] patched workflow values %s",
         {
             "uploaded_name": uploaded_name,
             "effective_prompt": effective_prompt,
