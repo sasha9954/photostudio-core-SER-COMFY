@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     KIE_POLL_TIMEOUT_SEC: int = 300
 
     # Remote ComfyUI image-to-video
-    COMFY_BASE_URL: str = "http://192.168.0.138:8000"
+    COMFY_BASE_URL: str = "http://100.80.135.114:8000"
     COMFY_POLL_INTERVAL_SEC: int = 2
     COMFY_POLL_TIMEOUT_SEC: int = 600
     COMFY_IMAGE_VIDEO_WORKFLOW: str = "app/workflows/image-video-silent-directprompt.json"
@@ -74,3 +74,5 @@ logger.info(
     settings.GEMINI_VISION_MODEL,
     settings.GEMINI_IMAGE_MODEL,
 )
+
+logger.info("[CONFIG] COMFY_BASE_URL=%s", str(settings.COMFY_BASE_URL).rstrip("/"))

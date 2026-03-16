@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import json
 import time
 from pathlib import Path
@@ -10,6 +11,8 @@ import requests
 from requests import RequestException
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def load_workflow_json(path: str) -> dict:
@@ -37,6 +40,7 @@ def load_workflow_json(path: str) -> dict:
 
 def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
+    logger.info("[COMFY REMOTE] request upload url=%s", url)
     safe_name = str(filename or "source.jpg").strip() or "source.jpg"
 
     files = {
@@ -64,6 +68,7 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
 
 def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
+    logger.info("[COMFY REMOTE] request prompt url=%s", url)
     try:
         resp = requests.post(url, json={"prompt": workflow}, timeout=60)
         if resp.status_code >= 400:
@@ -92,6 +97,7 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
 
     while time.time() < deadline:
         url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history/{safe_prompt_id}"
+        logger.info("[COMFY REMOTE] request history url=%s", url)
         try:
             resp = requests.get(url, timeout=30)
             if resp.status_code >= 400:
