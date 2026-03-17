@@ -2151,6 +2151,9 @@ export default function ClipStoryboardPage() {
   const comfyVideoJobsBySceneRef = useRef(new Map());
   const comfyPromptSyncTimersRef = useRef(new Map());
   const comfyPromptSyncInFlightRef = useRef(new Map());
+  const renderTraceSnapshotRef = useRef(null);
+  const renderTraceLastLogRef = useRef({ ts: 0, signature: "" });
+  const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
 
   const summarizeComfyPayload = useCallback((payload) => {
@@ -2307,12 +2310,6 @@ useEffect(() => {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
-
-  console.log("[CLIP TRACE] PAGE RENDER", {
-    nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
-    edgesCount: Array.isArray(edges) ? edges.length : "unknown",
-    timestamp: Date.now()
-  });
 
   useEffect(() => {
     nodesCountRef.current = nodes.length;
@@ -2679,6 +2676,12 @@ const comfyShowVideoSection = Boolean(
     });
     stopScenarioVideoPolling(sceneId);
 
+    console.info("[CLIP VIDEO POLLING START]", {
+      sceneId,
+      jobId: String(startMeta.jobId || ""),
+      provider: String(startMeta.provider || ""),
+    });
+
     const scheduleScenarioPoll = (delayMs, reason) => {
       console.info("[VIDEO POLLING START]", {
         scope: "scenario",
@@ -2692,6 +2695,10 @@ const comfyShowVideoSection = Boolean(
 
     const tick = async () => {
       const currentMeta = scenarioVideoJobsBySceneRef.current.get(sceneId) || {};
+      console.info("[CLIP VIDEO POLLING TICK]", {
+        sceneId,
+        jobId: String(currentMeta?.jobId || ""),
+      });
       console.info("[VIDEO POLLING TICK]", {
         scope: "scenario",
         sceneId,
@@ -2779,6 +2786,13 @@ const comfyShowVideoSection = Boolean(
           videoStatus: status,
           videoJobId: settledMeta.jobId,
           videoError: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
+        });
+        console.info("[CLIP VIDEO STATUS APPLIED]", {
+          sceneId,
+          jobId: String(settledMeta?.jobId || ""),
+          status,
+          videoUrl: String(out?.videoUrl || ""),
+          error: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
         });
         console.info("[VIDEO STATUS APPLIED]", {
           scope: "scenario",
@@ -3072,6 +3086,12 @@ const comfyShowVideoSection = Boolean(
     }
     stopComfyVideoPolling(sceneId);
 
+    console.info("[CLIP VIDEO POLLING START]", {
+      sceneId,
+      jobId: String(startMeta.jobId || ""),
+      provider: String(startMeta.provider || ""),
+    });
+
     const scheduleComfyPoll = (delayMs, reason) => {
       console.info("[VIDEO POLLING START]", {
         scope: "comfy",
@@ -3087,6 +3107,10 @@ const comfyShowVideoSection = Boolean(
       try {
         const activeMeta = comfyVideoJobsBySceneRef.current.get(sceneId);
         if (!activeMeta?.jobId) return;
+        console.info("[CLIP VIDEO POLLING TICK]", {
+          sceneId,
+          jobId: String(activeMeta?.jobId || ""),
+        });
         console.info("[VIDEO POLLING TICK]", {
           scope: "comfy",
           sceneId,
@@ -3119,6 +3143,15 @@ const comfyShowVideoSection = Boolean(
             jobId: String(nextMeta?.jobId || ""),
             status,
             ok: !!out?.ok,
+          });
+          console.info("[CLIP VIDEO STATUS APPLIED]", {
+            sceneId,
+            jobId: String(nextMeta?.jobId || ""),
+            status,
+            videoUrl: String(out?.videoUrl || ""),
+            error: status === "error" || status === "stopped" || status === "not_found"
+              ? String(out?.error || out?.hint || "video_job_failed")
+              : "",
           });
         }
 
@@ -3468,11 +3501,33 @@ ${contextPrompt}`.trim(),
         jobId: String(out?.jobId || ""),
         providerJobId: String(out?.providerJobId || ""),
       });
+      console.info("[CLIP VIDEO START RESPONSE]", {
+        ok: !!out?.ok,
+        jobId: String(out?.jobId || ""),
+        provider: String(out?.provider || "comfy_remote"),
+        mode: String(out?.mode || ""),
+        sceneId,
+        status: String(out?.status || ""),
+        raw: out,
+      });
+      if (!out?.jobId) {
+        console.warn("[CLIP WARN] video start returned without jobId", {
+          sceneId,
+          provider: "comfy_remote",
+          raw: out,
+        });
+      }
 
       if (out?.ok && out?.jobId) {
+        console.info("[CLIP TRACE] state update", {
+          source: "handleComfyGenerateVideo:updateComfyScene:queued",
+          sceneId,
+          jobId: String(out.jobId || ""),
+        });
         startComfyVideoPolling({
           jobId: String(out.jobId),
           providerJobId: String(out.providerJobId || ''),
+          provider: String(out?.provider || "comfy_remote"),
           sceneId,
           status: 'queued',
         });
@@ -3844,12 +3899,34 @@ Aspect ratio: ${imageFormat}`,
         jobId: String(out?.jobId || ""),
         providerJobId: String(out?.providerJobId || ""),
       });
+      console.info("[CLIP VIDEO START RESPONSE]", {
+        ok: !!out?.ok,
+        jobId: String(out?.jobId || ""),
+        provider: String(out?.provider || effectiveVideoProvider),
+        mode: String(out?.mode || effectiveRenderMode),
+        sceneId,
+        status: String(out?.status || ""),
+        raw: out,
+      });
+      if (!out?.jobId) {
+        console.warn("[CLIP WARN] video start returned without jobId", {
+          sceneId,
+          provider: effectiveVideoProvider,
+          raw: out,
+        });
+      }
 
       if (out?.ok && out?.jobId) {
+        console.info("[CLIP TRACE] state update", {
+          source: "handleScenarioGenerateVideo:updateScenarioScene:queued",
+          sceneId,
+          jobId: String(out.jobId || ""),
+        });
         updateScenarioScene(scenarioEditor.selected, { videoJobId: String(out.jobId), videoStatus: "queued", videoError: "" });
         startScenarioVideoPolling({
           jobId: String(out.jobId),
           providerJobId: String(out.providerJobId || ""),
+          provider: String(out?.provider || effectiveVideoProvider),
           sceneId,
           status: "queued",
         });
@@ -3978,6 +4055,42 @@ Aspect ratio: ${imageFormat}`,
   }, [globalAudioUrlRaw, storyboardScenesForAssembly]);
 
   const assemblyPayloadSignature = useMemo(() => buildAssemblyPayloadSignature(assemblyPayload), [assemblyPayload]);
+
+  useEffect(() => {
+    const prev = renderTraceSnapshotRef.current;
+    const changed = [];
+    if (!prev || prev.nodesRef !== nodes) changed.push("nodes");
+    if (!prev || prev.edgesRef !== edges) changed.push("edges");
+    if (!prev || prev.assemblyResult !== assemblyResult) changed.push("assemblyResult");
+    if (!prev || prev.assemblyBuildState !== assemblyBuildState) changed.push("assemblyBuildState");
+    if (!prev || prev.assemblyPayloadSignature !== assemblyPayloadSignature) changed.push("assemblyPayloadSignature");
+    if (!prev || prev.lastSavedAt !== lastSavedAt) changed.push("lastSavedAt");
+    if (!prev || prev.isAssemblyStale !== isAssemblyStale) changed.push("isAssemblyStale");
+    if (!prev || prev.scenarioScenesRef !== scenarioScenes) changed.push("scenarioScenes");
+    if (!prev || prev.comfyScenesRef !== comfyScenes) changed.push("comfyScenes");
+
+    renderTraceSnapshotRef.current = {
+      nodesRef: nodes,
+      edgesRef: edges,
+      assemblyResult,
+      assemblyBuildState,
+      assemblyPayloadSignature,
+      lastSavedAt,
+      isAssemblyStale,
+      scenarioScenesRef: scenarioScenes,
+      comfyScenesRef: comfyScenes,
+    };
+
+    if (!changed.length) return;
+
+    const now = Date.now();
+    const signature = changed.join("|");
+    const last = renderTraceLastLogRef.current;
+    if ((now - last.ts) >= 500 || last.signature !== signature) {
+      console.debug("[CLIP TRACE] render causes", { changed });
+      renderTraceLastLogRef.current = { ts: now, signature };
+    }
+  });
 
   const lastAssemblyPayloadSignatureRef = useRef("");
   const assemblyAbortControllerRef = useRef(null);
@@ -5431,7 +5544,12 @@ return base;
 
   useEffect(() => {
     const changed = bindHandlersRef.current !== bindHandlers;
-    console.info(`[CLIP TRACE] bindHandlers ref check changed=${changed}`);
+    const now = Date.now();
+    const last = bindHandlersTraceRef.current;
+    if ((now - last.ts) >= 500 || last.changed !== changed) {
+      console.debug(`[CLIP TRACE] bindHandlers ref check changed=${changed}`);
+      bindHandlersTraceRef.current = { ts: now, changed };
+    }
     bindHandlersRef.current = bindHandlers;
   }, [bindHandlers]);
 
