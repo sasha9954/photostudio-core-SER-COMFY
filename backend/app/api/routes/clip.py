@@ -5981,6 +5981,7 @@ def _normalize_clip_video_response_payload(response_obj) -> tuple[dict, int]:
 
 
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
+    print(f"[CLIP VIDEO JOB WORKER] start jobId={job_id}")
     with CLIP_VIDEO_JOBS_LOCK:
         job = CLIP_VIDEO_JOBS.get(job_id)
         if not job:
@@ -5991,13 +5992,18 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         response_obj = clip_video(payload)
         out, status_code = _normalize_clip_video_response_payload(response_obj)
         status = "done" if status_code < 400 and bool(out.get("ok")) else "error"
+        video_url = str(out.get("videoUrl") or "").strip()
+        provider_name = str(out.get("provider") or payload.provider or "").strip().lower()
+        if video_url:
+            print(f"[CLIP VIDEO JOB WORKER] result_received jobId={job_id} video_url={video_url}")
         with CLIP_VIDEO_JOBS_LOCK:
             job = CLIP_VIDEO_JOBS.get(job_id)
             if not job:
                 return
             job.update({
                 "status": status,
-                "videoUrl": str(out.get("videoUrl") or "").strip(),
+                "videoUrl": video_url or None,
+                "provider": provider_name or str(job.get("provider") or payload.provider or "").strip().lower() or None,
                 "mode": str(out.get("mode") or "").strip(),
                 "model": str(out.get("model") or "").strip(),
                 "providerJobId": str(out.get("taskId") or job.get("providerJobId") or "").strip(),
@@ -6005,24 +6011,30 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "providerDurationSec": out.get("providerDurationSec"),
                 "error": None if status == "done" else str(out.get("details") or out.get("hint") or out.get("code") or f"HTTP_{status_code}"),
                 "updatedAt": time.time(),
+                "completedAt": time.time() if status == "done" else None,
             })
+        if status == "done":
+            print(f"[CLIP VIDEO JOB WORKER] status_done jobId={job_id}")
     except Exception as exc:
+        print(f"[CLIP VIDEO JOB WORKER] failed jobId={job_id} error={str(exc)[:300]}")
         with CLIP_VIDEO_JOBS_LOCK:
             job = CLIP_VIDEO_JOBS.get(job_id)
             if not job:
                 return
-            job.update({"status": "error", "error": str(exc), "updatedAt": time.time()})
+            job.update({"status": "error", "error": str(exc), "updatedAt": time.time(), "completedAt": None})
 
 
 @router.post("/clip/video/start")
 def clip_video_start(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
+    provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     job_id = uuid4().hex
     with CLIP_VIDEO_JOBS_LOCK:
         CLIP_VIDEO_JOBS[job_id] = {
             "ok": True,
             "jobId": job_id,
             "sceneId": scene_id,
+            "provider": provider,
             "providerJobId": None,
             "status": "queued",
             "videoUrl": None,
@@ -6032,7 +6044,10 @@ def clip_video_start(payload: ClipVideoIn):
             "providerDurationSec": None,
             "error": None,
             "updatedAt": time.time(),
+            "completedAt": None,
         }
+
+    print(f"[CLIP VIDEO JOB] created jobId={job_id} sceneId={scene_id} provider={provider}")
 
     threading.Thread(target=_run_clip_video_job, args=(job_id, payload), daemon=True).start()
     return {"ok": True, "jobId": job_id, "sceneId": scene_id, "status": "queued"}
@@ -6044,7 +6059,12 @@ def clip_video_status(job_id: str):
     with CLIP_VIDEO_JOBS_LOCK:
         job = CLIP_VIDEO_JOBS.get(safe_job_id)
         if not job:
+            print(f"[CLIP VIDEO JOB STATUS] read jobId={safe_job_id} status=not_found hasVideoUrl=False")
             return {"ok": False, "status": "not_found", "code": "VIDEO_JOB_NOT_FOUND", "hint": "job_id_not_found_or_expired"}
+        print(
+            "[CLIP VIDEO JOB STATUS] "
+            f"read jobId={safe_job_id} status={job.get('status')} hasVideoUrl={bool(str(job.get('videoUrl') or '').strip())}"
+        )
         return {"ok": True, **job}
 
 
