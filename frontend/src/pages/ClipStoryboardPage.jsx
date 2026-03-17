@@ -4265,9 +4265,21 @@ Aspect ratio: ${imageFormat}`,
 
     if (!invalidBrainIds.length) return;
 
+    let hasNodeChanges = false;
+
     setNodes((prev) => {
+      let changed = false;
       const next = prev.map((n) => {
         if (!invalidBrainIds.includes(n.id)) return n;
+
+        const brainNeedsUpdate = n?.data?.scenePlan !== null
+          || n?.data?.lastPlanMeta !== null
+          || n?.data?.plannerInputSignature !== null
+          || n?.data?.plannerState !== "stale";
+
+        if (!brainNeedsUpdate) return n;
+
+        changed = true;
         return {
           ...n,
           data: {
@@ -4281,19 +4293,30 @@ Aspect ratio: ${imageFormat}`,
       });
 
       const staleTargets = edgesNow.filter((e) => invalidBrainIds.includes(e.source)).map((e) => e.target);
-      return next.map((n) => {
+      const withStaleTargets = next.map((n) => {
         if (!staleTargets.includes(n.id)) return n;
         if (n.type === "storyboardNode" || n.type === "resultsNode") {
+          if (n?.data?.isStale === true) return n;
+          changed = true;
           return { ...n, data: { ...n.data, isStale: true } };
         }
         if (n.type === "assemblyNode") {
+          if (n?.data?.isStale === true) return n;
+          changed = true;
           return { ...n, data: { ...n.data, isStale: true } };
         }
         return n;
       });
+
+      if (!changed) return prev;
+      hasNodeChanges = true;
+      return withStaleTargets;
     });
-    setIsAssemblyStale(true);
-  }, [nodes, edges, setNodes]);
+
+    if (hasNodeChanges || !isAssemblyStale) {
+      setIsAssemblyStale(true);
+    }
+  }, [nodes, edges, isAssemblyStale, setNodes]);
 
 
   const removeNode = useCallback((nodeId) => {
