@@ -324,6 +324,18 @@ function safeDel(key) {
   }
 }
 
+function areNodesMeaningfullyEqual(prevNodes, nextNodes) {
+  if (prevNodes === nextNodes) return true;
+  if (!Array.isArray(prevNodes) || !Array.isArray(nextNodes)) return false;
+  if (prevNodes.length !== nextNodes.length) return false;
+  for (let i = 0; i < prevNodes.length; i += 1) {
+    const prevSnapshot = JSON.stringify(stripFunctionsDeep(prevNodes[i]));
+    const nextSnapshot = JSON.stringify(stripFunctionsDeep(nextNodes[i]));
+    if (prevSnapshot !== nextSnapshot) return false;
+  }
+  return true;
+}
+
 function fmtTime(seconds) {
   const s = Number(seconds);
   if (!Number.isFinite(s)) return "—";
@@ -5360,8 +5372,25 @@ return base;
     ]
   );
 
+  const bindHandlersRef = useRef(bindHandlers);
+
   useEffect(() => {
-    setNodes((prev) => bindHandlers(prev));
+    const changed = bindHandlersRef.current !== bindHandlers;
+    console.info(`[CLIP TRACE] bindHandlers ref check changed=${changed}`);
+    bindHandlersRef.current = bindHandlers;
+  }, [bindHandlers]);
+
+  useEffect(() => {
+    setNodes((prev) => {
+      const edgesCount = Array.isArray(edges) ? edges.length : 0;
+      const nodesBefore = Array.isArray(prev) ? prev.length : 0;
+      console.info(`[CLIP TRACE] bindHandlers effect run edges=${edgesCount} nodesBefore=${nodesBefore}`);
+      const next = bindHandlers(prev);
+      if (areNodesMeaningfullyEqual(prev, next)) {
+        return prev;
+      }
+      return next;
+    });
   }, [edges, bindHandlers, setNodes]);
 
 const hydrate = useCallback((source = "unknown") => {
