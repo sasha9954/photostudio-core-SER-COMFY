@@ -66,6 +66,8 @@ const PORT_COLORS = {
   brain: "#c480ff",
 };
 
+const CLIP_TRACE_PERSIST = false;
+
 function portColor(key) {
   return PORT_COLORS[key] || "#8c8c8c";
 }
@@ -3186,6 +3188,19 @@ const comfyShowVideoSection = Boolean(
       || hint.includes("job_id_not_found_or_expired");
   }, []);
 
+  const comfyScenesRef = useRef(comfyScenes);
+  useEffect(() => {
+    comfyScenesRef.current = comfyScenes;
+  }, [comfyScenes]);
+
+  const restoredComfyVideoJobsRef = useRef(new Set());
+
+  const findComfySceneIndexById = useCallback((sceneId = "") => {
+    const normalizedSceneId = String(sceneId || "").trim();
+    if (!normalizedSceneId) return -1;
+    return comfyScenesRef.current.findIndex((x) => String(x?.sceneId || "") === normalizedSceneId);
+  }, []);
+
   const startComfyVideoPolling = useCallback((jobMeta) => {
     if (!jobMeta?.jobId || !jobMeta?.sceneId) return;
     const sceneId = String(jobMeta.sceneId || "").trim();
@@ -3197,6 +3212,15 @@ const comfyShowVideoSection = Boolean(
       status: String(startMeta?.status || ""),
     });
     const prevMeta = comfyVideoJobsBySceneRef.current.get(sceneId);
+    const existingTimerId = comfyVideoPollTimersRef.current.get(sceneId);
+    if (prevMeta?.jobId && String(prevMeta.jobId) === String(startMeta.jobId) && existingTimerId) {
+      console.info("[CLIP TRACE] polling start skipped same active job", {
+        scope: "comfy",
+        sceneId,
+        jobId: String(startMeta.jobId || ""),
+      });
+      return;
+    }
     if (prevMeta?.jobId && String(prevMeta.jobId) !== String(startMeta.jobId)) {
       console.info("[CLIP TRACE] active job replaced", {
         scope: "comfy",
@@ -3207,7 +3231,7 @@ const comfyShowVideoSection = Boolean(
     }
     comfyVideoJobsBySceneRef.current.set(sceneId, startMeta);
     persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
-    const initialIdx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
+    const initialIdx = findComfySceneIndexById(sceneId);
     if (initialIdx >= 0) {
       updateComfyScene(initialIdx, { videoJobId: startMeta.jobId, videoStatus: startMeta.status, videoError: "" });
     }
@@ -3264,7 +3288,7 @@ const comfyShowVideoSection = Boolean(
         comfyVideoJobsBySceneRef.current.set(sceneId, nextMeta);
         persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
 
-        const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
+        const idx = findComfySceneIndexById(sceneId);
         if (idx >= 0) {
           updateComfyScene(idx, {
             videoStatus: status,
@@ -3344,7 +3368,7 @@ const comfyShowVideoSection = Boolean(
 
         scheduleComfyPoll(1800, "status_running");
       } catch (e) {
-        const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === sceneId);
+        const idx = findComfySceneIndexById(sceneId);
         const errMsg = String(e?.message || e || "").toLowerCase();
         if (errMsg.includes("job_id_not_found_or_expired")) {
           const activeMetaNow = comfyVideoJobsBySceneRef.current.get(sceneId) || {};
@@ -3374,11 +3398,14 @@ const comfyShowVideoSection = Boolean(
       sceneId,
       jobId: String(startMeta.jobId || ""),
     });
-  }, [clearActiveComfyVideoJob, comfyScenes, isComfyVideoJobNotFound, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
+  }, [clearActiveComfyVideoJob, findComfySceneIndexById, isComfyVideoJobNotFound, persistActiveComfyVideoJob, stopComfyVideoPolling, updateComfyScene]);
 
   useEffect(() => () => stopComfyVideoPolling(), [stopComfyVideoPolling]);
 
   useEffect(() => {
+    const restoreToken = `${accountKey}:${COMFY_VIDEO_JOB_STORE_KEY}`;
+    if (restoredComfyVideoJobsRef.current.has(restoreToken)) return;
+    restoredComfyVideoJobsRef.current.add(restoreToken);
     const raw = safeGet(COMFY_VIDEO_JOB_STORE_KEY);
     if (!raw) return;
     try {
@@ -3396,8 +3423,8 @@ const comfyShowVideoSection = Boolean(
       entries.forEach(([sceneId, meta]) => {
         if (!meta?.jobId) return;
         const normalizedSceneId = String(sceneId || "");
-        const idx = comfyScenes.findIndex((x) => String(x?.sceneId || "") === normalizedSceneId);
-        const sceneNow = idx >= 0 ? comfyScenes[idx] : null;
+        const idx = findComfySceneIndexById(normalizedSceneId);
+        const sceneNow = idx >= 0 ? comfyScenesRef.current[idx] : null;
         const sceneVideoUrl = String(sceneNow?.videoUrl || "").trim();
         const sceneVideoJobId = String(sceneNow?.videoJobId || "").trim();
         const persistedJobId = String(meta?.jobId || "").trim();
@@ -3421,7 +3448,7 @@ const comfyShowVideoSection = Boolean(
     } catch {
       safeDel(COMFY_VIDEO_JOB_STORE_KEY);
     }
-  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, comfyScenes, persistActiveComfyVideoJob, startComfyVideoPolling]);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, accountKey, findComfySceneIndexById, persistActiveComfyVideoJob, startComfyVideoPolling]);
 
   const handleComfyGenerateImage = useCallback(async () => {
     if (!comfySelectedScene) return;
@@ -3702,6 +3729,56 @@ ${contextPrompt}`.trim(),
             raw: out,
           });
         }
+        const startedMeta = {
+          jobId: String(out.jobId),
+          providerJobId: String(out.providerJobId || ''),
+          provider: String(out?.provider || "comfy_remote"),
+          sceneId,
+          status: 'queued',
+        };
+        comfyVideoJobsBySceneRef.current.set(sceneId, startedMeta);
+        persistActiveComfyVideoJob(Object.fromEntries(comfyVideoJobsBySceneRef.current.entries()));
+        updateComfyScene(comfySafeIndex, { videoJobId: startedMeta.jobId, videoStatus: 'queued', videoError: '' });
+
+        let shouldStartPolling = true;
+        try {
+          const immediateOut = await fetchJson(`/api/clip/video/status/${encodeURIComponent(startedMeta.jobId)}`, { method: "GET" });
+          const immediateStatus = String(immediateOut?.status || "").toLowerCase() || "running";
+          if (immediateStatus === "done" && String(immediateOut?.videoUrl || "").trim()) {
+            updateComfyScene(comfySafeIndex, {
+              videoUrl: String(immediateOut.videoUrl || ''),
+              videoPanelOpen: true,
+              videoStatus: 'done',
+              videoError: '',
+              videoJobId: startedMeta.jobId,
+            });
+            clearActiveComfyVideoJob(sceneId, { status: "done", jobId: startedMeta.jobId });
+            shouldStartPolling = false;
+          } else if (immediateStatus === "error" || immediateStatus === "stopped" || immediateStatus === "not_found") {
+            updateComfyScene(comfySafeIndex, {
+              videoStatus: immediateStatus,
+              videoError: String(immediateOut?.error || immediateOut?.hint || "video_job_failed"),
+              videoJobId: startedMeta.jobId,
+            });
+            clearActiveComfyVideoJob(sceneId, { status: immediateStatus, jobId: startedMeta.jobId });
+            shouldStartPolling = false;
+          } else {
+            updateComfyScene(comfySafeIndex, {
+              videoStatus: immediateStatus,
+              videoError: '',
+              videoJobId: startedMeta.jobId,
+            });
+          }
+        } catch (immediateStatusError) {
+          console.warn("[CLIP WARN] immediate comfy video status check failed, fallback to polling", {
+            sceneId,
+            jobId: startedMeta.jobId,
+            error: String(immediateStatusError?.message || immediateStatusError || ""),
+          });
+        }
+
+        if (!shouldStartPolling) return;
+
         console.info("[CLIP TRACE] state update", {
           source: "handleComfyGenerateVideo:updateComfyScene:queued",
           sceneId,
@@ -3713,11 +3790,7 @@ ${contextPrompt}`.trim(),
           out,
         });
         startComfyVideoPolling({
-          jobId: String(out.jobId),
-          providerJobId: String(out.providerJobId || ''),
-          provider: String(out?.provider || "comfy_remote"),
-          sceneId,
-          status: 'queued',
+          ...startedMeta,
         });
         return;
       }
@@ -3742,7 +3815,7 @@ ${contextPrompt}`.trim(),
       console.error(e);
       updateComfyScene(comfySafeIndex, { videoStatus: 'error', videoError: String(e?.message || e) });
     }
-  }, [comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, startComfyVideoPolling, updateComfyScene]);
+  }, [clearActiveComfyVideoJob, comfyHasActiveVideoJobForScene, comfyNode?.data?.mode, comfyNode?.data?.stylePreset, comfySafeIndex, comfySelectedScene, ensureComfyPromptSynced, persistActiveComfyVideoJob, startComfyVideoPolling, updateComfyScene]);
 
   const handleComfyDeleteVideo = useCallback(() => {
     const selectedSceneId = String(comfySelectedScene?.sceneId || '').trim();
@@ -6224,23 +6297,29 @@ const hydrate = useCallback((source = "unknown") => {
       if (prevDepsSnapshot.assemblyPayloadSignature !== depsSnapshot.assemblyPayloadSignature) changedDeps.push("assemblyPayloadSignature");
       if (prevDepsSnapshot.scenarioScenesRef !== depsSnapshot.scenarioScenesRef) changedDeps.push("scenarioScenes");
       if (prevDepsSnapshot.comfyScenesRef !== depsSnapshot.comfyScenesRef) changedDeps.push("comfyScenes");
-      console.info("[CLIP TRACE] persist deps changed", {
-        changedDeps,
-        changedDepsCount: changedDeps.length,
-      });
+      if (CLIP_TRACE_PERSIST) {
+        console.info("[CLIP TRACE] persist deps changed", {
+          changedDeps,
+          changedDepsCount: changedDeps.length,
+        });
+      }
     } else {
-      console.info("[CLIP TRACE] persist deps changed", {
-        changedDeps: ["initial_run"],
-        changedDepsCount: 1,
-      });
+      if (CLIP_TRACE_PERSIST) {
+        console.info("[CLIP TRACE] persist deps changed", {
+          changedDeps: ["initial_run"],
+          changedDepsCount: 1,
+        });
+      }
     }
     persistDepsSnapshotRef.current = depsSnapshot;
 
-    console.log("[CLIP TRACE] persist effect triggered", {
-      nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
-      edgesCount: Array.isArray(edges) ? edges.length : "unknown",
-      timestamp: Date.now()
-    });
+    if (CLIP_TRACE_PERSIST) {
+      console.log("[CLIP TRACE] persist effect triggered", {
+        nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
+        edgesCount: Array.isArray(edges) ? edges.length : "unknown",
+        timestamp: Date.now()
+      });
+    }
 
     if (!didHydrateRef.current) {
       console.info("[CLIP TRACE] persist skipped reason=not_hydrated");
@@ -6277,13 +6356,17 @@ const hydrate = useCallback((source = "unknown") => {
     };
     const comparablePayloadString = JSON.stringify(payloadComparable);
     const isSamePayload = comparablePayloadString === lastPersistedPayloadRef.current;
-    console.info("[CLIP TRACE] persist payload compare", {
-      isSamePayload,
-      payloadLength: comparablePayloadString.length,
-      previousPayloadLength: lastPersistedPayloadRef.current.length,
-    });
+    if (CLIP_TRACE_PERSIST) {
+      console.info("[CLIP TRACE] persist payload compare", {
+        isSamePayload,
+        payloadLength: comparablePayloadString.length,
+        previousPayloadLength: lastPersistedPayloadRef.current.length,
+      });
+    }
     if (isSamePayload) {
-      console.info("[CLIP TRACE] persist skipped same payload");
+      if (CLIP_TRACE_PERSIST) {
+        console.info("[CLIP TRACE] persist skipped same payload");
+      }
       return;
     }
 
