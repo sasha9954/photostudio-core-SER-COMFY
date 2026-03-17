@@ -2120,6 +2120,8 @@ export default function ClipStoryboardPage() {
 
   const didHydrateRef = useRef(false);
   const isHydratingRef = useRef(true);
+  const hydrateInFlightRef = useRef(false);
+  const nodesCountRef = useRef(0);
   const parseTokenRef = useRef(0);
   const parseControllerRef = useRef(null);
   const parseTimeoutRef = useRef(null);
@@ -2293,6 +2295,10 @@ useEffect(() => {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
+
+  useEffect(() => {
+    nodesCountRef.current = nodes.length;
+  }, [nodes.length]);
 
 const scenarioNode = useMemo(() => {
   if (scenarioEditor.nodeId) return nodes.find((n) => n.id === scenarioEditor.nodeId) || null;
@@ -5358,14 +5364,21 @@ return base;
     setNodes((prev) => bindHandlers(prev));
   }, [edges, bindHandlers, setNodes]);
 
-const hydrate = useCallback(() => {
+const hydrate = useCallback((source = "unknown") => {
+    if (hydrateInFlightRef.current) {
+      console.warn(`[CLIP WARN] hydrate re-entry blocked source=${source}`);
+      return;
+    }
+    hydrateInFlightRef.current = true;
+
     // IMPORTANT: we always have an accountKey (fallback to "guest"), so persistence works even before auth init.
-    console.info("[CLIP STORAGE] hydrate start", {
+    console.info("[CLIP TRACE] hydrate start source=" + source, {
       accountKey,
       STORE_KEY,
       VIDEO_JOB_STORE_KEY,
       COMFY_VIDEO_JOB_STORE_KEY,
       storageVersion: storageVersionRef.current,
+      nodesBefore: nodesCountRef.current,
     });
 
     if (isClipHydrationBlocked()) {
@@ -5377,6 +5390,7 @@ const hydrate = useCallback(() => {
       });
       // Keep persist effects active when hydrate is intentionally skipped.
       didHydrateRef.current = true;
+      hydrateInFlightRef.current = false;
       return;
     }
 
@@ -5415,6 +5429,7 @@ const hydrate = useCallback(() => {
       }
     }
     if (!raw) {
+      console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${defaultNodes.length} edgesAfter=${defaultEdges.length}`);
       setNodes(bindHandlers(defaultNodes));
       setEdges(defaultEdges);
       setAssemblyResult(null);
@@ -5434,6 +5449,7 @@ const hydrate = useCallback(() => {
       setTimeout(() => {
         didHydrateRef.current = true;
         isHydratingRef.current = false;
+        hydrateInFlightRef.current = false;
       }, 0);
       return;
     }
@@ -5605,6 +5621,7 @@ const hydrate = useCallback(() => {
         comfyStats,
       });
 
+      console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${hydratedNodes.length} edgesAfter=${hydratedEdges.length}`);
       setNodes(bindHandlers(hydratedNodes));
       setEdges(hydratedEdges);
 
@@ -5645,6 +5662,7 @@ const hydrate = useCallback(() => {
       if (String(err?.message || "") === "stale_payload") {
         clearClipStoryboardStorageForCurrentAccount("hydrate_stale_payload");
       }
+      console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${defaultNodes.length} edgesAfter=${defaultEdges.length}`);
       setNodes(bindHandlers(defaultNodes));
       setEdges(defaultEdges);
       setAssemblyResult(null);
@@ -5665,6 +5683,7 @@ const hydrate = useCallback(() => {
       setTimeout(() => {
         didHydrateRef.current = true;
         isHydratingRef.current = false;
+        hydrateInFlightRef.current = false;
       }, 0);
     }
   }, [
@@ -5733,7 +5752,7 @@ const hydrate = useCallback(() => {
 
   // hydrate on account change
   useEffect(() => {
-    hydrate();
+    hydrate("effect:account-change");
   }, [hydrate]);
 
   useEffect(() => () => {
@@ -5757,7 +5776,7 @@ const hydrate = useCallback(() => {
       }
       // wait a tick so AuthContext can update ps:lastUserId/ps:lastEmail
       setTimeout(() => {
-        hydrate();
+        hydrate("event:sessionChanged");
       }, 0);
     };
     window.addEventListener("ps:sessionChanged", onSessionChanged);
@@ -5776,8 +5795,14 @@ const hydrate = useCallback(() => {
 
   // persist
   useEffect(() => {
-    if (!didHydrateRef.current) return;
-    if (isHydratingRef.current) return;
+    if (!didHydrateRef.current) {
+      console.info("[CLIP TRACE] persist skipped reason=not_hydrated");
+      return;
+    }
+    if (isHydratingRef.current) {
+      console.info("[CLIP TRACE] persist skipped reason=hydrate_in_progress");
+      return;
+    }
 
     // strip handlers from data
     const serialNodes = serializeNodesForStorage(nodes);
@@ -5805,6 +5830,13 @@ const hydrate = useCallback(() => {
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
       assemblyPayloadSignature,
     };
+    console.info(`[CLIP TRACE] persist write nodes=${serialNodes.length} edges=${serialEdges.length}`);
+    if (serialNodes.length === 0) {
+      console.warn("[CLIP WARN] persist attempted with empty nodes");
+    }
+    if (serialEdges.length === 0) {
+      console.warn("[CLIP WARN] persist attempted with empty edges");
+    }
     const ok = safeSet(STORE_KEY, JSON.stringify(payload));
     if (ok) {
       console.info("[CLIP STORAGE] persist state", {
