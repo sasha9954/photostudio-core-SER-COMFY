@@ -4306,7 +4306,7 @@ Aspect ratio: ${imageFormat}`,
   const bindHandlers = useCallback(
     (ns) => {
       console.log("[CLIP TRACE] bindHandlers executed", {
-        nodesCount: Array.isArray(nodes) ? nodes.length : "unknown",
+        nodesCount: Array.isArray(ns) ? ns.length : "unknown",
         timestamp: Date.now()
       });
 
