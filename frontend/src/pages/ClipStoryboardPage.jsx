@@ -3266,7 +3266,6 @@ function IntroFrameNode({ id, data }) {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        commitDurationDraft();
                         e.currentTarget.blur();
                       }
                     }}
