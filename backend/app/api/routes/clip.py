@@ -1151,30 +1151,32 @@ def _build_intro_reference_inline_parts(connected_refs_by_role: dict[str, list[s
     }
     max_total = 10
     for role in COMFY_REF_ROLES:
+        remaining = max_total - len(inline_parts)
+        if remaining <= 0:
+            break
         parts: list[dict[str, Any]] = []
-        for ref_url in (connected_refs_by_role.get(role) or [])[:per_role_limit.get(role, 1)]:
+        role_limit = min(per_role_limit.get(role, 1), remaining)
+        for ref_url in (connected_refs_by_role.get(role) or [])[:role_limit]:
+            if len(parts) >= remaining:
+                break
             inline_part = _load_reference_image_inline(ref_url)
             if inline_part:
                 parts.append(inline_part)
-            if len(inline_parts) + len(parts) >= max_total:
-                break
         counts[role] = len(parts)
         if parts:
             attached_roles.append(role)
-        inline_parts.extend(parts)
-        if len(inline_parts) >= max_total:
-            break
+            inline_parts.extend(parts)
     attached_debug = {
         "attachedInlineReferenceRoles": attached_roles,
         "rolesWithImageParts": attached_roles,
         "roleAttachedImageCounts": {role: counts.get(role, 0) for role in COMFY_REF_ROLES},
-        "totalInlineImages": len(inline_parts[:max_total]),
+        "totalInlineImages": len(inline_parts),
         "dogRoleAttached": counts.get("animal", 0) > 0,
         "animalRefAttached": counts.get("animal", 0) > 0,
         "character1RefAttached": counts.get("character_1", 0) > 0,
         "character2RefAttached": counts.get("character_2", 0) > 0,
     }
-    return inline_parts[:max_total], counts, attached_debug
+    return inline_parts, counts, attached_debug
 
 
 def _hex_to_rgba(hex_value: str, alpha: int = 255) -> tuple[int, int, int, int]:
