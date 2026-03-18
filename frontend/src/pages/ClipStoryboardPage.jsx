@@ -855,11 +855,109 @@ const INTRO_FRAME_PREVIEW_KINDS = {
   GENERATED_LOCAL: "generated_local",
 };
 
+const INTRO_FRAME_PREVIEW_FORMATS = {
+  PORTRAIT: "9:16",
+  SQUARE: "1:1",
+  LANDSCAPE: "16:9",
+};
+
+const INTRO_FRAME_PREVIEW_FORMAT_OPTIONS = [
+  { value: INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT, label: "9:16" },
+  { value: INTRO_FRAME_PREVIEW_FORMATS.SQUARE, label: "1:1" },
+  { value: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, label: "16:9" },
+];
+
 function normalizeIntroFramePreviewKind(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === INTRO_FRAME_PREVIEW_KINDS.UPLOADED) return INTRO_FRAME_PREVIEW_KINDS.UPLOADED;
   if (normalized === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) return INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL;
   return "";
+}
+
+function normalizeIntroFramePreviewFormat(value) {
+  const normalized = String(value || "").trim();
+  if (INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.some((option) => option.value === normalized)) return normalized;
+  return INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE;
+}
+
+function getIntroFramePreviewFormatMeta(value) {
+  const format = normalizeIntroFramePreviewFormat(value);
+  if (format === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT) {
+    return {
+      value: format,
+      label: "9:16",
+      aspectRatio: "9 / 16",
+      width: 576,
+      height: 1024,
+      titleMaxChars: 52,
+      titleMaxLines: 4,
+      titleFontPx: 56,
+      titleLineHeight: 60,
+      contextMaxChars: 92,
+      contextMaxLines: 2,
+      contextFontPx: 26,
+      contextLineHeight: 32,
+      paddingX: 42,
+      paddingTop: 48,
+      accentY: 748,
+      accentWidth: 492,
+      contextY: 790,
+      titleBoxHeight: 300,
+      contextBoxHeight: 88,
+      cardMinHeight: 320,
+      surfacePadding: 18,
+    };
+  }
+  if (format === INTRO_FRAME_PREVIEW_FORMATS.SQUARE) {
+    return {
+      value: format,
+      label: "1:1",
+      aspectRatio: "1 / 1",
+      width: 768,
+      height: 768,
+      titleMaxChars: 56,
+      titleMaxLines: 3,
+      titleFontPx: 52,
+      titleLineHeight: 56,
+      contextMaxChars: 96,
+      contextMaxLines: 2,
+      contextFontPx: 24,
+      contextLineHeight: 30,
+      paddingX: 42,
+      paddingTop: 42,
+      accentY: 568,
+      accentWidth: 684,
+      contextY: 606,
+      titleBoxHeight: 236,
+      contextBoxHeight: 78,
+      cardMinHeight: 260,
+      surfacePadding: 18,
+    };
+  }
+  return {
+    value: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE,
+    label: "16:9",
+    aspectRatio: "16 / 9",
+    width: 640,
+    height: 360,
+    titleMaxChars: 64,
+    titleMaxLines: 3,
+    titleFontPx: 40,
+    titleLineHeight: 44,
+    contextMaxChars: 120,
+    contextMaxLines: 2,
+    contextFontPx: 14,
+    contextLineHeight: 18,
+    paddingX: 28,
+    paddingTop: 28,
+    accentY: 264,
+    accentWidth: 584,
+    contextY: 292,
+    titleBoxHeight: 116,
+    contextBoxHeight: 36,
+    cardMinHeight: 180,
+    surfacePadding: 14,
+  };
 }
 
 function getEffectiveIntroFramePreviewKind(introFrame) {
@@ -877,6 +975,7 @@ function resolveIntroFramePreviewUrl(introFrame) {
       title: String(introFrame?.title || "").trim(),
       stylePreset: introFrame?.stylePreset || "cinematic",
       contextSummary: String(introFrame?.contextSummary || "").trim(),
+      previewFormat: introFrame?.previewFormat,
     });
   }
   return imageUrl;
@@ -900,6 +999,7 @@ function buildIntroFrameComparablePayload(introFrame) {
     autoTitle: !!introFrame?.autoTitle,
     stylePreset: normalizeIntroStylePreset(introFrame?.stylePreset || "cinematic"),
     durationSec: normalizeIntroDurationSec(introFrame?.durationSec),
+    previewFormat: normalizeIntroFramePreviewFormat(introFrame?.previewFormat),
     previewKind,
     generatedAt: String(introFrame?.generatedAt || "").trim() || null,
     imageUrl: previewKind === INTRO_FRAME_PREVIEW_KINDS.UPLOADED ? String(introFrame?.imageUrl || "").trim() : "",
@@ -1029,6 +1129,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       autoTitle: !!introNode?.data?.autoTitle,
       stylePreset: normalizeIntroStylePreset(introNode?.data?.stylePreset || "cinematic"),
       durationSec: normalizeIntroDurationSec(introNode?.data?.durationSec),
+      previewFormat: normalizeIntroFramePreviewFormat(introNode?.data?.previewFormat),
       imageUrl: String(introNode?.data?.imageUrl || "").trim(),
       previewKind: getEffectiveIntroFramePreviewKind(introNode?.data),
       generatedAt: String(introNode?.data?.generatedAt || "").trim(),
@@ -1101,6 +1202,7 @@ function buildAssemblyPayloadSignature(payload, options = {}) {
         durationSec: introComparable.durationSec,
         title: introComparable.title,
         stylePreset: introComparable.stylePreset,
+        previewFormat: introComparable.previewFormat,
         generatedAt: introComparable.generatedAt,
       }
       : null,
@@ -1241,12 +1343,13 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   };
 }
 
-function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", contextSummary = "" } = {}) {
-  const safeTitle = truncateIntroText(title || "INTRO FRAME", 64) || "INTRO FRAME";
-  const safeContext = truncateIntroText(contextSummary || "Story preview", 120) || "Story preview";
+function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", contextSummary = "", previewFormat = INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE } = {}) {
+  const formatMeta = getIntroFramePreviewFormatMeta(previewFormat);
+  const safeTitle = truncateIntroText(title || "INTRO FRAME", formatMeta.titleMaxChars) || "INTRO FRAME";
+  const safeContext = truncateIntroText(contextSummary || "Story preview", formatMeta.contextMaxChars) || "Story preview";
   const meta = getIntroStyleMeta(stylePreset);
-  const width = 512;
-  const height = 288;
+  const width = formatMeta.width;
+  const height = formatMeta.height;
   if (typeof document !== "undefined") {
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -1262,16 +1365,16 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
 
       ctx.fillStyle = `${meta.accent}55`;
       ctx.beginPath();
-      ctx.arc(96, 72, 92, 0, Math.PI * 2);
+      ctx.arc(canvas.width * 0.18, canvas.height * 0.18, Math.min(canvas.width, canvas.height) * 0.22, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = `${meta.secondary}44`;
       ctx.beginPath();
-      ctx.arc(420, 76, 118, 0, Math.PI * 2);
+      ctx.arc(canvas.width * 0.82, canvas.height * 0.2, Math.min(canvas.width, canvas.height) * 0.28, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = meta.accent;
-      ctx.font = "700 20px Arial";
-      ctx.fillText(meta.label.toUpperCase(), 28, 46);
+      ctx.font = `700 ${Math.max(18, Math.round(width * 0.036))}px Arial`;
+      ctx.fillText(meta.label.toUpperCase(), formatMeta.paddingX, formatMeta.paddingTop);
 
       const drawWrapped = (text, x, y, maxWidth, lineHeight, maxLines, font, color) => {
         ctx.font = font;
@@ -1296,15 +1399,33 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
         }
       };
 
-      drawWrapped(safeTitle, 28, 116, 456, 44, 3, "900 40px Arial", "#ffffff");
+      drawWrapped(
+        safeTitle,
+        formatMeta.paddingX,
+        formatMeta.paddingTop + Math.max(68, Math.round(height * 0.12)),
+        width - formatMeta.paddingX * 2,
+        formatMeta.titleLineHeight,
+        formatMeta.titleMaxLines,
+        `900 ${formatMeta.titleFontPx}px Arial`,
+        "#ffffff"
+      );
       ctx.fillStyle = meta.accent;
-      ctx.fillRect(28, 212, 456, 4);
-      drawWrapped(safeContext, 28, 244, 456, 18, 2, "400 14px Arial", "rgba(255,255,255,0.82)");
+      ctx.fillRect(formatMeta.paddingX, formatMeta.accentY, formatMeta.accentWidth, Math.max(4, Math.round(height * 0.011)));
+      drawWrapped(
+        safeContext,
+        formatMeta.paddingX,
+        formatMeta.contextY,
+        width - formatMeta.paddingX * 2,
+        formatMeta.contextLineHeight,
+        formatMeta.contextMaxLines,
+        `400 ${formatMeta.contextFontPx}px Arial`,
+        "rgba(255,255,255,0.82)"
+      );
       return canvas.toDataURL("image/jpeg", 0.72);
     }
   }
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 288">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">
       <defs>
         <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stop-color="#080d19"/>
@@ -1316,18 +1437,18 @@ function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", 
           <stop offset="100%" stop-color="${meta.secondary}"/>
         </linearGradient>
       </defs>
-      <rect width="512" height="288" fill="url(#bg)"/>
-      <circle cx="96" cy="72" r="92" fill="${meta.accent}" opacity="0.22"/>
-      <circle cx="420" cy="76" r="118" fill="${meta.secondary}" opacity="0.18"/>
-      <rect x="28" y="212" width="456" height="4" rx="2" fill="url(#accent)" opacity="0.92"/>
-      <text x="28" y="48" fill="${meta.accent}" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="4">${meta.label.toUpperCase()}</text>
-      <foreignObject x="28" y="76" width="456" height="116">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:40px;line-height:1.06;font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.02em;">
+      <rect width="${width}" height="${height}" fill="url(#bg)"/>
+      <circle cx="${Math.round(width * 0.18)}" cy="${Math.round(height * 0.18)}" r="${Math.round(Math.min(width, height) * 0.22)}" fill="${meta.accent}" opacity="0.22"/>
+      <circle cx="${Math.round(width * 0.82)}" cy="${Math.round(height * 0.2)}" r="${Math.round(Math.min(width, height) * 0.28)}" fill="${meta.secondary}" opacity="0.18"/>
+      <rect x="${formatMeta.paddingX}" y="${formatMeta.accentY}" width="${formatMeta.accentWidth}" height="${Math.max(4, Math.round(height * 0.011))}" rx="2" fill="url(#accent)" opacity="0.92"/>
+      <text x="${formatMeta.paddingX}" y="${formatMeta.paddingTop}" fill="${meta.accent}" font-size="${Math.max(18, Math.round(width * 0.036))}" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="4">${meta.label.toUpperCase()}</text>
+      <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.paddingTop + Math.max(28, Math.round(height * 0.06))}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.titleBoxHeight}">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:${formatMeta.titleFontPx}px;line-height:${(formatMeta.titleLineHeight / formatMeta.titleFontPx).toFixed(2)};font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.02em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:${formatMeta.titleMaxLines};-webkit-box-orient:vertical;word-break:break-word;">
           ${safeTitle}
         </div>
       </foreignObject>
-      <foreignObject x="28" y="228" width="456" height="36">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.3;color:rgba(255,255,255,0.82);">
+      <foreignObject x="${formatMeta.paddingX}" y="${formatMeta.contextY}" width="${width - formatMeta.paddingX * 2}" height="${formatMeta.contextBoxHeight}">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:${formatMeta.contextFontPx}px;line-height:${(formatMeta.contextLineHeight / formatMeta.contextFontPx).toFixed(2)};color:rgba(255,255,255,0.82);overflow:hidden;display:-webkit-box;-webkit-line-clamp:${formatMeta.contextMaxLines};-webkit-box-orient:vertical;word-break:break-word;">
           ${safeContext}
         </div>
       </foreignObject>
@@ -2604,8 +2725,20 @@ function IntroFrameNode({ id, data }) {
   );
   const autoTitle = !!data?.autoTitle;
   const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic");
+  const previewFormat = normalizeIntroFramePreviewFormat(data?.previewFormat);
+  const previewFormatMeta = getIntroFramePreviewFormatMeta(previewFormat);
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
   const status = String(data?.status || "idle");
+  const previewTitle = String(data?.title || "INTRO FRAME").trim() || "INTRO FRAME";
+  const previewContext = String(data?.contextSummary || "Story preview").trim() || "Story preview";
+  const denseTitle = previewTitle.length > 44;
+  const titleClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 4 : 3;
+  const titleFontSize = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT
+    ? (denseTitle ? 22 : 26)
+    : previewFormat === INTRO_FRAME_PREVIEW_FORMATS.SQUARE
+      ? (denseTitle ? 20 : 24)
+      : (denseTitle ? 18 : 22);
+  const contextClamp = previewFormat === INTRO_FRAME_PREVIEW_FORMATS.PORTRAIT ? 2 : 1;
   const statusLabel = status === "ready"
     ? "preview готов"
     : status === "generating" || status === "preview_generating"
@@ -2651,7 +2784,7 @@ function IntroFrameNode({ id, data }) {
             <span className="clipSB_small">Auto title по сюжетному контексту</span>
           </label>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 92px", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 110px 92px", gap: 8 }}>
             <label>
               <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
               <select
@@ -2660,6 +2793,16 @@ function IntroFrameNode({ id, data }) {
                 onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
               >
                 {INTRO_STYLE_PRESETS.map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </label>
+            <label>
+              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
+              <select
+                className="clipSB_select"
+                value={previewFormat}
+                onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
+              >
+                {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
             </label>
             <label>
@@ -2689,20 +2832,111 @@ function IntroFrameNode({ id, data }) {
               overflow: "hidden",
               border: `1px solid ${styleMeta.accent}55`,
               background: styleMeta.background,
-              minHeight: 140,
+              minHeight: previewFormatMeta.cardMinHeight,
+              aspectRatio: previewFormatMeta.aspectRatio,
               position: "relative",
+              width: "100%",
+              display: "flex",
             }}
           >
             {previewUrl ? (
-              <img src={previewUrl} alt={String(data?.title || "Intro preview")} style={{ width: "100%", height: 180, objectFit: "cover", display: "block" }} />
+              <img
+                src={previewUrl}
+                alt={previewTitle}
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              />
             ) : (
-              <div style={{ padding: 14, minHeight: 140, display: "grid", alignContent: "end", gap: 8 }}>
-                <div className="clipSB_small" style={{ color: styleMeta.secondary }}>thumbnail / preview / opening frame</div>
-                <div style={{ fontSize: 20, lineHeight: 1.1, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                  {String(data?.title || "INTRO FRAME")}
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: `radial-gradient(circle at 18% 18%, ${styleMeta.accent}38 0%, transparent 34%), radial-gradient(circle at 84% 20%, ${styleMeta.secondary}32 0%, transparent 38%), linear-gradient(145deg, #080d19 0%, ${styleMeta.secondary} 55%, #020409 100%)`,
+                }}
+              />
+            )}
+
+            <div
+              style={{
+                position: "relative",
+                zIndex: 1,
+                minHeight: "100%",
+                width: "100%",
+                padding: previewFormatMeta.surfacePadding,
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                gap: 12,
+                overflow: "hidden",
+                background: previewUrl ? "linear-gradient(180deg, rgba(5,8,16,0.14) 0%, rgba(5,8,16,0.04) 28%, rgba(5,8,16,0.76) 100%)" : "linear-gradient(180deg, rgba(5,8,16,0.10) 0%, rgba(5,8,16,0.04) 35%, rgba(5,8,16,0.54) 100%)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minWidth: 0 }}>
+                <div
+                  className="clipSB_small"
+                  style={{
+                    color: styleMeta.accent,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {styleMeta.label}
+                </div>
+                <div
+                  className="clipSB_small"
+                  style={{
+                    flexShrink: 0,
+                    border: `1px solid ${styleMeta.accent}66`,
+                    borderRadius: 999,
+                    padding: "3px 8px",
+                    color: "#f5f7ff",
+                    background: "rgba(7,11,19,0.42)",
+                  }}
+                >
+                  {previewFormatMeta.label}
                 </div>
               </div>
-            )}
+
+              <div style={{ marginTop: "auto", display: "grid", gap: 8, minWidth: 0, overflow: "hidden" }}>
+                <div
+                  style={{
+                    fontSize: titleFontSize,
+                    lineHeight: denseTitle ? 1.08 : 1.12,
+                    fontWeight: 900,
+                    letterSpacing: denseTitle ? "0.015em" : "0.035em",
+                    textTransform: "uppercase",
+                    color: "#ffffff",
+                    overflow: "hidden",
+                    display: "-webkit-box",
+                    WebkitBoxOrient: "vertical",
+                    WebkitLineClamp: titleClamp,
+                    wordBreak: "break-word",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {previewTitle}
+                </div>
+                <div style={{ width: "100%", height: 3, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
+                <div
+                  className="clipSB_small"
+                  style={{
+                    color: "rgba(245,247,255,0.84)",
+                    overflow: "hidden",
+                    display: "-webkit-box",
+                    WebkitBoxOrient: "vertical",
+                    WebkitLineClamp: contextClamp,
+                    lineHeight: 1.4,
+                    minWidth: 0,
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {previewContext}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -6789,6 +7023,8 @@ onClipSec: (nodeId, value) => {
                   }
                 } else if (key === "stylePreset") {
                   nextData.stylePreset = normalizeIntroStylePreset(value);
+                } else if (key === "previewFormat") {
+                  nextData.previewFormat = normalizeIntroFramePreviewFormat(value);
                 } else if (key === "durationSec") {
                   nextData.durationSec = normalizeIntroDurationSec(value);
                 } else if (key === "title") {
@@ -7195,6 +7431,7 @@ const hydrate = useCallback((source = "unknown") => {
             data.autoTitle = !!data.autoTitle;
             data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic");
             data.durationSec = normalizeIntroDurationSec(data.durationSec);
+            data.previewFormat = normalizeIntroFramePreviewFormat(data.previewFormat);
             data.imageUrl = String(data.imageUrl || "");
             data.previewKind = getEffectiveIntroFramePreviewKind(data);
             if (data.previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
@@ -7483,7 +7720,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [] },
+        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [] },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
