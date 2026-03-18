@@ -60,6 +60,9 @@ const PORT_COLORS = {
   comfy_plan: "#4dd8ff",
   comfy_storyboard: "#6aa8ff",
   comfy_video: "#7df9ff",
+  intro_context: "#ff9d5c",
+  intro_frame: "#ffcf5c",
+  intro_to_assembly: "#ffb35c",
   brain_to_storyboard: "#4dd8ff",
   storyboard_to_assembly: "#6aa8ff",
   assembly: "#6aa8ff",
@@ -124,6 +127,9 @@ const EDGE_STYLE_BY_KIND = {
   comfy_plan: { color: PORT_COLORS.comfy_plan, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
   comfy_storyboard: { color: PORT_COLORS.comfy_storyboard, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
   comfy_video: { color: PORT_COLORS.comfy_video, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
+  intro_context: { color: PORT_COLORS.intro_context, strokeWidth: 2.3, opacity: 0.98, animatedDash: true },
+  intro_frame: { color: PORT_COLORS.intro_frame, strokeWidth: 2.4, opacity: 0.98, animatedDash: true },
+  intro_to_assembly: { color: PORT_COLORS.intro_to_assembly, strokeWidth: 2.6, opacity: 1, animatedDash: true },
   plan: {
     color: PORT_COLORS.plan,
     strokeWidth: 2.4,
@@ -156,6 +162,11 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
   if (targetType === "brainNode" && isBrainInput(targetHandle)) return targetHandle;
   if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
 
+  if (targetType === "introFrame") {
+    if (targetHandle === "story_context") return "intro_context";
+    if (targetHandle === "title_context") return "text";
+  }
+
   if (sourceType === "comfyBrain" && sourceHandle === "comfy_plan" && targetType === "comfyStoryboard" && targetHandle === "comfy_plan") {
     return "comfy_plan";
   }
@@ -166,6 +177,10 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
 
   if (sourceType === "comfyStoryboard" && sourceHandle === "comfy_scene_video_out" && targetType === "assemblyNode") {
     return "storyboard_to_assembly";
+  }
+
+  if (sourceType === "introFrame" && sourceHandle === "intro_frame_out" && targetType === "assemblyNode" && targetHandle === "assembly_intro") {
+    return "intro_to_assembly";
   }
 
   if (sourceType === "brainNode" && sourceHandle === "plan" && targetType === "storyboardNode" && targetHandle === "plan_in") {
@@ -617,6 +632,7 @@ function resolveAssetUrl(url) {
 const SCENE_IMAGE_FORMATS = ["9:16", "1:1", "16:9"];
 const DEFAULT_SCENE_IMAGE_FORMAT = "9:16";
 const USE_COMFY_MOCK = false;
+const INTRO_STYLE_PRESETS = ["cinematic", "youtube", "dark_neon", "thriller", "fashion", "glitch"];
 
 const PARSE_PROGRESS_PHRASES = [
   "Анализирую входы",
@@ -651,6 +667,66 @@ function getSceneImageSize(format) {
   if (normalized === "1:1") return { width: 1024, height: 1024 };
   if (normalized === "16:9") return { width: 1344, height: 768 };
   return { width: 768, height: 1344 };
+}
+
+function normalizeIntroStylePreset(stylePreset) {
+  return INTRO_STYLE_PRESETS.includes(stylePreset) ? stylePreset : "cinematic";
+}
+
+function normalizeIntroDurationSec(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return 2.5;
+  return Math.max(0.5, Math.min(8, Math.round(raw * 10) / 10));
+}
+
+function getIntroStyleMeta(stylePreset = "cinematic") {
+  const normalized = normalizeIntroStylePreset(stylePreset);
+  if (normalized === "youtube") {
+    return {
+      label: "YouTube",
+      accent: "#ffcf5c",
+      secondary: "#ff6b3d",
+      background: "radial-gradient(circle at 24% 20%, rgba(255,207,92,0.88), rgba(255,107,61,0.38) 35%, rgba(9,15,32,1) 78%)",
+    };
+  }
+  if (normalized === "dark_neon") {
+    return {
+      label: "Dark Neon",
+      accent: "#6ef2ff",
+      secondary: "#b86dff",
+      background: "radial-gradient(circle at 25% 18%, rgba(110,242,255,0.5), rgba(184,109,255,0.28) 36%, rgba(4,8,20,1) 80%)",
+    };
+  }
+  if (normalized === "thriller") {
+    return {
+      label: "Thriller",
+      accent: "#ff6b6b",
+      secondary: "#ffd166",
+      background: "radial-gradient(circle at 22% 18%, rgba(255,107,107,0.55), rgba(255,209,102,0.18) 34%, rgba(8,8,12,1) 80%)",
+    };
+  }
+  if (normalized === "fashion") {
+    return {
+      label: "Fashion",
+      accent: "#ffd7f0",
+      secondary: "#8ae5ff",
+      background: "radial-gradient(circle at 24% 20%, rgba(255,215,240,0.78), rgba(138,229,255,0.28) 36%, rgba(14,15,28,1) 80%)",
+    };
+  }
+  if (normalized === "glitch") {
+    return {
+      label: "Glitch",
+      accent: "#8eff8c",
+      secondary: "#ff6ef2",
+      background: "radial-gradient(circle at 24% 20%, rgba(142,255,140,0.58), rgba(255,110,242,0.28) 32%, rgba(4,10,18,1) 78%)",
+    };
+  }
+  return {
+    label: "Cinematic",
+    accent: "#f6d365",
+    secondary: "#5ee7df",
+    background: "radial-gradient(circle at 24% 18%, rgba(246,211,101,0.76), rgba(94,231,223,0.24) 34%, rgba(10,16,28,1) 80%)",
+  };
 }
 
 function resolveSceneTransitionType(scene) {
@@ -774,7 +850,21 @@ function getSceneRequestedDurationSec(scene) {
   return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
 }
 
-function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
+function buildIntroFramePayload(introFrame) {
+  const imageUrl = String(introFrame?.imageUrl || "").trim();
+  if (!imageUrl) return null;
+  return {
+    nodeId: String(introFrame?.nodeId || ""),
+    title: String(introFrame?.title || "").trim(),
+    autoTitle: !!introFrame?.autoTitle,
+    stylePreset: normalizeIntroStylePreset(introFrame?.stylePreset || "cinematic"),
+    durationSec: normalizeIntroDurationSec(introFrame?.durationSec),
+    imageUrl,
+    generatedAt: String(introFrame?.generatedAt || "").trim() || null,
+  };
+}
+
+function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16", intro = null }) {
   const normalizedFormat = normalizeSceneImageFormat(format);
   const safeAudioUrl = String(audioUrl || "").trim();
   const preparedScenes = (Array.isArray(scenes) ? scenes : [])
@@ -795,6 +885,7 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16" }) {
     audioUrl: safeAudioUrl,
     format: normalizedFormat,
     scenes: preparedScenes,
+    intro: buildIntroFramePayload(intro),
   };
 }
 
@@ -832,6 +923,11 @@ function getAssemblySourceLabel(scenesSource = "none") {
   return "НЕ ПОДКЛЮЧЕНО";
 }
 
+function getAssemblyIntroLabel(introSourceType = "none") {
+  if (introSourceType === "introFrame") return "INTRO FRAME";
+  return "НЕТ INTRO";
+}
+
 function removeAssemblyIncomingSourceEdges(edges = [], assemblyNodeId = "", targetHandle = "assembly_in") {
   const normalizedAssemblyNodeId = String(assemblyNodeId || "").trim();
   const normalizedTargetHandle = String(targetHandle || "").trim() || "assembly_in";
@@ -864,6 +960,29 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     : [];
   const incomingEdge = incomingSourceEdges.length ? incomingSourceEdges[incomingSourceEdges.length - 1] : null;
   const sourceNode = incomingEdge ? (nodesById.get(incomingEdge.source) || null) : null;
+  const incomingIntroEdges = effectiveAssemblyNodeId
+    ? edgesList.filter((edge) => {
+      if (edge?.target !== effectiveAssemblyNodeId) return false;
+      if (String(edge?.targetHandle || "") !== "assembly_intro") return false;
+      return String(nodesById.get(edge?.source)?.type || "") === "introFrame";
+    })
+    : [];
+  const introEdge = incomingIntroEdges.length ? incomingIntroEdges[incomingIntroEdges.length - 1] : null;
+  const introNode = introEdge ? (nodesById.get(introEdge.source) || null) : null;
+  const introFrame = introNode?.type === "introFrame"
+    ? {
+      nodeId: String(introNode?.id || ""),
+      nodeType: "introFrame",
+      title: String(introNode?.data?.title || "").trim(),
+      autoTitle: !!introNode?.data?.autoTitle,
+      stylePreset: normalizeIntroStylePreset(introNode?.data?.stylePreset || "cinematic"),
+      durationSec: normalizeIntroDurationSec(introNode?.data?.durationSec),
+      imageUrl: String(introNode?.data?.imageUrl || "").trim(),
+      generatedAt: String(introNode?.data?.generatedAt || "").trim(),
+      status: String(introNode?.data?.status || "idle"),
+      altTitles: Array.isArray(introNode?.data?.altTitles) ? introNode.data.altTitles : [],
+    }
+    : null;
 
   if (sourceNode?.type === "storyboardNode") {
     const scenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
@@ -873,6 +992,9 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       sourceNodeType: "storyboardNode",
       scenesSource: "storyboard",
       scenes,
+      introSourceNodeId: String(introFrame?.nodeId || ""),
+      introSourceNodeType: introFrame?.nodeType || "",
+      introFrame,
     };
   }
 
@@ -884,6 +1006,9 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       sourceNodeType: "comfyStoryboard",
       scenesSource: "comfyStoryboard",
       scenes,
+      introSourceNodeId: String(introFrame?.nodeId || ""),
+      introSourceNodeType: introFrame?.nodeType || "",
+      introFrame,
     };
   }
 
@@ -893,6 +1018,9 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     sourceNodeType: "",
     scenesSource: "none",
     scenes: [],
+    introSourceNodeId: String(introFrame?.nodeId || ""),
+    introSourceNodeType: introFrame?.nodeType || "",
+    introFrame,
   };
 }
 
@@ -906,8 +1034,19 @@ function buildAssemblyPayloadSignature(payload, options = {}) {
     scenesSource: String(options?.scenesSource || "none"),
     sourceNodeId: String(options?.sourceNodeId || ""),
     assemblyNodeId: String(options?.assemblyNodeId || ""),
+    introSourceNodeId: String(options?.introSourceNodeId || ""),
+    introSourceNodeType: String(options?.introSourceNodeType || ""),
     audioUrl: payload?.audioUrl || "",
     format: payload?.format || "9:16",
+    intro: payload?.intro
+      ? {
+        nodeId: payload.intro.nodeId,
+        imageUrl: payload.intro.imageUrl,
+        durationSec: payload.intro.durationSec,
+        title: payload.intro.title,
+        stylePreset: payload.intro.stylePreset,
+      }
+      : null,
     scenes: Array.isArray(payload?.scenes)
       ? payload.scenes.map((s) => ({
         sceneId: s.sceneId,
@@ -982,6 +1121,161 @@ function readFileAsDataUrl(file) {
     reader.onerror = () => reject(reader.error || new Error("file_read_failed"));
     reader.readAsDataURL(file);
   });
+}
+
+function truncateIntroText(value, maxLength = 84) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function buildIntroFrameAutoTitle({ textValue = "", scenes = [] } = {}) {
+  const text = truncateIntroText(textValue, 72);
+  if (text) {
+    const words = text.split(" ").filter(Boolean).slice(0, 6);
+    return words.join(" ").toUpperCase();
+  }
+  const firstScene = Array.isArray(scenes) ? scenes.find((scene) => String(getSceneUiDescription(scene) || "").trim()) : null;
+  const fallback = truncateIntroText(getSceneUiDescription(firstScene) || firstScene?.title || "", 56);
+  return fallback ? fallback.toUpperCase() : "CINEMATIC INTRO";
+}
+
+function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) {
+  const nodesById = new Map((Array.isArray(nodes) ? nodes : []).map((node) => [node?.id, node]));
+  const incoming = (Array.isArray(edges) ? edges : []).filter((edge) => edge?.target === nodeId);
+  const storyEdges = incoming.filter((edge) => String(edge?.targetHandle || "") === "story_context");
+  const titleEdge = [...incoming].reverse().find((edge) => String(edge?.targetHandle || "") === "title_context") || null;
+  const storySources = storyEdges
+    .map((edge) => nodesById.get(edge?.source) || null)
+    .filter(Boolean);
+  const titleSource = titleEdge ? (nodesById.get(titleEdge.source) || null) : null;
+  const comfyNode = storySources.find((node) => node?.type === "comfyStoryboard") || null;
+  const storyboardNode = storySources.find((node) => node?.type === "storyboardNode") || null;
+  const textNode = titleSource?.type === "textNode"
+    ? titleSource
+    : storySources.find((node) => node?.type === "textNode") || null;
+  const comfyScenes = normalizeComfyScenesForAssembly(comfyNode?.data?.mockScenes);
+  const storyboardScenes = Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
+  const scenes = comfyScenes.length ? comfyScenes : storyboardScenes;
+  const sceneCount = scenes.length;
+  const textValue = String(textNode?.data?.textValue || "").trim();
+  const sourceLabels = storySources.map((node) => {
+    if (node?.type === "comfyStoryboard") return "COMFY STORYBOARD";
+    if (node?.type === "storyboardNode") return "STORYBOARD";
+    if (node?.type === "brainNode") return "BRAIN";
+    if (node?.type === "comfyBrain") return "COMFY BRAIN";
+    if (node?.type === "refNode") return String(node?.data?.title || "REF");
+    return String(node?.type || "NODE").toUpperCase();
+  });
+  const summaryParts = [];
+  if (sceneCount) summaryParts.push(`${sceneCount} сцен`);
+  if (textValue) summaryParts.push(`text: ${truncateIntroText(textValue, 42)}`);
+  if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
+  return {
+    sourceNodeIds: storySources.map((node) => String(node?.id || "")).filter(Boolean),
+    sourceNodeTypes: storySources.map((node) => String(node?.type || "")).filter(Boolean),
+    titleContextNodeId: String(titleSource?.id || ""),
+    titleText: textValue,
+    scenes,
+    sceneCount,
+    summary: summaryParts.join(" • ") || "не подключён",
+    autoTitle: buildIntroFrameAutoTitle({ textValue, scenes }),
+  };
+}
+
+function buildIntroFramePreviewDataUrl({ title = "", stylePreset = "cinematic", contextSummary = "" } = {}) {
+  const safeTitle = truncateIntroText(title || "INTRO FRAME", 64) || "INTRO FRAME";
+  const safeContext = truncateIntroText(contextSummary || "Story preview", 120) || "Story preview";
+  const meta = getIntroStyleMeta(stylePreset);
+  if (typeof document !== "undefined") {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      gradient.addColorStop(0, "#080d19");
+      gradient.addColorStop(0.52, meta.secondary);
+      gradient.addColorStop(1, "#020409");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = `${meta.accent}55`;
+      ctx.beginPath();
+      ctx.arc(210, 180, 210, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = `${meta.secondary}44`;
+      ctx.beginPath();
+      ctx.arc(830, 240, 260, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = meta.accent;
+      ctx.font = "700 40px Arial";
+      ctx.letterSpacing = "4px";
+      ctx.fillText(meta.label.toUpperCase(), 72, 140);
+
+      const drawWrapped = (text, x, y, maxWidth, lineHeight, maxLines, font, color) => {
+        ctx.font = font;
+        ctx.fillStyle = color;
+        const words = String(text || "").split(/\s+/).filter(Boolean);
+        let line = "";
+        let linesDrawn = 0;
+        for (let i = 0; i < words.length; i += 1) {
+          const testLine = line ? `${line} ${words[i]}` : words[i];
+          if (ctx.measureText(testLine).width > maxWidth && line) {
+            ctx.fillText(line, x, y + linesDrawn * lineHeight);
+            linesDrawn += 1;
+            line = words[i];
+            if (linesDrawn >= maxLines - 1) break;
+          } else {
+            line = testLine;
+          }
+        }
+        if (linesDrawn < maxLines && line) {
+          const remaining = linesDrawn >= maxLines - 1 ? truncateIntroText(line, 22) : line;
+          ctx.fillText(remaining, x, y + linesDrawn * lineHeight);
+        }
+      };
+
+      drawWrapped(safeTitle, 72, 340, 880, 102, 4, "900 96px Arial", "#ffffff");
+      ctx.fillStyle = meta.accent;
+      ctx.fillRect(72, 720, 880, 8);
+      drawWrapped(safeContext, 72, 790, 880, 40, 3, "400 31px Arial", "rgba(255,255,255,0.82)");
+      return canvas.toDataURL("image/png");
+    }
+  }
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#080d19"/>
+          <stop offset="55%" stop-color="${meta.secondary}"/>
+          <stop offset="100%" stop-color="#020409"/>
+        </linearGradient>
+        <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="${meta.accent}"/>
+          <stop offset="100%" stop-color="${meta.secondary}"/>
+        </linearGradient>
+      </defs>
+      <rect width="1024" height="1024" fill="url(#bg)"/>
+      <circle cx="220" cy="180" r="210" fill="${meta.accent}" opacity="0.22"/>
+      <circle cx="820" cy="220" r="260" fill="${meta.secondary}" opacity="0.18"/>
+      <rect x="72" y="720" width="880" height="8" rx="4" fill="url(#accent)" opacity="0.92"/>
+      <text x="72" y="168" fill="${meta.accent}" font-size="40" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="8">${meta.label.toUpperCase()}</text>
+      <foreignObject x="72" y="250" width="880" height="330">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:98px;line-height:1.02;font-weight:900;color:white;text-transform:uppercase;letter-spacing:0.02em;">
+          ${safeTitle}
+        </div>
+      </foreignObject>
+      <foreignObject x="72" y="770" width="880" height="160">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,Helvetica,sans-serif;font-size:32px;line-height:1.25;color:rgba(255,255,255,0.82);">
+          ${safeContext}
+        </div>
+      </foreignObject>
+    </svg>
+  `.trim();
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 const REF_NODE_ROLE_BY_TYPE = {
@@ -2229,6 +2523,135 @@ function StoryboardPlanNode({ id, data }) {
   );
 }
 
+function IntroFrameNode({ id, data }) {
+  const fileInputRef = useRef(null);
+  const previewUrl = resolveAssetUrl(data?.imageUrl);
+  const autoTitle = !!data?.autoTitle;
+  const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic");
+  const durationSec = normalizeIntroDurationSec(data?.durationSec);
+  const status = String(data?.status || "idle");
+
+  return (
+    <>
+      <Handle type="target" position={Position.Left} id="story_context" className="clipSB_handle" style={handleStyle("intro_context", { top: 76 })} />
+      <Handle type="target" position={Position.Left} id="title_context" className="clipSB_handle" style={handleStyle("text", { top: 140 })} />
+      <Handle type="source" position={Position.Right} id="intro_frame_out" className="clipSB_handle" style={handleStyle("intro_frame", { top: 108 })} />
+      <NodeShell
+        title="INTRO FRAME"
+        onClose={() => data?.onRemoveNode?.(id)}
+        icon={<span aria-hidden>🖼️</span>}
+        className="clipSB_nodeAssembly"
+      >
+        <div className="clipSB_assemblyStats">
+          <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
+          <div className="clipSB_assemblyRow"><span>Статус</span><strong>{status === "ready" ? "готово" : status === "generating" ? "генерация..." : "черновик"}</strong></div>
+        </div>
+
+        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+          <label>
+            <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
+            <input
+              className="clipSB_input"
+              value={String(data?.title || "")}
+              onChange={(e) => data?.onField?.(id, "title", e.target.value)}
+              disabled={autoTitle}
+              placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
+            />
+          </label>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={autoTitle}
+              onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
+            />
+            <span className="clipSB_small">Auto title по сюжетному контексту</span>
+          </label>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 92px", gap: 8 }}>
+            <label>
+              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
+              <select
+                className="clipSB_select"
+                value={normalizeIntroStylePreset(data?.stylePreset || "cinematic")}
+                onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
+              >
+                {INTRO_STYLE_PRESETS.map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </label>
+            <label>
+              <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
+              <input
+                className="clipSB_input"
+                type="number"
+                min="0.5"
+                max="8"
+                step="0.1"
+                value={durationSec}
+                onChange={(e) => data?.onField?.(id, "durationSec", e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="clipSB_small" style={{ color: "#9fb0ff" }}>
+            Story context: {String(data?.contextSummary || "не подключён")}
+          </div>
+
+          <div
+            style={{
+              borderRadius: 14,
+              overflow: "hidden",
+              border: `1px solid ${styleMeta.accent}55`,
+              background: styleMeta.background,
+              minHeight: 140,
+              position: "relative",
+            }}
+          >
+            {previewUrl ? (
+              <img src={previewUrl} alt={String(data?.title || "Intro preview")} style={{ width: "100%", height: 180, objectFit: "cover", display: "block" }} />
+            ) : (
+              <div style={{ padding: 14, minHeight: 140, display: "grid", alignContent: "end", gap: 8 }}>
+                <div className="clipSB_small" style={{ color: styleMeta.secondary }}>thumbnail / preview / opening frame</div>
+                <div style={{ fontSize: 20, lineHeight: 1.1, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                  {String(data?.title || "INTRO FRAME")}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)}>
+              {previewUrl ? "Regenerate" : "Generate"}
+            </button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
+              Загрузить image
+            </button>
+            {previewUrl ? (
+              <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
+                Очистить
+              </button>
+            ) : null}
+          </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) data?.onPickImage?.(id, file);
+              e.target.value = "";
+            }}
+          />
+        </div>
+      </NodeShell>
+    </>
+  );
+}
+
 function AssemblyNode({ id, data }) {
   const isAssembling = !!data?.isAssembling;
   const canAssemble = !!data?.canAssemble;
@@ -2242,6 +2665,7 @@ function AssemblyNode({ id, data }) {
   return (
     <>
       <Handle type="target" position={Position.Left} id="assembly_in" className="clipSB_handle" style={handleStyle("assembly")} />
+      <Handle type="target" position={Position.Left} id="assembly_intro" className="clipSB_handle" style={handleStyle("intro_to_assembly", { top: 132 })} />
       <NodeShell
         title="ASSEMBLY"
         onClose={() => data?.onRemoveNode?.(id)}
@@ -2251,10 +2675,20 @@ function AssemblyNode({ id, data }) {
         <div className="clipSB_assemblyStats">
           <div className="clipSB_assemblyRow"><span>Сцен готово</span><strong>{data?.readyScenes || 0}/{data?.totalScenes || 0}</strong></div>
           <div className="clipSB_assemblyRow"><span>Источник</span><strong>{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Intro</span><strong>{data?.introLabel || "НЕТ INTRO"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Аудио</span><strong>{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
         </div>
+
+        <div className="clipSB_small" style={{ marginTop: 8 }}>
+          Main source: <b>{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</b> · Intro: <b>{data?.introLabel || "НЕТ INTRO"}</b>
+        </div>
+        {data?.debugSummary ? (
+          <div className="clipSB_selectHint" style={{ marginTop: 6 }}>
+            trace: {data.debugSummary}
+          </div>
+        ) : null}
 
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble}>
@@ -2294,7 +2728,7 @@ function AssemblyNode({ id, data }) {
           </div>
         ) : null}
 
-        {status === "empty" ? <div className="clipSB_assemblyNote">Нужна хотя бы одна готовая видео-сцена</div> : null}
+        {status === "empty" ? <div className="clipSB_assemblyNote">Подключи COMFY STORYBOARD / STORYBOARD к main input Assembly.</div> : null}
         {data?.infoMessage ? <div className="clipSB_assemblyNote">{data.infoMessage}</div> : null}
         {status === "error" && data?.errorMessage ? (
           <div className="clipSB_assemblyErrorBlock">
@@ -2307,7 +2741,7 @@ function AssemblyNode({ id, data }) {
           <div className="clipSB_assemblyResult">
             <div className="clipSB_assemblyDoneTitle">✅ Клип готов</div>
             <div className="clipSB_assemblyDoneMeta">
-              Сцен: {resultSceneCount > 0 ? resultSceneCount : Number(data?.readyScenes || 0)} • Аудио: {audioApplied ? "добавлено" : "нет"}
+              Сцен: {resultSceneCount > 0 ? resultSceneCount : Number(data?.readyScenes || 0)} • Intro: {result?.introIncluded ? "добавлен" : "нет"} • Аудио: {audioApplied ? "добавлено" : "нет"}
             </div>
             <video className="clipSB_videoPlayer" controls playsInline preload="metadata" src={finalVideoUrl} style={{ marginTop: 8 }} />
             <div className="clipSB_assemblyActions">
@@ -4696,14 +5130,17 @@ Aspect ratio: ${imageFormat}`,
   const assemblySource = useMemo(() => resolveAssemblySource({ nodes, edges }), [nodes, edges]);
   const assemblyScenesSource = assemblySource.scenesSource;
   const assemblySourceLabel = useMemo(() => getAssemblySourceLabel(assemblyScenesSource), [assemblyScenesSource]);
+  const assemblyIntroLabel = useMemo(() => getAssemblyIntroLabel(assemblySource.introSourceNodeType), [assemblySource.introSourceNodeType]);
   const assemblyScenesForPayload = assemblySource.scenes;
+  const assemblyIntroFrame = assemblySource.introFrame;
+  const assemblyHasIntro = !!String(assemblyIntroFrame?.imageUrl || "").trim();
   const assemblyReadySceneCount = useMemo(
     () => assemblyScenesForPayload.filter((scene) => String(scene?.videoUrl || "").trim()).length,
     [assemblyScenesForPayload]
   );
   const assemblyDurationEstimateSec = useMemo(
-    () => assemblyScenesForPayload.reduce((sum, scene) => sum + (Number(getSceneRequestedDurationSec(scene)) || 0), 0),
-    [assemblyScenesForPayload]
+    () => assemblyScenesForPayload.reduce((sum, scene) => sum + (Number(getSceneRequestedDurationSec(scene)) || 0), 0) + (assemblyHasIntro ? Number(assemblyIntroFrame?.durationSec || 0) : 0),
+    [assemblyHasIntro, assemblyIntroFrame?.durationSec, assemblyScenesForPayload]
   );
 
   const assemblyPayload = useMemo(() => {
@@ -4714,8 +5151,9 @@ Aspect ratio: ${imageFormat}`,
       scenes: assemblyScenesForPayload,
       audioUrl: globalAudioUrlRaw,
       format: sceneFormat,
+      intro: assemblyIntroFrame,
     });
-  }, [assemblyScenesForPayload, globalAudioUrlRaw]);
+  }, [assemblyIntroFrame, assemblyScenesForPayload, globalAudioUrlRaw]);
 
   const assemblyPayloadSignature = useMemo(
     () => buildAssemblyPayloadSignature(assemblyPayload, assemblySource),
@@ -4728,19 +5166,26 @@ Aspect ratio: ${imageFormat}`,
       assemblyNodeId: assemblySource.assemblyNodeId,
       sourceNodeId: assemblySource.sourceNodeId,
       sourceNodeType: assemblySource.sourceNodeType,
+      introSourceNodeId: assemblySource.introSourceNodeId,
+      introSourceNodeType: assemblySource.introSourceNodeType,
       scenesSource: assemblyScenesSource,
       scenesCount: assemblyScenesForPayload.length,
       readyScenesCount: assemblyReadySceneCount,
+      introConnected: assemblySource.introSourceNodeType === "introFrame",
+      introImagePresent: assemblyHasIntro,
+      introDuration: Number(assemblyIntroFrame?.durationSec || 0),
       sceneIds: assemblyScenesForPayload.map((scene) => String(scene?.sceneId || "")).filter(Boolean),
       requestedDurations: assemblyScenesForPayload.map((scene) => getSceneRequestedDurationSec(scene)),
       hasAudio: !!assemblyPayload.audioUrl,
       format: assemblyPayload.format,
-      signatureSource: `${assemblyScenesSource}:${assemblySource.sourceNodeId || "none"}`,
+      signatureSource: `${assemblyScenesSource}:${assemblySource.sourceNodeId || "none"}:intro:${assemblySource.introSourceNodeId || "none"}`,
     });
   }, [
     assemblyPayload.audioUrl,
     assemblyPayload.format,
+    assemblyHasIntro,
     assemblyReadySceneCount,
+    assemblyIntroFrame?.durationSec,
     assemblyScenesForPayload,
     assemblyScenesSource,
     assemblySource,
@@ -4856,6 +5301,7 @@ Aspect ratio: ${imageFormat}`,
             finalVideoUrl,
             audioApplied: !!out?.audioApplied,
             sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
+            introIncluded: !!out?.introIncluded,
           });
           setAssemblyBuildState("done");
           setAssemblyInfo("");
@@ -5000,6 +5446,11 @@ Aspect ratio: ${imageFormat}`,
           durationSec: assemblyDurationEstimateSec,
           scenesSource: assemblyScenesSource,
           sourceLabel: assemblySourceLabel,
+          introLabel: assemblyIntroLabel,
+          hasIntro: assemblyHasIntro,
+          introDurationSec: Number(assemblyIntroFrame?.durationSec || 0),
+          introTitle: String(assemblyIntroFrame?.title || ""),
+          debugSummary: `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySource.sourceNodeId || "none"}; introNode=${assemblySource.introSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${Number(assemblyIntroFrame?.durationSec || 0) || 0}; audio=${assemblyPayload.audioUrl ? "yes" : "no"}`,
           canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
           isAssembling,
           status: assemblyStatus,
@@ -5021,8 +5472,12 @@ Aspect ratio: ${imageFormat}`,
   }, [
     assemblyPayload,
     assemblyDurationEstimateSec,
+    assemblyHasIntro,
+    assemblyIntroFrame,
+    assemblyIntroLabel,
     assemblyReadySceneCount,
     assemblyScenesForPayload.length,
+    assemblySource,
     assemblySourceLabel,
     assemblyScenesSource,
     isAssembling,
@@ -6155,6 +6610,92 @@ onClipSec: (nodeId, value) => {
           };
         }
 
+        if (n.type === "introFrame") {
+          const introContext = collectIntroFrameContext({
+            nodeId: n.id,
+            nodes: effectiveNodes,
+            edges: effectiveEdges,
+          });
+          const resolvedTitle = base.data?.autoTitle
+            ? buildIntroFrameAutoTitle({ textValue: introContext.titleText, scenes: introContext.scenes })
+            : String(base.data?.title || "");
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              title: resolvedTitle,
+              contextSummary: introContext.summary,
+              contextSceneCount: introContext.sceneCount,
+              sourceNodeIds: introContext.sourceNodeIds,
+              sourceNodeTypes: introContext.sourceNodeTypes,
+              onField: (nodeId, key, value) => setNodes((prev) => prev.map((x) => {
+                if (x.id !== nodeId) return x;
+                const nextData = { ...x.data };
+                if (key === "autoTitle") {
+                  nextData.autoTitle = !!value;
+                  if (!!value) {
+                    const freshContext = collectIntroFrameContext({ nodeId, nodes: prev, edges: edgesRef.current || [] });
+                    nextData.title = buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes });
+                    nextData.altTitles = [nextData.title].filter(Boolean);
+                  }
+                } else if (key === "stylePreset") {
+                  nextData.stylePreset = normalizeIntroStylePreset(value);
+                } else if (key === "durationSec") {
+                  nextData.durationSec = normalizeIntroDurationSec(value);
+                } else if (key === "title") {
+                  nextData.title = String(value || "");
+                } else {
+                  nextData[key] = value;
+                }
+                return { ...x, data: nextData };
+              })),
+              onPickImage: async (nodeId, file) => {
+                if (!file) return;
+                try {
+                  const dataUrl = await readFileAsDataUrl(file);
+                  setNodes((prev) => prev.map((x) => (x.id === nodeId
+                    ? { ...x, data: { ...x.data, imageUrl: dataUrl, status: "ready", generatedAt: new Date().toISOString() } }
+                    : x)));
+                } catch (err) {
+                  console.error(err);
+                }
+              },
+              onClearImage: (nodeId) => setNodes((prev) => prev.map((x) => (x.id === nodeId
+                ? { ...x, data: { ...x.data, imageUrl: "", status: "idle", generatedAt: "" } }
+                : x))),
+              onGenerate: (nodeId) => {
+                const currentNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
+                const freshContext = collectIntroFrameContext({
+                  nodeId,
+                  nodes: nodesRef.current || [],
+                  edges: edgesRef.current || [],
+                });
+                const nextTitle = currentNode?.data?.autoTitle
+                  ? buildIntroFrameAutoTitle({ textValue: freshContext.titleText, scenes: freshContext.scenes })
+                  : String(currentNode?.data?.title || "").trim() || freshContext.autoTitle;
+                const imageUrl = buildIntroFramePreviewDataUrl({
+                  title: nextTitle,
+                  stylePreset: currentNode?.data?.stylePreset || "cinematic",
+                  contextSummary: freshContext.summary,
+                });
+                setNodes((prev) => prev.map((x) => (x.id === nodeId
+                  ? {
+                    ...x,
+                    data: {
+                      ...x.data,
+                      title: nextTitle,
+                      imageUrl,
+                      status: "ready",
+                      generatedAt: new Date().toISOString(),
+                      altTitles: [nextTitle].filter(Boolean),
+                    },
+                  }
+                  : x)));
+              },
+            },
+          };
+        }
+
         if (n.type === "refCharacter2" || n.type === "refCharacter3" || n.type === "refAnimal" || n.type === "refGroup") {
           return {
             ...base,
@@ -6300,6 +6841,11 @@ onClipSec: (nodeId, value) => {
               durationSec: assemblyDurationEstimateSec,
               scenesSource: assemblyScenesSource,
               sourceLabel: assemblySourceLabel,
+              introLabel: assemblyIntroLabel,
+              hasIntro: assemblyHasIntro,
+              introDurationSec: Number(assemblyIntroFrame?.durationSec || 0),
+              introTitle: String(assemblyIntroFrame?.title || ""),
+              debugSummary: `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySource.sourceNodeId || "none"}; introNode=${assemblySource.introSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${Number(assemblyIntroFrame?.durationSec || 0) || 0}; audio=${assemblyPayload.audioUrl ? "yes" : "no"}`,
               canAssemble: assemblyPayload.scenes.length > 0 && !isAssembling,
               isAssembling,
               status: assemblyStatus,
@@ -6325,8 +6871,12 @@ return base;
       removeNode,
       edges,
       assemblyDurationEstimateSec,
+      assemblyHasIntro,
+      assemblyIntroFrame,
+      assemblyIntroLabel,
       assemblyReadySceneCount,
       assemblyScenesForPayload.length,
+      assemblySource,
       assemblySourceLabel,
       assemblyScenesSource,
       assemblyPayload,
@@ -6533,6 +7083,17 @@ const hydrate = useCallback((source = "unknown") => {
             data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene");
           }
 
+          if (n.type === "introFrame") {
+            data.title = String(data.title || "");
+            data.autoTitle = !!data.autoTitle;
+            data.stylePreset = normalizeIntroStylePreset(data.stylePreset || "cinematic");
+            data.durationSec = normalizeIntroDurationSec(data.durationSec);
+            data.imageUrl = String(data.imageUrl || "");
+            data.status = ["idle", "generating", "ready", "error"].includes(String(data.status || "")) ? String(data.status) : "idle";
+            data.generatedAt = String(data.generatedAt || "");
+            data.altTitles = Array.isArray(data.altTitles) ? data.altTitles.slice(0, 5).map((item) => String(item || "").trim()).filter(Boolean) : [];
+          }
+
           if (n.type === "audioNode") {
             delete data.audioType;
             data.uploading = false;
@@ -6649,6 +7210,7 @@ const hydrate = useCallback((source = "unknown") => {
         scenes: hydratedScenes,
         audioUrl: hydratedAudioUrl,
         format: hydratedFormat,
+        intro: hydratedAssemblySource.introFrame,
       });
       const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload, hydratedAssemblySource);
       const assemblySourceSceneStats = collectSceneVideoStateStats(
@@ -6663,6 +7225,8 @@ const hydrate = useCallback((source = "unknown") => {
         scenesSource: hydratedAssemblySource.scenesSource,
         assemblySourceNodeId: hydratedAssemblySource.sourceNodeId,
         assemblySourceNodeType: hydratedAssemblySource.sourceNodeType,
+        introSourceNodeId: hydratedAssemblySource.introSourceNodeId,
+        introSourceNodeType: hydratedAssemblySource.introSourceNodeType,
         assemblySourceSceneStats,
         storyboardStats,
         comfyStats,
@@ -6695,6 +7259,7 @@ const hydrate = useCallback((source = "unknown") => {
           finalVideoUrl: String(savedAssemblyResult.finalVideoUrl || ""),
           sceneCount: Number(savedAssemblyResult.sceneCount || 0),
           audioApplied: !!savedAssemblyResult.audioApplied,
+          introIncluded: !!savedAssemblyResult.introIncluded,
         });
         setAssemblyBuildState("done");
         setIsAssemblyStale(false);
@@ -6799,6 +7364,13 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПРЕДМЕТЫ", icon: "📦", kind: "ref_items", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "storyboard") {
       node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [] } };
+    } else if (type === "introFrame") {
+      node = {
+        id,
+        type: "introFrame",
+        position: { x: centerX + jitterX, y: centerY + jitterY },
+        data: { title: "", autoTitle: true, stylePreset: "cinematic", durationSec: 2.5, imageUrl: "", status: "idle", generatedAt: "", altTitles: [] },
+      };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyBrain") {
@@ -6979,6 +7551,7 @@ const hydrate = useCallback((source = "unknown") => {
           finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
           sceneCount: Number(assemblyResult.sceneCount || 0),
           audioApplied: !!assemblyResult.audioApplied,
+          introIncluded: !!assemblyResult.introIncluded,
         }
         : null,
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
@@ -7057,6 +7630,7 @@ const hydrate = useCallback((source = "unknown") => {
           finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
           sceneCount: Number(assemblyResult.sceneCount || 0),
           audioApplied: !!assemblyResult.audioApplied,
+          introIncluded: !!assemblyResult.introIncluded,
         }
         : null,
       assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
@@ -7087,6 +7661,7 @@ const hydrate = useCallback((source = "unknown") => {
       brainNode: BrainNode,
       refNode: RefNode,
       storyboardNode: StoryboardPlanNode,
+      introFrame: IntroFrameNode,
       assemblyNode: AssemblyNode,
       comfyBrain: ComfyBrainNode,
       comfyStoryboard: ComfyStoryboardNode,
@@ -7156,6 +7731,28 @@ const hydrate = useCallback((source = "unknown") => {
           return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
+        if (dst.type === "introFrame") {
+          const targetHandle = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
+          const allowStoryContext =
+            targetHandle === "story_context"
+            && (
+              (src.type === "comfyStoryboard" && sourceHandle === "comfy_scene_video_out")
+              || (src.type === "storyboardNode" && sourceHandle === "plan_out")
+              || (src.type === "brainNode" && sourceHandle === "plan")
+              || (src.type === "comfyBrain" && sourceHandle === "comfy_plan")
+              || (src.type === "refNode" && ["ref_character", "ref_location", "ref_style", "ref_items"].includes(sourceHandle))
+              || (src.type === "textNode" && sourceHandle === "text")
+            );
+          const allowTitleContext = targetHandle === "title_context" && src.type === "textNode" && sourceHandle === "text";
+          if (!allowStoryContext && !allowTitleContext) return eds;
+          const cleaned = allowTitleContext
+            ? eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "title_context"))
+            : eds;
+          const presentation = getEdgePresentation({ sourceHandle, targetHandle, sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+        }
+
         if (src.type === 'comfyStoryboard' && (params.sourceHandle || '') === 'comfy_scene_video_out') {
           if (dst.type === 'assemblyNode' && (params.targetHandle || '') === 'assembly_in') {
             const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_in");
@@ -7170,6 +7767,13 @@ const hydrate = useCallback((source = "unknown") => {
 
         if (src.type === 'comfyStoryboard' || src.type === 'comfyBrain' || src.type === 'comfyVideoPreview' || dst.type === 'comfyStoryboard' || dst.type === 'comfyBrain' || dst.type === 'comfyVideoPreview') {
           return eds;
+        }
+
+        if (src.type === "introFrame" && (params.sourceHandle || "") === "intro_frame_out") {
+          if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_intro") return eds;
+          const cleaned = removeAssemblyIncomingSourceEdges(eds, dst.id, "assembly_intro");
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
 
         if (src.type === "storyboardNode" && (params.sourceHandle || "") === "plan_out") {
@@ -8060,6 +8664,7 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">СЦЕНЫ / СБОРКА</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("storyboard")}>🎞️ Storyboard</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("introFrame")}>🖼️ Intro Frame</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("assembly")}>🎬 Сборка</button>
             </div>
           </div>

@@ -121,10 +121,20 @@ class AssembleSceneIn(BaseModel):
     model: str | None = None
 
 
+class AssembleIntroIn(BaseModel):
+    nodeId: str | None = None
+    title: str | None = None
+    autoTitle: bool | None = True
+    stylePreset: str | None = "cinematic"
+    durationSec: int | float | None = 2.5
+    imageUrl: str | None = None
+
+
 class AssembleClipIn(BaseModel):
     audioUrl: str | None = None
     format: str | None = "9:16"
     scenes: list[AssembleSceneIn]
+    intro: AssembleIntroIn | None = None
 
 
 CLIP_ASSEMBLE_JOBS: dict[str, dict] = {}
@@ -877,6 +887,34 @@ def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, s
     if os.path.isfile(source):
         return source, None
 
+    if source.startswith("data:"):
+        try:
+            header, encoded = source.split(",", 1)
+        except ValueError:
+            return None, "invalid_data_url"
+        mime_match = re.match(r"^data:([^;,]+)?(;base64)?$", header)
+        if not mime_match:
+            return None, "invalid_data_url_header"
+        mime_type = (mime_match.group(1) or "application/octet-stream").strip().lower()
+        is_base64 = ";base64" in header
+        extension = mimetypes.guess_extension(mime_type) or ".bin"
+        fd, temp_path = tempfile.mkstemp(prefix="clip_assemble_data_", suffix=extension)
+        os.close(fd)
+        try:
+            payload = encoded.encode("utf-8")
+            data = base64.b64decode(payload) if is_base64 else requests.utils.unquote_to_bytes(encoded)
+            with open(temp_path, "wb") as f:
+                f.write(data)
+        except Exception:
+            try:
+                if os.path.isfile(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
+            return None, "invalid_data_url_payload"
+        temp_files.append(temp_path)
+        return temp_path, None
+
     parsed = urlparse(source)
     path = parsed.path or ""
     static_candidate = _resolve_static_path(path or source)
@@ -904,6 +942,15 @@ def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, s
 
 def _build_public_static_url(filename: str) -> str:
     return _asset_url(filename)
+
+
+def _resolve_assembly_video_geometry(format_value: str | None) -> tuple[int, int]:
+    normalized = str(format_value or "9:16").strip()
+    if normalized == "1:1":
+        return 1024, 1024
+    if normalized == "16:9":
+        return 1344, 768
+    return 1024, 1820
 
 
 def _debug_audio_slice(audio_url: str, resolved_path: str | None) -> None:
@@ -5840,13 +5887,30 @@ def _update_clip_assemble_job(job_id: str, **updates):
 
 def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     scenes = payload.scenes or []
+    intro = payload.intro
     _ensure_assets_dir()
     temp_files: list[str] = []
     generated_temp_assets: list[str] = []
     prepared_scenes: list[tuple[str, float]] = []
     final_path: str | None = None
 
-    total_scenes = len(scenes)
+    has_intro = bool(str(getattr(intro, "imageUrl", "") or "").strip())
+    total_scenes = len(scenes) + (1 if has_intro else 0)
+    print(
+        "[CLIP ASSEMBLE] source resolution",
+        json.dumps(
+            {
+                "jobId": job_id,
+                "sceneCount": len(scenes),
+                "introPresent": has_intro,
+                "introNodeId": str(getattr(intro, "nodeId", "") or ""),
+                "introDurationSec": float(getattr(intro, "durationSec", 0) or 0),
+                "audioPresent": bool(str(payload.audioUrl or "").strip()),
+                "format": str(payload.format or "9:16"),
+            },
+            ensure_ascii=False,
+        ),
+    )
     print(f"[CLIP ASSEMBLE] job start {job_id}")
     _update_clip_assemble_job(
         job_id,
@@ -5859,6 +5923,66 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     )
 
     try:
+        if has_intro:
+            intro_image_url = str(getattr(intro, "imageUrl", "") or "").strip()
+            intro_duration_raw = getattr(intro, "durationSec", 2.5)
+            try:
+                intro_duration = max(0.1, float(intro_duration_raw or 2.5))
+            except Exception:
+                intro_duration = 2.5
+            intro_path, intro_err = _resolve_media_input(intro_image_url, temp_files)
+            if intro_err or not intro_path:
+                raise RuntimeError(f"INTRO_MEDIA_RESOLVE_FAILED:{intro_err or 'unknown'}")
+
+            intro_filename = f"clip_intro_{uuid4().hex}.mp4"
+            intro_video_path = os.path.join(str(ASSETS_DIR), intro_filename)
+            generated_temp_assets.append(intro_video_path)
+            width, height = _resolve_assembly_video_geometry(payload.format)
+            ffmpeg_ok, ffmpeg_err = _run_ffmpeg([
+                "ffmpeg",
+                "-y",
+                "-loop",
+                "1",
+                "-i",
+                intro_path,
+                "-t",
+                f"{intro_duration:.3f}",
+                "-vf",
+                f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p",
+                "-r",
+                "24",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "veryfast",
+                "-an",
+                intro_video_path,
+            ])
+            if not ffmpeg_ok:
+                if ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"INTRO_RENDER_FAILED:{ffmpeg_err}")
+
+            prepared_scenes.append((intro_video_path, intro_duration))
+            print(
+                "[CLIP ASSEMBLE] intro segment prepared",
+                json.dumps(
+                    {
+                        "jobId": job_id,
+                        "introNodeId": str(getattr(intro, "nodeId", "") or ""),
+                        "title": str(getattr(intro, "title", "") or ""),
+                        "autoTitle": bool(getattr(intro, "autoTitle", True)),
+                        "stylePreset": str(getattr(intro, "stylePreset", "cinematic") or "cinematic"),
+                        "durationSec": intro_duration,
+                        "width": width,
+                        "height": height,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
         for idx, scene in enumerate(scenes):
             with CLIP_ASSEMBLE_JOBS_LOCK:
                 should_stop = CLIP_ASSEMBLE_JOBS.get(job_id, {}).get("status") == "stopped"
@@ -6039,6 +6163,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             finalVideoUrl=final_video_url,
             audioApplied=audio_applied,
             sceneCount=len(prepared_scenes),
+            introIncluded=has_intro,
             error=None,
         )
     except Exception as exc:
@@ -6093,6 +6218,7 @@ def clip_assemble(payload: AssembleClipIn):
             "finalVideoUrl": None,
             "audioApplied": False,
             "sceneCount": 0,
+            "introIncluded": False,
             "error": None,
             "updatedAt": time.time(),
         }
