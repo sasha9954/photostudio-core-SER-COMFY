@@ -6,6 +6,7 @@ from requests import RequestException
 import tempfile
 import subprocess
 import math
+import random
 import base64
 import json
 import re
@@ -1296,6 +1297,15 @@ def _draw_intro_vertical_fade(overlay: Image.Image, *, top_alpha: int, bottom_al
         draw.line((0, y, width, y), fill=(6, 9, 18, min(255, alpha)))
 
 
+INTRO_OVERLAY_STYLES = [
+    "cinematic",
+    "minimal",
+    "trailer",
+    "soft",
+    "contrast",
+]
+
+
 def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, preview_format: str) -> tuple[bytes, dict[str, Any]]:
     base = Image.open(io.BytesIO(raw)).convert("RGBA")
     width, height = base.size
@@ -1342,7 +1352,73 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     font, lines, spacing = _fit_intro_title(draw, title, title_box_w, title_box_h, normalized_preview_format)
     truetype_loaded = isinstance(font, ImageFont.FreeTypeFont)
     title_text = "\n".join(lines)
-    title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=3, align="left")
+    overlay_style = random.choice(INTRO_OVERLAY_STYLES)
+    base_font_size = int(getattr(font, "size", 0) or 0)
+    if overlay_style == "trailer" and truetype_loaded and base_font_size > 0:
+        font = _get_intro_font(max(24, int(base_font_size * 1.08)), bold=True)
+        truetype_loaded = isinstance(font, ImageFont.FreeTypeFont)
+
+    text_stroke_width = 4
+    text_fill = (255, 255, 255, 248)
+    text_stroke_fill = (4, 6, 12, 242)
+    text_glow_stroke_width = 5
+    text_shadow_stroke_width = 5
+    text_shadow_fill = (0, 0, 0, 196)
+    text_shadow_stroke_fill = (0, 0, 0, 168)
+    text_glow_offsets = [(0, 0, 154), (4, 4, 104), (-3, 1, 88), (0, 6, 82)]
+    plate_shadow_fill = (0, 0, 0, 196)
+    plate_fill = (3, 5, 14, 228 if normalized_preview_format == "16:9" else 236)
+    plate_outline = (accent[0], accent[1], accent[2], 118)
+    plate_outline_width = max(3, int(min(width, height) * 0.0038))
+    plate_highlight_fill = (accent[0], accent[1], accent[2], 82)
+    plate_shadow_blur = max(14, int(min(width, height) * 0.022))
+    plate_highlight_blur = max(10, int(min(width, height) * 0.015))
+    draw_plate = True
+    draw_plate_highlight = True
+
+    if overlay_style == "minimal":
+        draw_plate = False
+        draw_plate_highlight = False
+        text_stroke_width = 1
+        text_fill = (255, 255, 255, 220)
+        text_glow_stroke_width = 1
+        text_shadow_stroke_width = 1
+        text_shadow_fill = (0, 0, 0, 140)
+        text_shadow_stroke_fill = (0, 0, 0, 120)
+        text_glow_offsets = [(0, 0, 90), (2, 2, 58)]
+    elif overlay_style == "trailer":
+        text_stroke_width = 5
+        text_glow_stroke_width = 6
+        text_shadow_stroke_width = 6
+        plate_fill = (2, 3, 10, 240 if normalized_preview_format == "16:9" else 246)
+        plate_outline = (accent[0], accent[1], accent[2], 172)
+        plate_highlight_fill = (accent[0], accent[1], accent[2], 106)
+        text_glow_offsets = [(0, 0, 178), (5, 5, 124), (-4, 2, 104), (0, 7, 96)]
+    elif overlay_style == "soft":
+        text_stroke_width = 2
+        text_fill = (255, 255, 255, 236)
+        text_glow_stroke_width = 2
+        text_shadow_stroke_width = 2
+        text_shadow_fill = (0, 0, 0, 154)
+        text_shadow_stroke_fill = (0, 0, 0, 132)
+        plate_fill = (5, 8, 18, 188 if normalized_preview_format == "16:9" else 196)
+        plate_outline = (accent[0], accent[1], accent[2], 88)
+        plate_highlight_fill = (accent[0], accent[1], accent[2], 62)
+        plate_shadow_blur = max(18, int(plate_shadow_blur * 1.3))
+        plate_highlight_blur = max(13, int(plate_highlight_blur * 1.3))
+        text_glow_offsets = [(0, 0, 124), (3, 3, 84), (-2, 1, 70), (0, 5, 62)]
+    elif overlay_style == "contrast":
+        text_fill = (255, 255, 255, 255)
+        text_stroke_width = 4
+        text_stroke_fill = (0, 0, 0, 248)
+        text_glow_stroke_width = 5
+        text_shadow_stroke_width = 5
+        plate_fill = (0, 0, 0, 244)
+        plate_outline = (secondary[0], secondary[1], secondary[2], 190)
+        plate_highlight_fill = (secondary[0], secondary[1], secondary[2], 72)
+        text_glow_offsets = [(0, 0, 170), (4, 4, 118), (-3, 1, 94), (0, 6, 86)]
+
+    title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=text_stroke_width, align="left")
     title_w = title_bbox[2] - title_bbox[0]
     title_h = title_bbox[3] - title_bbox[1]
     title_x = title_box[0]
@@ -1356,50 +1432,55 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
         min(width - 18, title_x + title_w + plate_pad_x),
         min(height - 18, title_y + title_h + plate_pad_y),
     )
+    plate_radius = max(24, int(min(width, height) * 0.032))
 
     plate_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
     plate_shadow_draw = ImageDraw.Draw(plate_shadow)
-    plate_shadow_draw.rounded_rectangle(
-        plate_rect,
-        radius=max(24, int(min(width, height) * 0.032)),
-        fill=(0, 0, 0, 196),
-    )
-    plate_shadow = plate_shadow.filter(ImageFilter.GaussianBlur(radius=max(14, int(min(width, height) * 0.022))))
-    overlay = Image.alpha_composite(overlay, plate_shadow)
+    if draw_plate:
+        plate_shadow_draw.rounded_rectangle(
+            plate_rect,
+            radius=plate_radius,
+            fill=plate_shadow_fill,
+        )
+        plate_shadow = plate_shadow.filter(ImageFilter.GaussianBlur(radius=plate_shadow_blur))
+        overlay = Image.alpha_composite(overlay, plate_shadow)
     draw = ImageDraw.Draw(overlay)
-    draw.rounded_rectangle(
-        plate_rect,
-        radius=max(24, int(min(width, height) * 0.032)),
-        fill=(3, 5, 14, 228 if normalized_preview_format == "16:9" else 236),
-        outline=(accent[0], accent[1], accent[2], 118),
-        width=max(3, int(min(width, height) * 0.0038)),
-    )
+    if draw_plate:
+        draw.rounded_rectangle(
+            plate_rect,
+            radius=plate_radius,
+            fill=plate_fill,
+            outline=plate_outline,
+            width=plate_outline_width,
+        )
 
     plate_highlight = Image.new("RGBA", base.size, (0, 0, 0, 0))
     plate_highlight_draw = ImageDraw.Draw(plate_highlight)
-    plate_highlight_draw.rounded_rectangle(
-        (
-            plate_rect[0],
-            plate_rect[1],
-            plate_rect[2],
-            min(plate_rect[3], plate_rect[1] + max(22, int((plate_rect[3] - plate_rect[1]) * 0.42))),
-        ),
-        radius=max(22, int(min(width, height) * 0.028)),
-        fill=(accent[0], accent[1], accent[2], 82),
-    )
-    plate_highlight = plate_highlight.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(width, height) * 0.015))))
-    overlay = Image.alpha_composite(overlay, plate_highlight)
+    if draw_plate and draw_plate_highlight:
+        plate_highlight_draw.rounded_rectangle(
+            (
+                plate_rect[0],
+                plate_rect[1],
+                plate_rect[2],
+                min(plate_rect[3], plate_rect[1] + max(22, int((plate_rect[3] - plate_rect[1]) * 0.42))),
+            ),
+            radius=max(22, int(min(width, height) * 0.028)),
+            fill=plate_highlight_fill,
+        )
+        plate_highlight = plate_highlight.filter(ImageFilter.GaussianBlur(radius=plate_highlight_blur))
+        overlay = Image.alpha_composite(overlay, plate_highlight)
 
     text_glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
     text_glow_draw = ImageDraw.Draw(text_glow)
-    for dx, dy, alpha in [(0, 0, 154), (4, 4, 104), (-3, 1, 88), (0, 6, 82)]:
+    glow_color = secondary if overlay_style == "contrast" else accent
+    for dx, dy, alpha in text_glow_offsets:
         text_glow_draw.multiline_text(
             (title_x + dx, title_y + dy),
             title_text,
             font=font,
-            fill=(accent[0], accent[1], accent[2], alpha),
+            fill=(glow_color[0], glow_color[1], glow_color[2], alpha),
             spacing=spacing,
-            stroke_width=5,
+            stroke_width=text_glow_stroke_width,
             stroke_fill=(6, 8, 16, min(255, alpha + 40)),
             align="left",
         )
@@ -1412,10 +1493,10 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
         (title_x + max(4, int(width * 0.004)), title_y + max(6, int(height * 0.006))),
         title_text,
         font=font,
-        fill=(0, 0, 0, 196),
+        fill=text_shadow_fill,
         spacing=spacing,
-        stroke_width=5,
-        stroke_fill=(0, 0, 0, 168),
+        stroke_width=text_shadow_stroke_width,
+        stroke_fill=text_shadow_stroke_fill,
         align="left",
     )
     text_shadow = text_shadow.filter(ImageFilter.GaussianBlur(radius=max(4, int(min(width, height) * 0.006))))
@@ -1425,10 +1506,10 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
         (title_x, title_y),
         title_text,
         font=font,
-        fill=(255, 255, 255, 248),
+        fill=text_fill,
         spacing=spacing,
-        stroke_width=4,
-        stroke_fill=(4, 6, 12, 242),
+        stroke_width=text_stroke_width,
+        stroke_fill=text_stroke_fill,
         align="left",
     )
 
@@ -1458,6 +1539,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
     overlay_debug = {
         "title": title,
         "previewFormat": normalized_preview_format,
+        "overlayStyle": overlay_style,
         "titleBox": [int(v) for v in title_box],
         "plateRect": [int(v) for v in plate_rect],
         "fontSize": int(getattr(font, "size", 0) or 0),
@@ -1477,6 +1559,7 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
             {
                 "title": title,
                 "previewFormat": normalized_preview_format,
+                "overlay.overlayStyle": overlay_debug["overlayStyle"],
                 "overlay.titleBox": overlay_debug["titleBox"],
                 "overlay.plateRect": overlay_debug["plateRect"],
                 "overlay.fontSize": overlay_debug["fontSize"],
