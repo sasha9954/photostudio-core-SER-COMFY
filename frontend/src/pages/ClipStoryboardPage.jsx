@@ -3186,17 +3186,17 @@ function IntroFrameNode({ id, data }) {
         icon={<span aria-hidden>🖼️</span>}
         className="clipSB_nodeAssembly"
       >
-        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 960, maxWidth: "100%" }}>
-          <div className="clipSB_introUnified" style={{ marginTop: 10 }}>
+        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 780, maxWidth: "100%" }}>
+          <div className="clipSB_introPanel" style={{ marginTop: 10 }}>
             <div
-              className="clipSB_introColumns"
+              className="clipSB_introSplit"
               style={{
                 gridTemplateColumns: isCompactLayout
                   ? "minmax(0, 1fr)"
-                  : "minmax(300px, 1fr) minmax(210px, 240px)",
+                  : "minmax(320px, 1fr) 240px",
               }}
             >
-              <div className="clipSB_introLeft">
+              <div className="clipSB_introControls">
                   <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
                     <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
                     <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
@@ -3276,29 +3276,19 @@ function IntroFrameNode({ id, data }) {
                   </div>
 
                   <div
-                    className="clipSB_small"
-                    style={{
-                      color: "#cfd8ff",
-                      padding: "10px 12px",
-                      borderRadius: 12,
-                      border: "1px solid rgba(159,176,255,0.16)",
-                      background: "rgba(9,13,24,0.72)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
+                    className="clipSB_introInfoBar clipSB_small"
                     title={previewContext}
                   >
                     Story context: {previewContextShort || "не подключён"}
                   </div>
 
                   {errorMessage ? (
-                    <div className="clipSB_small" style={{ color: "#ff9b9b", padding: "10px 12px", borderRadius: 12, background: "rgba(87,22,28,0.34)", border: "1px solid rgba(255,118,118,0.26)" }}>
+                    <div className="clipSB_introError clipSB_small">
                       Ошибка генерации: {errorMessage}
                     </div>
                   ) : null}
 
-                  <details style={{ borderRadius: 12, border: `1px solid ${selectedStyleMeta.accent}30`, background: "rgba(10,14,24,0.74)" }}>
+                  <details className="clipSB_introDetails" style={{ borderColor: `${selectedStyleMeta.accent}30` }}>
                     <summary style={{ cursor: "pointer", listStyle: "none", padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>
                       <span>Details / Prompt info</span>
                       <span className="clipSB_small" style={{ color: selectedStyleMeta.accent }}>{selectedStyleMeta.uiHint}</span>
@@ -3334,7 +3324,7 @@ function IntroFrameNode({ id, data }) {
                   </details>
                 </div>
 
-              <div className="clipSB_introRight">
+              <div className="clipSB_introResult">
                   <div
                     className="clipSB_introPreviewCard"
                     style={{
