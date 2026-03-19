@@ -840,6 +840,35 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
         prev_scene_type = scene_type
 
     if not scenes:
+        fallback_characters = ["character_1"] if characters_allowed else []
+        fallback_primary_role = "character_1" if characters_allowed else ""
+        fallback_hero_entity_id = "character_1" if characters_allowed else ""
+        fallback_must_appear = ["character_1"] if characters_allowed else []
+        fallback_image_prompt_ru = (
+            "Кинематографичный ключевой кадр с героем в цельном визуальном мире."
+            if characters_allowed
+            else "Документальный кинематографичный кадр среды и инфраструктуры в цельном визуальном мире."
+        )
+        fallback_video_prompt_ru = (
+            "Герой действует в кадре, камера и окружение двигаются естественно в едином стиле."
+            if characters_allowed
+            else "Среда и инфраструктура живут в кадре с реалистичным мотивированным движением камеры и окружения."
+        )
+        fallback_image_prompt_en = (
+            "A cinematic keyframe featuring the hero in a cohesive visual world."
+            if characters_allowed
+            else "A documentary cinematic shot of environment and infrastructure within a cohesive visual world."
+        )
+        fallback_video_prompt_en = (
+            "The hero acts within the frame while camera and environment move naturally in a unified style."
+            if characters_allowed
+            else "Environment and infrastructure breathe within the frame with realistic motivated camera and ambient movement."
+        )
+        fallback_continuity = (
+            "Сохранять стиль, мир и идентичность персонажа."
+            if characters_allowed
+            else "Сохранять стиль, мир и средовую целостность без персонажей в кадре."
+        )
         scenes = [{
             "sceneId": "scene_001",
             "title": "Сцена 1",
@@ -850,26 +879,28 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "sceneType": "STORY_ACTION",
             "purpose": "базовый сторителлинг",
             "emotion": "cinematic",
-            "characters": ["character_1"],
+            "characters": fallback_characters,
             "location": "cinematic_world_main_location",
             "styleKey": str(payload.get("stylePreset") or "realism"),
             "futureRenderModel": "story_video",
-            "imagePromptRu": "Кинематографичный ключевой кадр с героем в цельном визуальном мире.",
-            "videoPromptRu": "Герой действует в кадре, камера и окружение двигаются естественно в едином стиле.",
-            "continuity": "Сохранять стиль, мир и идентичность персонажа.",
+            "imagePromptRu": fallback_image_prompt_ru,
+            "videoPromptRu": fallback_video_prompt_ru,
+            "imagePromptEn": fallback_image_prompt_en,
+            "videoPromptEn": fallback_video_prompt_en,
+            "continuity": fallback_continuity,
             "sceneGoal": "базовый сторителлинг",
             "sceneNarrativeStep": "beat_1",
             "sceneSemanticSource": "fallback",
             "lyricText": "",
             "spokenText": "",
             "refsUsed": [],
-            "primaryRole": "" if not characters_allowed else "character_1",
+            "primaryRole": fallback_primary_role,
             "secondaryRoles": [],
             "roleSelectionReason": "fallback_single_scene",
             "refDirectives": {},
-            "heroEntityId": "" if not characters_allowed else "character_1",
+            "heroEntityId": fallback_hero_entity_id,
             "supportEntityIds": [],
-            "mustAppear": [] if not characters_allowed else ["character_1"],
+            "mustAppear": fallback_must_appear,
             "mustNotAppear": [],
             "environmentLock": True,
             "styleLock": bool(payload.get("freezeStyle", False)),
