@@ -1100,6 +1100,22 @@ body.ps_clip_fullscreen .mainCol {
   cursor: pointer;
   margin-bottom: 10px;
 }
+
+.clipSB_scenarioItemActions{
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.clipSB_scenarioItemActionBtn{
+  min-height: 32px;
+}
+
+.clipSB_scenarioCardAudio{
+  margin-top: 10px;
+  margin-bottom: 0;
+}
 .clipSB_scenarioItemInner{
   display: flex;
   gap: 10px;
