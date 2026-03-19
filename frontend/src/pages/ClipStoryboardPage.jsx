@@ -3186,155 +3186,158 @@ function IntroFrameNode({ id, data }) {
         icon={<span aria-hidden>🖼️</span>}
         className="clipSB_nodeAssembly"
       >
-        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 860, maxWidth: "100%" }}>
+        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 960, maxWidth: "100%" }}>
           <div className="clipSB_introShell" style={{ marginTop: 10 }}>
             <div
-              className="clipSB_introMain"
+              className="clipSB_introLayout"
               style={{
-                gridTemplateColumns: isCompactLayout ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(176px, 208px)",
+                gridTemplateColumns: isCompactLayout
+                  ? "minmax(0, 1fr)"
+                  : "minmax(280px, 330px) minmax(190px, 230px)",
               }}
             >
-              <div className="clipSB_introLeft">
-              <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
-                <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
-                <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
-                <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
-                <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
-              </div>
+              <div className="clipSB_introLeftPanel">
+                <div className="clipSB_introLeft">
+                  <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
+                    <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
+                    <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
+                    <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
+                    <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
+                  </div>
 
-              <label>
-                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
-                <input
-                  className="clipSB_input"
-                  value={String(data?.title || "")}
-                  onChange={(e) => data?.onField?.(id, "title", e.target.value)}
-                  disabled={autoTitle}
-                  placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
-                />
-              </label>
+                  <label>
+                    <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
+                    <input
+                      className="clipSB_input"
+                      value={String(data?.title || "")}
+                      onChange={(e) => data?.onField?.(id, "title", e.target.value)}
+                      disabled={autoTitle}
+                      placeholder={autoTitle ? "Авто по сюжету / сценам" : "Введите заголовок"}
+                    />
+                  </label>
 
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={autoTitle}
-                  onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
-                />
-                <span className="clipSB_small">Auto title по сюжетному контексту</span>
-              </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={autoTitle}
+                      onChange={(e) => data?.onField?.(id, "autoTitle", e.target.checked)}
+                    />
+                    <span className="clipSB_small">Auto title по сюжетному контексту</span>
+                  </label>
 
-              <label>
-                <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
-                <select
-                  className="clipSB_select"
-                  value={selectedStylePreset}
-                  onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
-                  style={{ minHeight: 42 }}
-                >
-                  {INTRO_STYLE_PRESETS.map((item) => {
-                    const meta = getIntroStyleMeta(item);
-                    return <option key={item} value={item}>{meta.label} — {meta.uiHint}</option>;
-                  })}
-                </select>
-              </label>
+                  <label>
+                    <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
+                    <select
+                      className="clipSB_select"
+                      value={selectedStylePreset}
+                      onChange={(e) => data?.onField?.(id, "stylePreset", e.target.value)}
+                      style={{ minHeight: 42 }}
+                    >
+                      {INTRO_STYLE_PRESETS.map((item) => {
+                        const meta = getIntroStyleMeta(item);
+                        return <option key={item} value={item}>{meta.label} — {meta.uiHint}</option>;
+                      })}
+                    </select>
+                  </label>
 
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
-                <label>
-                  <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
-                  <select
-                    className="clipSB_select"
-                    value={previewFormat}
-                    onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
-                    style={{ minHeight: 42 }}
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
+                    <label>
+                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
+                      <select
+                        className="clipSB_select"
+                        value={previewFormat}
+                        onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
+                        style={{ minHeight: 42 }}
+                      >
+                        {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
+                      <input
+                        className="clipSB_input"
+                        type="text"
+                        inputMode="decimal"
+                        value={durationDraft}
+                        onChange={(e) => {
+                          const next = String(e.target.value || "").replace(/[^\d,.\-]/g, "");
+                          setDurationDraft(next);
+                        }}
+                        onBlur={commitDurationDraft}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        placeholder="0,5 – 8,0"
+                      />
+                    </label>
+                  </div>
+
+                  <div
+                    className="clipSB_small"
+                    style={{
+                      color: "#cfd8ff",
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      border: "1px solid rgba(159,176,255,0.16)",
+                      background: "rgba(9,13,24,0.72)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={previewContext}
                   >
-                    {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label>
-                  <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
-                  <input
-                    className="clipSB_input"
-                    type="text"
-                    inputMode="decimal"
-                    value={durationDraft}
-                    onChange={(e) => {
-                      const next = String(e.target.value || "").replace(/[^\d,.\-]/g, "");
-                      setDurationDraft(next);
-                    }}
-                    onBlur={commitDurationDraft}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    onWheel={(e) => e.currentTarget.blur()}
-                    placeholder="0,5 – 8,0"
-                  />
-                </label>
-              </div>
+                    Story context: {previewContextShort || "не подключён"}
+                  </div>
 
-              <div
-                className="clipSB_small"
-                style={{
-                  color: "#cfd8ff",
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(159,176,255,0.16)",
-                  background: "rgba(9,13,24,0.72)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-                title={previewContext}
-              >
-                Story context: {previewContextShort || "не подключён"}
-              </div>
-
-              {errorMessage ? (
-                <div className="clipSB_small" style={{ color: "#ff9b9b", padding: "10px 12px", borderRadius: 12, background: "rgba(87,22,28,0.34)", border: "1px solid rgba(255,118,118,0.26)" }}>
-                  Ошибка генерации: {errorMessage}
-                </div>
-              ) : null}
-
-              <details style={{ borderRadius: 12, border: `1px solid ${selectedStyleMeta.accent}30`, background: "rgba(10,14,24,0.74)" }}>
-                <summary style={{ cursor: "pointer", listStyle: "none", padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>
-                  <span>Details / Prompt info</span>
-                  <span className="clipSB_small" style={{ color: selectedStyleMeta.accent }}>{selectedStyleMeta.uiHint}</span>
-                </summary>
-                <div style={{ display: "grid", gap: 10, padding: "0 12px 12px" }}>
-                  <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
-                    {selectedStyleMeta.shortDescription}
-                  </div>
-                  <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
-                    Rules: {selectedStyleMeta.promptRules.join(" • ")}
-                  </div>
-                  <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
-                    Avoid: {selectedStyleMeta.forbidden.join(" • ")}
-                  </div>
-                  <div className="clipSB_small" style={{ color: "#9fb0ff", lineHeight: 1.4 }}>
-                    Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
-                  </div>
-                  {hasBackendGeneratedAsset ? (
-                    <div className="clipSB_small" style={{ color: "#b8c4ff", lineHeight: 1.4 }}>
-                      Backend-branded asset показан как есть, без локального fake text overlay.
+                  {errorMessage ? (
+                    <div className="clipSB_small" style={{ color: "#ff9b9b", padding: "10px 12px", borderRadius: 12, background: "rgba(87,22,28,0.34)", border: "1px solid rgba(255,118,118,0.26)" }}>
+                      Ошибка генерации: {errorMessage}
                     </div>
                   ) : null}
-                  {detailRows.length ? (
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {detailRows.map(([label, value]) => (
-                        <div key={label} className="clipSB_small" style={{ color: "#dce4ff", lineHeight: 1.4 }}>
-                          <strong style={{ color: "#ffffff" }}>{label}:</strong> {value}
+
+                  <details style={{ borderRadius: 12, border: `1px solid ${selectedStyleMeta.accent}30`, background: "rgba(10,14,24,0.74)" }}>
+                    <summary style={{ cursor: "pointer", listStyle: "none", padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12, fontWeight: 700, color: "#f5f7ff" }}>
+                      <span>Details / Prompt info</span>
+                      <span className="clipSB_small" style={{ color: selectedStyleMeta.accent }}>{selectedStyleMeta.uiHint}</span>
+                    </summary>
+                    <div style={{ display: "grid", gap: 10, padding: "0 12px 12px" }}>
+                      <div className="clipSB_small" style={{ color: "rgba(245,247,255,0.78)", lineHeight: 1.45 }}>
+                        {selectedStyleMeta.shortDescription}
+                      </div>
+                      <div className="clipSB_small" style={{ color: "rgba(207,216,255,0.74)", lineHeight: 1.4 }}>
+                        Rules: {selectedStyleMeta.promptRules.join(" • ")}
+                      </div>
+                      <div className="clipSB_small" style={{ color: "rgba(255,188,188,0.72)", lineHeight: 1.35 }}>
+                        Avoid: {selectedStyleMeta.forbidden.join(" • ")}
+                      </div>
+                      <div className="clipSB_small" style={{ color: "#9fb0ff", lineHeight: 1.4 }}>
+                        Generate вызывает backend Gemini generation и сохраняет preview как asset URL.
+                      </div>
+                      {hasBackendGeneratedAsset ? (
+                        <div className="clipSB_small" style={{ color: "#b8c4ff", lineHeight: 1.4 }}>
+                          Backend-branded asset показан как есть, без локального fake text overlay.
                         </div>
-                      ))}
+                      ) : null}
+                      {detailRows.length ? (
+                        <div style={{ display: "grid", gap: 6 }}>
+                          {detailRows.map(([label, value]) => (
+                            <div key={label} className="clipSB_small" style={{ color: "#dce4ff", lineHeight: 1.4 }}>
+                              <strong style={{ color: "#ffffff" }}>{label}:</strong> {value}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
+                  </details>
                 </div>
-              </details>
+              </div>
 
-            </div>
-
-              <div className="clipSB_introRight">
-                <div className="clipSB_introRightPanel">
+              <div className="clipSB_introRightPanel">
+                <div className="clipSB_introRight">
                   <div
                     className="clipSB_introPreviewCard"
                     style={{
