@@ -1919,17 +1919,27 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_introShell {
-  padding: 12px;
+  padding: 14px;
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(9, 14, 28, 0.92) 0%, rgba(6, 10, 20, 0.88) 100%);
   border: 1px solid rgba(120, 170, 255, 0.18);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-.clipSB_introMain {
+.clipSB_introLayout {
   display: grid;
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
+}
+
+.clipSB_introLeftPanel,
+.clipSB_introRightPanel {
+  min-width: 0;
+  border-radius: 18px;
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(7, 11, 22, 0.9) 0%, rgba(7, 11, 22, 0.78) 100%);
+  border: 1px solid rgba(140, 190, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(18, 28, 54, 0.22);
 }
 
 .clipSB_introLeft {
@@ -1940,21 +1950,11 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_introRight {
-  min-width: 0;
-  display: flex;
-  align-items: stretch;
-}
-
-.clipSB_introRightPanel {
   width: 100%;
   min-width: 0;
   display: grid;
   gap: 12px;
-  padding: 10px;
-  border-radius: 18px;
-  background: rgba(7, 11, 22, 0.78);
-  border: 1px solid rgba(140, 190, 255, 0.14);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(18, 28, 54, 0.22);
+  align-content: start;
 }
 
 .clipSB_introPreviewCard {
@@ -1966,6 +1966,7 @@ body.ps_clip_fullscreen .mainCol {
   border: 1px solid rgba(160, 200, 255, 0.16);
   background: var(--intro-style-background, rgba(5, 8, 16, 0.86));
   box-shadow: 0 20px 34px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  isolation: isolate;
 }
 
 .clipSB_introPreviewCard::after {
@@ -1993,10 +1994,11 @@ body.ps_clip_fullscreen .mainCol {
     padding: 11px;
   }
 
-  .clipSB_introMain {
+  .clipSB_introLayout {
     gap: 14px;
   }
 
+  .clipSB_introLeftPanel,
   .clipSB_introRightPanel {
     padding: 10px;
   }
