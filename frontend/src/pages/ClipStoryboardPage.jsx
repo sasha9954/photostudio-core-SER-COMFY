@@ -3186,23 +3186,23 @@ function IntroFrameNode({ id, data }) {
         icon={<span aria-hidden>🖼️</span>}
         className="clipSB_nodeAssembly"
       >
-        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 780, maxWidth: "100%" }}>
-          <div className="clipSB_introPanel" style={{ marginTop: 10 }}>
+        <div style={{ width: isCompactLayout ? "min(100vw - 96px, 100%)" : 820, maxWidth: "100%" }}>
+          <div className="clipSB_introRoot" style={{ marginTop: 10 }}>
             <div
-              className="clipSB_introSplit"
+              className="clipSB_introGrid"
               style={{
                 gridTemplateColumns: isCompactLayout
                   ? "minmax(0, 1fr)"
-                  : "minmax(320px, 1fr) 240px",
+                  : "minmax(320px, 1fr) 250px",
               }}
             >
-              <div className="clipSB_introControls">
-                  <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
-                    <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
-                    <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
-                    <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
-                    <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
-                  </div>
+              <div className="clipSB_introColControls">
+                <div className="clipSB_assemblyStats" style={{ marginBottom: 0 }}>
+                  <div className="clipSB_assemblyRow"><span>Режим</span><strong>{autoTitle ? "AUTO TITLE" : "MANUAL TITLE"}</strong></div>
+                  <div className="clipSB_assemblyRow"><span>Style</span><strong>{styleMeta.label}</strong></div>
+                  <div className="clipSB_assemblyRow"><span>Длительность</span><strong>{durationSec.toFixed(1)} сек</strong></div>
+                  <div className="clipSB_assemblyRow"><span>Статус</span><strong>{statusLabel}</strong></div>
+                </div>
 
                   <label>
                     <div className="clipSB_hint" style={{ marginBottom: 6 }}>Title</div>
@@ -3324,17 +3324,17 @@ function IntroFrameNode({ id, data }) {
                   </details>
                 </div>
 
-              <div className="clipSB_introResult">
-                  <div
-                    className="clipSB_introPreviewCard"
-                    style={{
-                      '--intro-style-accent': `${styleMeta.accent}`,
-                      '--intro-style-secondary': `${styleMeta.secondary}`,
-                      '--intro-style-background': styleMeta.background,
-                      minHeight: Math.max(previewFormatMeta.cardMinHeight, isCompactLayout ? 300 : 340),
-                      aspectRatio: previewFormatMeta.aspectRatio,
-                    }}
-                  >
+              <div className="clipSB_introColPreview">
+                <div
+                  className="clipSB_introPreviewBox"
+                  style={{
+                    '--intro-style-accent': `${styleMeta.accent}`,
+                    '--intro-style-secondary': `${styleMeta.secondary}`,
+                    '--intro-style-background': styleMeta.background,
+                    minHeight: Math.max(previewFormatMeta.cardMinHeight, isCompactLayout ? 300 : 340),
+                    aspectRatio: previewFormatMeta.aspectRatio,
+                  }}
+                >
                 {hasBackendGeneratedAsset ? (
                   <img
                     src={previewUrl}
@@ -3452,22 +3452,22 @@ function IntroFrameNode({ id, data }) {
                     </div>
                   </>
                 )}
-                  </div>
-
-                  <div className="clipSB_introActions">
-                    <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
-                      {isGenerating ? "Генерация..." : (previewUrl ? "Перегенерировать" : "Сгенерировать")}
-                    </button>
-                    <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
-                      Загрузить
-                    </button>
-                    {previewUrl ? (
-                      <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
-                        Очистить
-                      </button>
-                    ) : null}
-                  </div>
                 </div>
+
+                <div className="clipSB_introActions">
+                  <button className="clipSB_btn" onClick={() => data?.onGenerate?.(id)} disabled={isGenerating}>
+                    {isGenerating ? "Генерация..." : (previewUrl ? "Перегенерировать" : "Сгенерировать")}
+                  </button>
+                  <button className="clipSB_btn clipSB_btnSecondary" onClick={() => fileInputRef.current?.click()}>
+                    Загрузить
+                  </button>
+                  {previewUrl ? (
+                    <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onClearImage?.(id)}>
+                      Очистить
+                    </button>
+                  ) : null}
+                </div>
+              </div>
               </div>
             </div>
 
