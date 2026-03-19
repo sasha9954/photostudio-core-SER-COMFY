@@ -467,6 +467,30 @@ function mergeVideoStateBySceneId(nextScenes, existingScenes, { panelField = "" 
         merged[field] = prev[field];
       }
     }
+    for (const field of [
+      "audioSliceUrl",
+      "audioSliceStatus",
+      "audioSliceError",
+      "audioSliceLoadError",
+    ]) {
+      if (!String(merged?.[field] || "").trim() && String(prev?.[field] || "").trim()) {
+        merged[field] = prev[field];
+      }
+    }
+    for (const field of [
+      "audioSliceStartSec",
+      "audioSliceEndSec",
+      "audioSliceDurationSec",
+      "audioSliceT0",
+      "audioSliceT1",
+      "audioSliceExpectedDurationSec",
+      "audioSliceBackendDurationSec",
+      "audioSliceActualDurationSec",
+    ]) {
+      if ((merged?.[field] == null || merged?.[field] === "") && prev?.[field] != null && prev?.[field] !== "") {
+        merged[field] = prev[field];
+      }
+    }
     if (panelField && merged?.[panelField] == null && prev?.[panelField] != null) {
       merged[panelField] = prev[panelField];
     }
@@ -3967,8 +3991,14 @@ const scenarioSelectedIndexLabel = Number.isFinite(scenarioEditor.selected) ? sc
 const scenarioSelectedT0 = Number(scenarioSelected?.t0 ?? scenarioSelected?.start ?? 0);
 const scenarioSelectedT1 = Number(scenarioSelected?.t1 ?? scenarioSelected?.end ?? 0);
 const scenarioSelectedExpectedSliceSec = Number(
-  scenarioSelected?.audioSliceExpectedDurationSec ?? Math.max(0, scenarioSelectedT1 - scenarioSelectedT0)
+  scenarioSelected?.audioSliceDurationSec
+    ?? scenarioSelected?.audioSliceExpectedDurationSec
+    ?? Math.max(0, scenarioSelectedT1 - scenarioSelectedT0)
 );
+const scenarioSelectedAudioSliceStatus = String(scenarioSelected?.audioSliceStatus || "").trim();
+const scenarioSelectedAudioSliceError = String(
+  scenarioSelected?.audioSliceError || scenarioSelected?.audioSliceLoadError || ""
+).trim();
 const globalAudioUrlRaw = useMemo(() => extractGlobalAudioUrlFromNodes(nodes), [nodes]);
 const globalAudioUrlResolved = useMemo(() => resolveAssetUrl(globalAudioUrlRaw), [globalAudioUrlRaw]);
 const scenarioSelectedAudioSliceUrl = useMemo(() => resolveAssetUrl(scenarioSelected?.audioSliceUrl), [scenarioSelected?.audioSliceUrl]);
@@ -5876,45 +5906,84 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoOpen(false);
   }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
-  const handleScenarioVideoTakeAudio = useCallback(async () => {
-    if (!scenarioSelected) return;
+  const handleScenarioTakeAudioByIndex = useCallback(async (idx) => {
+    const scene = scenarioScenes[idx] || null;
+    if (!scene) return;
     if (!globalAudioUrlRaw) {
-      setScenarioVideoError("Не найден общий audioUrl в Audio node");
+      const msg = "Не найден общий audioUrl в Audio node";
+      updateScenarioScene(idx, {
+        audioSliceStatus: "error",
+        audioSliceError: msg,
+        audioSliceLoadError: msg,
+      });
+      if (idx === scenarioEditor.selected) setScenarioVideoError(msg);
       return;
     }
-    const sceneId = String(scenarioSelected?.sceneId || "").trim();
-    if (!sceneId) throw new Error("scene_id_required");
-    const t0 = Number(scenarioSelected.t0 ?? scenarioSelected.start ?? 0);
-    const t1 = Number(scenarioSelected.t1 ?? scenarioSelected.end ?? 0);
 
-    console.log("[StoryboardVideo] audio_loading_on reason=take_audio", { sceneId });
-    setScenarioAudioSliceLoading(true);
-    setScenarioVideoError("");
+    const sceneId = String(scene?.sceneId || "").trim();
+    if (!sceneId) throw new Error("scene_id_required");
+    const startSec = Number(scene.t0 ?? scene.start ?? 0);
+    const endSec = Number(scene.t1 ?? scene.end ?? 0);
+
+    console.log("[StoryboardVideo] audio_loading_on reason=take_audio", { sceneId, startSec, endSec });
+    if (idx === scenarioEditor.selected) {
+      setScenarioAudioSliceLoading(true);
+      setScenarioVideoError("");
+    }
+    updateScenarioScene(idx, {
+      audioSliceStatus: "loading",
+      audioSliceError: "",
+      audioSliceLoadError: "",
+      audioSliceStartSec: startSec,
+      audioSliceEndSec: endSec,
+      audioSliceT0: startSec,
+      audioSliceT1: endSec,
+      audioSliceDurationSec: Math.max(0, endSec - startSec),
+      audioSliceExpectedDurationSec: Math.max(0, endSec - startSec),
+    });
+
     try {
-      const out = await fetchJson("/api/clip/audio-slice", {
+      const out = await fetchJson("/api/clip/audio/slice", {
         method: "POST",
-        body: { sceneId, t0, t1, audioUrl: globalAudioUrlRaw },
+        body: { sceneId, startSec, endSec, audioUrl: globalAudioUrlRaw },
       });
       if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
-      const outT0 = Number(out?.t0 ?? t0);
-      const outT1 = Number(out?.t1 ?? t1);
-      const expectedDuration = Math.max(0, outT1 - outT0);
-      updateScenarioScene(scenarioEditor.selected, {
+      const outStartSec = Number(out?.startSec ?? out?.t0 ?? startSec);
+      const outEndSec = Number(out?.endSec ?? out?.t1 ?? endSec);
+      const durationSec = normalizeDurationSec(out?.durationSec ?? out?.audioSliceBackendDurationSec ?? out?.duration);
+      const expectedDuration = Math.max(0, outEndSec - outStartSec);
+      updateScenarioScene(idx, {
         audioSliceUrl: String(out.audioSliceUrl || ""),
-        audioSliceT0: outT0,
-        audioSliceT1: outT1,
+        audioSliceStartSec: outStartSec,
+        audioSliceEndSec: outEndSec,
+        audioSliceDurationSec: durationSec ?? expectedDuration,
+        audioSliceStatus: "ready",
+        audioSliceError: "",
+        audioSliceT0: outStartSec,
+        audioSliceT1: outEndSec,
         audioSliceExpectedDurationSec: expectedDuration,
-        audioSliceBackendDurationSec: normalizeDurationSec(out?.audioSliceBackendDurationSec ?? out?.duration),
+        audioSliceBackendDurationSec: durationSec,
         audioSliceActualDurationSec: null,
         audioSliceLoadError: "",
       });
     } catch (e) {
       console.error(e);
-      setScenarioVideoError(String(e?.message || e));
+      const msg = String(e?.message || e || "audio_slice_failed");
+      updateScenarioScene(idx, {
+        audioSliceStatus: "error",
+        audioSliceError: msg,
+        audioSliceLoadError: msg,
+      });
+      if (idx === scenarioEditor.selected) setScenarioVideoError(msg);
     } finally {
-      setScenarioAudioSliceLoading(false);
+      if (idx === scenarioEditor.selected) setScenarioAudioSliceLoading(false);
     }
-  }, [globalAudioUrlRaw, scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
+  }, [globalAudioUrlRaw, scenarioEditor.selected, scenarioScenes, updateScenarioScene]);
+
+  const handleScenarioVideoTakeAudio = useCallback(async () => {
+    if (!scenarioSelected) return;
+    await handleScenarioTakeAudioByIndex(scenarioEditor.selected);
+  }, [handleScenarioTakeAudioByIndex, scenarioEditor.selected, scenarioSelected]);
 
   const handleScenarioSliceLoadedMetadata = useCallback((event) => {
     if (!scenarioSelected) return;
@@ -5922,6 +5991,8 @@ Aspect ratio: ${imageFormat}`,
     const duration = mediaEl && Number.isFinite(mediaEl.duration) ? Number(mediaEl.duration) : null;
     updateScenarioScene(scenarioEditor.selected, {
       audioSliceActualDurationSec: duration,
+      audioSliceStatus: "ready",
+      audioSliceError: "",
       audioSliceLoadError: "",
     });
   }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
@@ -5931,6 +6002,8 @@ Aspect ratio: ${imageFormat}`,
     const msg = "Не удалось загрузить вырезанный mp3-срез. Проверьте URL и наличие файла.";
     updateScenarioScene(scenarioEditor.selected, {
       audioSliceActualDurationSec: null,
+      audioSliceStatus: "error",
+      audioSliceError: msg,
       audioSliceLoadError: msg,
     });
     setScenarioVideoError(msg);
@@ -7081,6 +7154,13 @@ onClipSec: (nodeId, value) => {
                         startFrameSource: s.startFrameSource === "previous_end" ? "previous_end" : "manual",
                         imageFormat: normalizeSceneImageFormat(s.imageFormat),
                         audioSliceUrl: s.audioSliceUrl || "",
+                        audioSliceStartSec: Number(s.audioSliceStartSec ?? s.audioSliceT0 ?? t0),
+                        audioSliceEndSec: Number(s.audioSliceEndSec ?? s.audioSliceT1 ?? t1),
+                        audioSliceDurationSec: normalizeDurationSec(
+                          s.audioSliceDurationSec ?? s.audioSliceBackendDurationSec ?? s.audioSliceExpectedDurationSec
+                        ),
+                        audioSliceStatus: String(s.audioSliceStatus || (s.audioSliceUrl ? "ready" : "")),
+                        audioSliceError: s.audioSliceError || s.audioSliceLoadError || "",
                         audioSliceT0: Number(s.audioSliceStartSec ?? s.audioSliceT0 ?? t0),
                         audioSliceT1: Number(s.audioSliceEndSec ?? s.audioSliceT1 ?? t1),
                         audioSliceExpectedDurationSec: Number(
@@ -7093,7 +7173,7 @@ onClipSec: (nodeId, value) => {
                         ),
                         audioSliceBackendDurationSec: normalizeDurationSec(s.audioSliceBackendDurationSec),
                         audioSliceActualDurationSec: normalizeDurationSec(s.audioSliceActualDurationSec),
-                        audioSliceLoadError: s.audioSliceLoadError || "",
+                        audioSliceLoadError: s.audioSliceLoadError || s.audioSliceError || "",
                         videoUrl: s.videoUrl || "",
                         videoSourceImageUrl: s.videoSourceImageUrl || "",
                         videoPanelActivated: !!s.videoPanelActivated,
@@ -7110,8 +7190,6 @@ onClipSec: (nodeId, value) => {
                         sceneRenderProvider: s.provider || "kie",
                         sceneRenderModel: s.model || "",
                         requestedDurationSec: normalizeDurationSec(s.requestedDurationSec ?? Math.max(0, t1 - t0)),
-                        audioSliceStartSec: Number(s.audioSliceStartSec ?? t0),
-                        audioSliceEndSec: Number(s.audioSliceEndSec ?? t1),
                         mouthVisible: s.mouthVisible ?? null,
                         lyricFragment: s.lyricFragment || "",
                         timingReason: s.timingReason || s.why || "",
@@ -9233,49 +9311,87 @@ const hydrate = useCallback((source = "unknown") => {
                 {scenarioScenes.map((s, i) => {
                   const previousScene = i > 0 ? scenarioScenes[i - 1] : null;
                   const sceneThumb = getSceneListThumb(s, previousScene);
+                  const sceneAudioSliceUrl = resolveAssetUrl(s.audioSliceUrl);
+                  const sceneAudioSliceStatus = String(s.audioSliceStatus || (s.audioSliceUrl ? "ready" : "")).trim();
+                  const sceneAudioSliceError = String(s.audioSliceError || s.audioSliceLoadError || "").trim();
                   return (
-                    <button
-                    key={getScenarioSceneStableKey(s, i)}
-                    ref={(node) => {
-                      if (node) scenarioItemRefs.current.set(i, node);
-                      else scenarioItemRefs.current.delete(i);
-                    }}
-                    className={"clipSB_scenarioItem"
-                      + (i === scenarioEditor.selected ? " isActive" : "")}
-                    onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
-                  >
-                    <div className="clipSB_scenarioItemInner">
-                      {sceneThumb ? (
-                        <img
-                          src={sceneThumb}
-                          alt="scene"
-                          className="clipSB_scenarioThumb"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openLightbox(sceneThumb, e.currentTarget.getBoundingClientRect());
-                          }}
-                        />
-                      ) : (
-                        <div className="clipSB_scenarioThumb clipSB_scenarioThumbPlaceholder" />
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="clipSB_scenarioItemTop">
-                          <div className="clipSB_scenarioItemTime">
-                            {fmtTime(s.start)} → {fmtTime(s.end)}
+                    <div
+                      key={getScenarioSceneStableKey(s, i)}
+                      ref={(node) => {
+                        if (node) scenarioItemRefs.current.set(i, node);
+                        else scenarioItemRefs.current.delete(i);
+                      }}
+                      className={"clipSB_scenarioItem"
+                        + (i === scenarioEditor.selected ? " isActive" : "")}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setScenarioEditor((x) => ({ ...x, selected: i }))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setScenarioEditor((x) => ({ ...x, selected: i }));
+                        }
+                      }}
+                    >
+                      <div className="clipSB_scenarioItemInner">
+                        {sceneThumb ? (
+                          <img
+                            src={sceneThumb}
+                            alt="scene"
+                            className="clipSB_scenarioThumb"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openLightbox(sceneThumb, e.currentTarget.getBoundingClientRect());
+                            }}
+                          />
+                        ) : (
+                          <div className="clipSB_scenarioThumb clipSB_scenarioThumbPlaceholder" />
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="clipSB_scenarioItemTop">
+                            <div className="clipSB_scenarioItemTime">
+                              {fmtTime(s.start)} → {fmtTime(s.end)}
+                            </div>
+                            <div className="clipSB_scenarioTags">
+                              <div className="clipSB_tag">{getSceneTypeBadge(resolveSceneTransitionType(s))}</div>
+                              {sceneThumb ? <div className="clipSB_tag">IMG</div> : null}
+                              {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
+                              {sceneAudioSliceUrl ? <div className="clipSB_tag clipSB_tagOk">AUDIO ✓</div> : null}
+                              {i === recommendedNextSceneIndex ? <div className="clipSB_tag clipSB_tagNext">NEXT</div> : null}
+                              {isLipSyncScene(s) ? <div className="clipSB_tag">LS</div> : null}
+                            </div>
                           </div>
-                          <div className="clipSB_scenarioTags">
-                            <div className="clipSB_tag">{getSceneTypeBadge(resolveSceneTransitionType(s))}</div>
-                            {sceneThumb ? <div className="clipSB_tag">IMG</div> : null}
-                            {s.videoUrl ? <div className="clipSB_tag clipSB_tagDone">VIDEO ✓</div> : null}
-                            {i === recommendedNextSceneIndex ? <div className="clipSB_tag clipSB_tagNext">NEXT</div> : null}
-                            {isLipSyncScene(s) ? <div className="clipSB_tag">LS</div> : null}
+                          <div className="clipSB_scenarioItemText">{getSceneUiDescription(s).slice(0, 90)}</div>
+                          <div className="clipSB_scenarioItemActions">
+                            <button
+                              type="button"
+                              className="clipSB_btn clipSB_btnSecondary clipSB_scenarioItemActionBtn"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                void handleScenarioTakeAudioByIndex(i);
+                              }}
+                              disabled={!globalAudioUrlRaw || sceneAudioSliceStatus === "loading"}
+                            >
+                              {sceneAudioSliceStatus === "loading" ? "Делаю..." : (sceneAudioSliceUrl ? "Обновить аудио" : "Взять аудио")}
+                            </button>
                           </div>
+                          {sceneAudioSliceUrl ? (
+                            <audio
+                              key={`scene-card-audio-${String(s.sceneId || i)}-${String(sceneAudioSliceUrl || "")}`}
+                              className="clipSB_audioPlayer clipSB_scenarioCardAudio"
+                              controls
+                              preload="metadata"
+                              src={sceneAudioSliceUrl}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : null}
+                          {sceneAudioSliceStatus === "loading" ? <div className="clipSB_hint">Извлекаю аудио по timeline сцены…</div> : null}
+                          {sceneAudioSliceError ? <div className="clipSB_hint" style={{ color: "#ff8a8a" }}>{sceneAudioSliceError}</div> : null}
                         </div>
-                        <div className="clipSB_scenarioItemText">{getSceneUiDescription(s).slice(0, 90)}</div>
                       </div>
                     </div>
-                    </button>
                   );
                 })}
               </div>
@@ -9585,8 +9701,8 @@ const hydrate = useCallback((source = "unknown") => {
                         <div className="clipSB_videoKv"><span>actual duration</span><span>{fmtSecAndMs(scenarioSelected.audioSliceActualDurationSec)}</span></div>
                       </div>
 
-                      {scenarioSelected.audioSliceLoadError ? (
-                        <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioSelected.audioSliceLoadError}</div>
+                      {scenarioSelectedAudioSliceError ? (
+                        <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioSelectedAudioSliceError}</div>
                       ) : null}
                     </div>
 
@@ -9693,18 +9809,18 @@ const hydrate = useCallback((source = "unknown") => {
                           <div className="clipSB_videoKv"><span>videoUrl</span><span>{scenarioSelected.videoUrl || "—"}</span></div>
                         </details>
                         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioAudioSliceLoading || !globalAudioUrlRaw}>
-                            {scenarioAudioSliceLoading ? "Делаю..." : "Взять аудио"}
+                          <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioVideoTakeAudio} disabled={scenarioAudioSliceLoading || scenarioSelectedAudioSliceStatus === "loading" || !globalAudioUrlRaw}>
+                            {scenarioAudioSliceLoading ? "Делаю..." : (scenarioSelected?.audioSliceUrl ? "Обновить аудио" : "Взять аудио")}
                           </button>
                           <button
                             className="clipSB_btn clipSB_btnSecondary"
                             onClick={handleScenarioGenerateVideo}
                             disabled={scenarioVideoLoading || !(scenarioSelectedTransitionType === "continuous" ? (scenarioSelectedEffectiveStartImageUrl || scenarioSelected.endImageUrl || scenarioSelected.imageUrl) : scenarioSelected.imageUrl) || (scenarioSelectedIsLipSync && !scenarioSelected.audioSliceUrl)}
                           >
-                            {scenarioVideoLoading ? "Делаю..." : "Сгенерировать видео"}
+                            {scenarioVideoLoading ? "Делаю..." : "Сделать видео"}
                           </button>
                           <button className="clipSB_btn clipSB_btnSecondary" onClick={handleScenarioClearVideo} disabled={scenarioVideoLoading}>
-                            Очистить видео
+                            Удалить видео
                           </button>
                         </div>
                         {(scenarioSelected?.videoError || scenarioVideoError) ? <div className="clipSB_hint" style={{ color: "#ff8a8a", marginTop: 6 }}>{scenarioSelected?.videoError || scenarioVideoError}</div> : null}

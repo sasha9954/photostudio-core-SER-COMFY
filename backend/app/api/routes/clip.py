@@ -91,9 +91,11 @@ class ClipImageRefsIn(BaseModel):
 
 class AudioSliceIn(BaseModel):
     sceneId: str
-    t0: float
-    t1: float
     audioUrl: str
+    startSec: float | None = None
+    endSec: float | None = None
+    t0: float | None = None
+    t1: float | None = None
 
 
 class ClipVideoIn(BaseModel):
@@ -1916,50 +1918,39 @@ def _resolve_audio_asset_path(audio_url: str) -> str | None:
     return None
 
 
+def _resolve_audio_slice_source(audio_url: str, temp_files: list[str]) -> tuple[str | None, str | None]:
+    resolved_path = _resolve_audio_asset_path(audio_url)
+    if resolved_path:
+        return resolved_path, None
+    return _resolve_media_input(audio_url, temp_files)
+
+
 def _ffmpeg_audio_slice(input_path: str, output_path: str, t0: float, t1: float) -> tuple[bool, str]:
     dur = max(0.0, t1 - t0)
     if dur < 0.05:
         dur = 0.05
 
-    first_cmd = [
+    cmd = [
         "ffmpeg", "-y",
-        "-ss", str(t0),
-        "-to", str(t1),
         "-i", input_path,
-        "-c", "copy",
+        "-ss", f"{t0:.3f}",
+        "-t", f"{dur:.3f}",
+        "-vn",
+        "-map", "a:0?",
+        "-acodec", "libmp3lame",
+        "-b:a", "192k",
         output_path,
     ]
     try:
-        first = subprocess.run(first_cmd, capture_output=True, text=True)
-        if (
-            first.returncode == 0
-            and os.path.isfile(output_path)
-            and os.path.getsize(output_path) > 1024
-        ):
-            return True, ""
-
-        fallback_cmd = [
-            "ffmpeg", "-y",
-            "-i", input_path,
-            "-ss", str(t0),
-            "-t", str(dur),
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-b:a", "192k",
-            output_path,
-        ]
-        fallback = subprocess.run(fallback_cmd, capture_output=True, text=True)
-        if (
-            fallback.returncode == 0
-            and os.path.isfile(output_path)
-            and os.path.getsize(output_path) > 1024
-        ):
-            return True, ""
-
-        err = (fallback.stderr or first.stderr or "ffmpeg_failed").strip()
-        return False, err[:500]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
         return False, "ffmpeg_missing_install_and_add_to_PATH"
+
+    if proc.returncode == 0 and os.path.isfile(output_path) and os.path.getsize(output_path) > 1024:
+        return True, ""
+
+    err = (proc.stderr or proc.stdout or "ffmpeg_failed").strip()
+    return False, err[:500]
 
 
 def _run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
@@ -7269,48 +7260,79 @@ def clip_image(payload: ClipImageIn):
             return JSONResponse(status_code=500, content={"ok": False, "code": "IMAGE_GENERATION_FAILED", "hint": str(e)[:300]})
 
 
-@router.post("/clip/audio-slice")
-def clip_audio_slice(payload: AudioSliceIn):
+def _clip_audio_slice_response(payload: AudioSliceIn):
     scene_id = (payload.sceneId or "").strip()
     if not scene_id:
         return JSONResponse(status_code=400, content={"ok": False, "code": "BAD_REQUEST", "hint": "sceneId_required"})
 
-    t0 = round(float(payload.t0), 3)
-    t1 = round(float(payload.t1), 3)
+    start_raw = payload.startSec if payload.startSec is not None else payload.t0
+    end_raw = payload.endSec if payload.endSec is not None else payload.t1
+    if start_raw is None:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_startSec", "hint": "startSec_required"})
+    if end_raw is None:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_endSec", "hint": "endSec_required"})
+
+    t0 = round(float(start_raw), 3)
+    t1 = round(float(end_raw), 3)
     if t0 < 0:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_t0", "hint": "t0_must_be_non_negative"})
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_startSec", "hint": "startSec_must_be_non_negative"})
     if t1 <= t0:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_range", "hint": "t1_must_be_greater_than_t0"})
+        return JSONResponse(status_code=400, content={"ok": False, "code": "bad_range", "hint": "endSec_must_be_greater_than_startSec"})
     if (t1 - t0) > 300.0:
         return JSONResponse(status_code=400, content={"ok": False, "code": "slice_too_long", "hint": "max_slice_sec_300"})
 
-    path = _resolve_audio_asset_path(payload.audioUrl)
-    if not path:
-        _debug_audio_slice(payload.audioUrl, path)
-        return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": "audioUrl_must_point_to_/static/assets/<file>_or_/assets/<file>"})
+    temp_files: list[str] = []
+    try:
+        path, resolve_error = _resolve_audio_slice_source(payload.audioUrl, temp_files)
+        if not path:
+            _debug_audio_slice(payload.audioUrl, path)
+            return JSONResponse(status_code=400, content={"ok": False, "code": "invalid_audioUrl", "hint": resolve_error or "audio_source_not_resolved"})
 
-    _ensure_assets_dir()
-    safe_scene = re.sub(r"[^a-zA-Z0-9_-]", "_", scene_id) or "scene"
-    t0_ms = int(round(t0 * 1000))
-    t1_ms = int(round(t1 * 1000))
-    filename = f"clip_audio_{safe_scene}_{t0_ms}_{t1_ms}_{uuid4().hex[:8]}.mp3"
-    output_path = os.path.join(str(ASSETS_DIR), filename)
+        _ensure_assets_dir()
+        safe_scene = re.sub(r"[^a-zA-Z0-9_-]", "_", scene_id) or "scene"
+        t0_ms = int(round(t0 * 1000))
+        t1_ms = int(round(t1 * 1000))
+        filename = f"clip_audio_{safe_scene}_{t0_ms}_{t1_ms}_{uuid4().hex[:8]}.mp3"
+        output_path = os.path.join(str(ASSETS_DIR), filename)
 
-    ok, err = _ffmpeg_audio_slice(path, output_path, t0, t1)
-    if not ok:
-        _debug_audio_slice(payload.audioUrl, path)
-        return JSONResponse(status_code=500, content={"ok": False, "code": "slice_failed", "hint": err})
+        ok, err = _ffmpeg_audio_slice(path, output_path, t0, t1)
+        if not ok:
+            _debug_audio_slice(payload.audioUrl, path)
+            return JSONResponse(status_code=500, content={"ok": False, "code": "slice_failed", "hint": err})
 
-    return {
-        "ok": True,
-        "audioUrl": payload.audioUrl,
-        "audioSliceUrl": _asset_url(filename),
-        "sliceUrl": _asset_url(filename),
-        "t0": t0,
-        "t1": t1,
-        "duration": round(t1 - t0, 3),
-        "audioSliceBackendDurationSec": round(t1 - t0, 3),
-    }
+        duration = round(t1 - t0, 3)
+        asset = _asset_url(filename)
+        return {
+            "ok": True,
+            "sceneId": scene_id,
+            "audioUrl": payload.audioUrl,
+            "audioSliceUrl": asset,
+            "sliceUrl": asset,
+            "startSec": t0,
+            "endSec": t1,
+            "durationSec": duration,
+            "t0": t0,
+            "t1": t1,
+            "duration": duration,
+            "audioSliceBackendDurationSec": duration,
+        }
+    finally:
+        for temp_path in temp_files:
+            try:
+                if temp_path and os.path.isfile(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@router.post("/clip/audio-slice")
+def clip_audio_slice(payload: AudioSliceIn):
+    return _clip_audio_slice_response(payload)
+
+
+@router.post("/clip/audio/slice")
+def clip_audio_slice_v2(payload: AudioSliceIn):
+    return _clip_audio_slice_response(payload)
 
 
 
