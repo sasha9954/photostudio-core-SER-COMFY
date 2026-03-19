@@ -1918,39 +1918,62 @@ body.ps_clip_fullscreen .mainCol {
   }
 }
 
-.clipSB_introUnified {
+.clipSB_introPanel {
   padding: 16px;
-  border-radius: 22px;
-  background: linear-gradient(180deg, rgba(9, 14, 28, 0.92) 0%, rgba(6, 10, 20, 0.88) 100%);
-  border: 1px solid rgba(120, 170, 255, 0.18);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(44, 76, 138, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  border-radius: 20px;
+  background: rgba(7, 10, 18, 0.96);
+  border: 1px solid rgba(110, 150, 230, 0.16);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
 }
 
-.clipSB_introColumns {
+.clipSB_introSplit {
   display: grid;
   gap: 16px;
   align-items: start;
 }
 
-.clipSB_introLeft,
-.clipSB_introRight {
+.clipSB_introControls,
+.clipSB_introResult {
   min-width: 0;
   display: grid;
   align-content: start;
 }
 
-.clipSB_introLeft {
+.clipSB_introControls {
   gap: 10px;
   padding: 4px 2px 4px 0;
 }
 
-.clipSB_introRight {
+.clipSB_introResult {
   width: 100%;
   gap: 12px;
   padding: 8px 0 8px 16px;
-  border-left: 1px solid rgba(140, 190, 255, 0.12);
-  background: linear-gradient(180deg, rgba(16, 22, 38, 0.22) 0%, rgba(16, 22, 38, 0.08) 100%);
-  border-radius: 16px;
+  border-left: 1px solid rgba(120, 170, 255, 0.10);
+}
+
+.clipSB_introInfoBar {
+  color: #cfd8ff;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(159, 176, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clipSB_introError {
+  color: #ff9b9b;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 118, 118, 0.26);
+  background: rgba(255, 118, 118, 0.08);
+}
+
+.clipSB_introDetails {
+  border-radius: 12px;
+  border: 1px solid rgba(159, 176, 255, 0.16);
+  background: transparent;
 }
 
 .clipSB_introPreviewCard {
@@ -1986,25 +2009,23 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 @media (max-width: 1279px) {
-  .clipSB_introUnified {
+  .clipSB_introPanel {
     padding: 14px;
   }
 
-  .clipSB_introColumns {
+  .clipSB_introSplit {
     gap: 14px;
   }
 
-  .clipSB_introRight {
+  .clipSB_introResult {
     padding-left: 14px;
   }
 }
 
 @media (max-width: 960px) {
-  .clipSB_introRight {
+  .clipSB_introResult {
     padding: 4px 0 0;
     border-left: none;
     border-top: 1px solid rgba(140, 190, 255, 0.12);
-    border-radius: 0;
-    background: none;
   }
 }
