@@ -6409,6 +6409,39 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyJobId("");
   }, [assemblyJobId, stopAssemblyPolling]);
 
+  const handleAssemblyBuildRef = useRef(handleAssemblyBuild);
+  const handleAssemblyStopRef = useRef(handleAssemblyStop);
+
+  useEffect(() => {
+    const changed = handleAssemblyBuildRef.current !== handleAssemblyBuild;
+    if (changed) {
+      console.debug("[CLIP TRACE] assembly build callback refreshed", {
+        changed,
+        payloadSignature: assemblyPayloadSignature,
+      });
+    }
+    handleAssemblyBuildRef.current = handleAssemblyBuild;
+  }, [assemblyPayloadSignature, handleAssemblyBuild]);
+
+  useEffect(() => {
+    const changed = handleAssemblyStopRef.current !== handleAssemblyStop;
+    if (changed) {
+      console.debug("[CLIP TRACE] assembly stop callback refreshed", {
+        changed,
+        jobId: assemblyJobId,
+      });
+    }
+    handleAssemblyStopRef.current = handleAssemblyStop;
+  }, [assemblyJobId, handleAssemblyStop]);
+
+  const stableHandleAssemblyBuild = useCallback((...args) => {
+    return handleAssemblyBuildRef.current?.(...args);
+  }, []);
+
+  const stableHandleAssemblyStop = useCallback((...args) => {
+    return handleAssemblyStopRef.current?.(...args);
+  }, []);
+
   const assemblyStatus = useMemo(() => {
     const hasVideoScenes = assemblyPayload.scenes.length > 0;
     if (isAssembling) return "building";
@@ -6444,8 +6477,8 @@ Aspect ratio: ${imageFormat}`,
     assemblyStageCurrent,
     assemblyStageTotal,
     isStale: isAssemblyStale,
-    onAssemble: handleAssemblyBuild,
-    onStopAssemble: handleAssemblyStop,
+    onAssemble: stableHandleAssemblyBuild,
+    onStopAssemble: stableHandleAssemblyStop,
   }), [
     assemblyCanAssemble,
     assemblyDebugSummary,
@@ -6470,19 +6503,54 @@ Aspect ratio: ${imageFormat}`,
     assemblyStageLabel,
     assemblyStageTotal,
     assemblyStatus,
-    handleAssemblyBuild,
-    handleAssemblyStop,
     isAssembling,
     isAssemblyStale,
+    stableHandleAssemblyBuild,
+    stableHandleAssemblyStop,
   ]);
 
+  const assemblyNodePatchDepsSnapshotRef = useRef(null);
+
   useEffect(() => {
+    const depsSnapshot = {
+      assemblyNodeDataPatch,
+      assemblyResult,
+      assemblyBuildState,
+      assemblyPayloadSignature,
+      isAssemblyStale,
+      isAssembling,
+    };
+    const prevDepsSnapshot = assemblyNodePatchDepsSnapshotRef.current;
+    const changedDeps = [];
+    if (!prevDepsSnapshot || prevDepsSnapshot.assemblyNodeDataPatch !== depsSnapshot.assemblyNodeDataPatch) changedDeps.push("assemblyNodeDataPatch");
+    if (!prevDepsSnapshot || prevDepsSnapshot.assemblyResult !== depsSnapshot.assemblyResult) changedDeps.push("assemblyResult");
+    if (!prevDepsSnapshot || prevDepsSnapshot.assemblyBuildState !== depsSnapshot.assemblyBuildState) changedDeps.push("assemblyBuildState");
+    if (!prevDepsSnapshot || prevDepsSnapshot.assemblyPayloadSignature !== depsSnapshot.assemblyPayloadSignature) changedDeps.push("assemblyPayloadSignature");
+    if (!prevDepsSnapshot || prevDepsSnapshot.isAssemblyStale !== depsSnapshot.isAssemblyStale) changedDeps.push("isAssemblyStale");
+    if (!prevDepsSnapshot || prevDepsSnapshot.isAssembling !== depsSnapshot.isAssembling) changedDeps.push("isAssembling");
+    assemblyNodePatchDepsSnapshotRef.current = depsSnapshot;
+
+    console.debug("[CLIP TRACE] assembly node sync effect enter", {
+      changedDeps,
+      payloadSignature: assemblyPayloadSignature,
+      buildState: assemblyBuildState,
+      isAssemblyStale,
+      isAssembling,
+    });
+
     setNodes((prev) => {
       let didChange = false;
       const next = prev.map((n) => {
         if (n.type !== "assemblyNode") return n;
         const hasChanges = Object.entries(assemblyNodeDataPatch).some(([key, value]) => !Object.is(n?.data?.[key], value));
         if (!hasChanges) return n;
+        console.debug("[CLIP TRACE] assembly node sync setNodes", {
+          nodeId: n.id,
+          changedKeys: Object.entries(assemblyNodeDataPatch)
+            .filter(([key, value]) => !Object.is(n?.data?.[key], value))
+            .map(([key]) => key),
+          payloadSignature: assemblyPayloadSignature,
+        });
         didChange = true;
         return {
           ...n,
@@ -6492,9 +6560,23 @@ Aspect ratio: ${imageFormat}`,
           },
         };
       });
+      if (!didChange) {
+        console.debug("[CLIP TRACE] assembly node sync setNodes skipped", {
+          reason: "no_patch_changes",
+          payloadSignature: assemblyPayloadSignature,
+        });
+      }
       return didChange ? next : prev;
     });
-  }, [assemblyNodeDataPatch, setNodes]);
+  }, [
+    assemblyBuildState,
+    assemblyNodeDataPatch,
+    assemblyPayloadSignature,
+    assemblyResult,
+    isAssemblyStale,
+    isAssembling,
+    setNodes,
+  ]);
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
