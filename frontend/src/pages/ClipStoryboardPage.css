@@ -1918,37 +1918,37 @@ body.ps_clip_fullscreen .mainCol {
   }
 }
 
-.clipSB_introPanel {
+.clipSB_introRoot {
   padding: 16px;
   border-radius: 20px;
-  background: rgba(7, 10, 18, 0.96);
-  border: 1px solid rgba(110, 150, 230, 0.16);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
+  background: linear-gradient(180deg, rgba(5, 7, 13, 0.98) 0%, rgba(2, 4, 9, 0.98) 100%);
+  border: 1px solid rgba(110, 150, 230, 0.14);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.32);
 }
 
-.clipSB_introSplit {
+.clipSB_introGrid {
   display: grid;
   gap: 16px;
   align-items: start;
 }
 
-.clipSB_introControls,
-.clipSB_introResult {
+.clipSB_introColControls,
+.clipSB_introColPreview {
   min-width: 0;
   display: grid;
   align-content: start;
 }
 
-.clipSB_introControls {
+.clipSB_introColControls {
   gap: 10px;
-  padding: 4px 2px 4px 0;
+  padding: 4px 0;
 }
 
-.clipSB_introResult {
+.clipSB_introColPreview {
   width: 100%;
   gap: 12px;
-  padding: 8px 0 8px 16px;
-  border-left: 1px solid rgba(120, 170, 255, 0.10);
+  padding: 4px 0 4px 16px;
+  border-left: 1px solid rgba(120, 170, 255, 0.12);
 }
 
 .clipSB_introInfoBar {
@@ -1976,7 +1976,7 @@ body.ps_clip_fullscreen .mainCol {
   background: transparent;
 }
 
-.clipSB_introPreviewCard {
+.clipSB_introPreviewBox {
   position: relative;
   overflow: hidden;
   width: 100%;
@@ -1988,7 +1988,7 @@ body.ps_clip_fullscreen .mainCol {
   isolation: isolate;
 }
 
-.clipSB_introPreviewCard::after {
+.clipSB_introPreviewBox::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2009,22 +2009,22 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 @media (max-width: 1279px) {
-  .clipSB_introPanel {
+  .clipSB_introRoot {
     padding: 14px;
   }
 
-  .clipSB_introSplit {
+  .clipSB_introGrid {
     gap: 14px;
   }
 
-  .clipSB_introResult {
+  .clipSB_introColPreview {
     padding-left: 14px;
   }
 }
 
 @media (max-width: 960px) {
-  .clipSB_introResult {
-    padding: 4px 0 0;
+  .clipSB_introColPreview {
+    padding: 16px 0 0;
     border-left: none;
     border-top: 1px solid rgba(140, 190, 255, 0.12);
   }
