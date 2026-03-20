@@ -820,6 +820,9 @@ def build_gemini_planner_request_text(planner_input: dict[str, Any]) -> str:
     return (
         "Planner input JSON follows. Use it as the only dynamic request payload.\n"
         "Return one JSON object matching the planner contract.\n"
+        "Required top-level fields: genre, sceneCount, scenes.\n"
+        "Required per-scene fields: sceneId, startSec, endSec, durationSec, tensionLevel, activeRoles, focalRole, continuityRule, visualIdea.\n"
+        "propFunction is required only when props are active.\n"
         f"{json.dumps(planner_input, ensure_ascii=False, indent=2)}"
     )
 
@@ -1735,7 +1738,7 @@ def validate_gemini_planner_response(parsed: dict[str, Any], request_input: dict
         active_roles = [str(item).strip() for item in active_roles_raw if str(item).strip()]
         invalid_roles = [role for role in active_roles if role not in COMFY_REF_ROLES]
         if invalid_roles:
-            errors.append(f"{scene_id}:invalid_active_roles:{','.join(invalid_roles)}")
+            warnings.append(f"{scene_id}:invalid_active_roles:{','.join(invalid_roles)}")
 
         focal_role = str(scene.get("focalRole") or "").strip()
         if not focal_role:
@@ -1769,6 +1772,12 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
     raw_scenes = parsed.get("scenes") if isinstance(parsed.get("scenes"), list) else []
     available_refs = request_input.get("refsByRole") if isinstance(request_input.get("refsByRole"), dict) else {}
     available_roles = {role for role, items in available_refs.items() if isinstance(items, list) and items}
+    estimated_scene_count = max(int(_to_float(request_input.get("sceneCountTarget")) or 0), len(raw_scenes), 1)
+    fallback_duration = _to_float(request_input.get("audioContext", {}).get("durationSec")) if isinstance(request_input.get("audioContext"), dict) else None
+    if fallback_duration is not None and estimated_scene_count > 0:
+        fallback_duration = fallback_duration / estimated_scene_count
+    if fallback_duration is None or fallback_duration <= 0:
+        fallback_duration = 4.0
     normalized_scenes: list[dict[str, Any]] = []
     normalization_applied = False
 
@@ -1836,12 +1845,41 @@ def normalize_gemini_planner_response(parsed: dict[str, Any], request_input: dic
         end_sec = _to_float(raw_scene.get("endSec"))
         duration_sec = _to_float(raw_scene.get("durationSec"))
 
+        if start_sec is None:
+            if normalized_scenes:
+                previous_end_sec = _to_float(normalized_scenes[-1].get("endSec"))
+                start_sec = previous_end_sec if previous_end_sec is not None else 0.0
+                normalization_warnings.append(f"{scene_id}:start_sec_fallback_from_previous_end")
+            else:
+                start_sec = 0.0
+                normalization_warnings.append(f"{scene_id}:start_sec_fallback_to_zero")
+            normalization_applied = True
+
+        if duration_sec is None:
+            if start_sec is not None and end_sec is not None:
+                duration_sec = end_sec - start_sec
+                normalization_warnings.append(f"{scene_id}:duration_sec_derived_from_range")
+            else:
+                duration_sec = fallback_duration
+                normalization_warnings.append(f"{scene_id}:duration_sec_fallback_default")
+            normalization_applied = True
+
+        if duration_sec is None or duration_sec < 0:
+            duration_sec = 1.0
+            normalization_applied = True
+            normalization_warnings.append(f"{scene_id}:duration_sec_clamped_minimum")
+
+        if end_sec is None:
+            end_sec = start_sec + duration_sec
+            normalization_applied = True
+            normalization_warnings.append(f"{scene_id}:end_sec_fallback_from_start_plus_duration")
+
         normalized_scenes.append(
             {
                 "sceneId": scene_id,
                 "startSec": start_sec,
                 "endSec": end_sec,
-                "durationSec": duration_sec if duration_sec is not None else (max(0.0, (end_sec or 0.0) - (start_sec or 0.0))),
+                "durationSec": duration_sec,
                 "sceneMeaning": scene_meaning,
                 "visualDescription": visual_idea,
                 "visualIdea": visual_idea,
