@@ -37,6 +37,11 @@ class Settings(BaseSettings):
 
     # Remote ComfyUI image-to-video
     COMFY_BASE_URL: str = "http://127.0.0.1:8000"
+    COMFY_UPLOAD_CONNECT_TIMEOUT_SEC: int = 10
+    COMFY_UPLOAD_READ_TIMEOUT_SEC: int = 120
+    COMFY_UPLOAD_MAX_ATTEMPTS: int = 2
+    COMFY_PROMPT_CONNECT_TIMEOUT_SEC: int = 10
+    COMFY_PROMPT_READ_TIMEOUT_SEC: int = 60
     COMFY_POLL_INTERVAL_SEC: int = 2
     COMFY_POLL_TIMEOUT_SEC: int = 600
     COMFY_IMAGE_VIDEO_WORKFLOW: str = "app/workflows/image-video-silent-directprompt.json"
