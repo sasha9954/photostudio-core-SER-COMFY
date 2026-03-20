@@ -8080,8 +8080,26 @@ def clip_video(payload: ClipVideoIn):
             err_text = str(comfy_err or "comfy_remote_failed")
             code = "comfy_unreachable"
             status_code = 500
-            if "upload_failed" in err_text:
+            if "upload_failed:upload_connect_timeout" in err_text:
+                code = "comfy_upload_connect_timeout"
+                status_code = 504
+            elif "upload_failed:upload_read_timeout" in err_text:
+                code = "comfy_upload_read_timeout"
+                status_code = 504
+            elif "upload_failed:upload_non_200" in err_text:
+                code = "comfy_upload_http_error"
+                status_code = 502
+            elif "upload_failed:upload_response_invalid_json" in err_text or "upload_failed:upload_response_invalid_json_root" in err_text:
+                code = "comfy_upload_invalid_response"
+                status_code = 502
+            elif "upload_failed" in err_text:
                 code = "comfy_upload_failed"
+            elif "prompt_submit_failed:prompt_connect_timeout" in err_text:
+                code = "comfy_prompt_connect_timeout"
+                status_code = 504
+            elif "prompt_submit_failed:prompt_read_timeout" in err_text:
+                code = "comfy_prompt_read_timeout"
+                status_code = 504
             elif "prompt_submit_failed" in err_text:
                 code = "comfy_prompt_submit_failed"
             elif "history_wait_failed:timeout" in err_text:

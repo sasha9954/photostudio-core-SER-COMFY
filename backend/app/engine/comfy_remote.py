@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import requests
-from requests import RequestException
+from requests import ConnectTimeout, ReadTimeout, RequestException, Response
 
 from app.core.config import settings
 
@@ -39,50 +39,131 @@ def load_workflow_json(path: str) -> dict:
     return data
 
 
+def _response_body_snippet(resp: Response) -> str:
+    try:
+        return (resp.text or "")[:300]
+    except Exception:
+        return ""
+
+
+def _parse_json_response(resp: Response, *, stage: str) -> tuple[dict | None, str | None]:
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        body_snippet = _response_body_snippet(resp)
+        logger.warning(
+            "[COMFY REMOTE] %s invalid json status=%s body=%r error=%s",
+            stage,
+            resp.status_code,
+            body_snippet,
+            str(exc)[:200],
+        )
+        return None, f"{stage}_invalid_json:{str(exc)[:200]}:body={body_snippet}"
+
+    if not isinstance(payload, dict):
+        logger.warning("[COMFY REMOTE] %s response_json_not_dict type=%s", stage, type(payload).__name__)
+        return None, f"{stage}_invalid_json_root:{type(payload).__name__}"
+
+    return payload, None
+
+
 def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
-    logger.info("[COMFY REMOTE] request upload url=%s", url)
     safe_name = str(filename or "source.jpg").strip() or "source.jpg"
+    size_bytes = len(image_bytes or b"")
+    connect_timeout = max(1, int(settings.COMFY_UPLOAD_CONNECT_TIMEOUT_SEC or 10))
+    read_timeout = max(1, int(settings.COMFY_UPLOAD_READ_TIMEOUT_SEC or 60))
+    max_attempts = max(1, int(settings.COMFY_UPLOAD_MAX_ATTEMPTS or 1))
+
+    logger.info(
+        "[COMFY REMOTE] upload start url=%s filename=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
+        url,
+        safe_name,
+        size_bytes,
+        connect_timeout,
+        read_timeout,
+        max_attempts,
+    )
 
     files = {
         "image": (safe_name, image_bytes, "application/octet-stream"),
     }
     data = {"type": "input", "overwrite": "true"}
 
-    try:
-        resp = requests.post(url, files=files, data=data, timeout=60)
-        if resp.status_code >= 400:
-            return None, f"upload_http_{resp.status_code}:{resp.text[:300]}"
-        payload = resp.json()
-    except RequestException as exc:
-        return None, f"upload_request_error:{str(exc)[:300]}"
-    except Exception as exc:
-        return None, f"upload_parse_error:{str(exc)[:300]}"
+    last_error = "upload_unknown_error"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(url, files=files, data=data, timeout=(connect_timeout, read_timeout))
+            body_snippet = _response_body_snippet(resp)
+            logger.info(
+                "[COMFY REMOTE] upload response attempt=%s status=%s body=%r",
+                attempt,
+                resp.status_code,
+                body_snippet,
+            )
+            if resp.status_code >= 400:
+                return None, f"upload_non_200:status={resp.status_code}:body={body_snippet}"
+            payload, parse_err = _parse_json_response(resp, stage="upload_response")
+            if parse_err or not payload:
+                return None, parse_err or "upload_response_invalid_json"
 
-    if isinstance(payload, dict):
-        name = str(payload.get("name") or payload.get("filename") or "").strip()
-        if name:
-            return name, None
+            name = str(payload.get("name") or payload.get("filename") or "").strip()
+            if name:
+                return name, None
 
-    return None, f"upload_name_missing:{str(payload)[:300]}"
+            return None, f"upload_name_missing:{str(payload)[:300]}"
+        except ConnectTimeout as exc:
+            last_error = f"upload_connect_timeout:{str(exc)[:300]}"
+            logger.warning("[COMFY REMOTE] upload connect timeout attempt=%s url=%s error=%s", attempt, url, str(exc)[:200])
+        except ReadTimeout as exc:
+            last_error = f"upload_read_timeout:{str(exc)[:300]}"
+            logger.warning(
+                "[COMFY REMOTE] upload read timeout attempt=%s url=%s size_bytes=%s error=%s",
+                attempt,
+                url,
+                size_bytes,
+                str(exc)[:200],
+            )
+        except RequestException as exc:
+            last_error = f"upload_request_error:{str(exc)[:300]}"
+            logger.warning("[COMFY REMOTE] upload request error attempt=%s url=%s error=%s", attempt, url, str(exc)[:200])
+            return None, last_error
+
+        if attempt < max_attempts:
+            backoff_sec = min(2.0, 0.5 * attempt)
+            logger.info("[COMFY REMOTE] upload retrying attempt=%s next_attempt=%s sleep_sec=%.1f", attempt, attempt + 1, backoff_sec)
+            time.sleep(backoff_sec)
+
+    return None, last_error
 
 
 def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
-    logger.info("[COMFY REMOTE] request prompt url=%s", url)
+    connect_timeout = max(1, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 10))
+    read_timeout = max(1, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 60))
+    logger.info(
+        "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s",
+        url,
+        connect_timeout,
+        read_timeout,
+    )
     try:
-        resp = requests.post(url, json={"prompt": workflow}, timeout=60)
+        resp = requests.post(url, json={"prompt": workflow}, timeout=(connect_timeout, read_timeout))
+        body_snippet = _response_body_snippet(resp)
+        logger.info("[COMFY REMOTE] prompt response status=%s body=%r", resp.status_code, body_snippet)
         if resp.status_code >= 400:
-            return None, f"prompt_http_{resp.status_code}:{resp.text[:300]}"
-        payload = resp.json()
+            return None, f"prompt_non_200:status={resp.status_code}:body={body_snippet}"
+        payload, parse_err = _parse_json_response(resp, stage="prompt_response")
+        if parse_err or not payload:
+            return None, parse_err or "prompt_response_invalid_json"
+    except ConnectTimeout as exc:
+        return None, f"prompt_connect_timeout:{str(exc)[:300]}"
+    except ReadTimeout as exc:
+        return None, f"prompt_read_timeout:{str(exc)[:300]}"
     except RequestException as exc:
         return None, f"prompt_request_error:{str(exc)[:300]}"
-    except Exception as exc:
-        return None, f"prompt_parse_error:{str(exc)[:300]}"
 
-    prompt_id = ""
-    if isinstance(payload, dict):
-        prompt_id = str(payload.get("prompt_id") or "").strip()
+    prompt_id = str(payload.get("prompt_id") or "").strip()
     if not prompt_id:
         return None, f"prompt_id_missing:{str(payload)[:300]}"
     return prompt_id, None
