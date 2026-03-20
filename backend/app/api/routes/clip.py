@@ -29,6 +29,7 @@ from app.engine.gemini_rest import post_generate_content
 from app.engine.comfy_reference_profile import build_reference_profiles, summarize_profiles
 from app.engine.comfy_remote import run_comfy_image_to_video
 from app.engine.audio_analyzer import analyze_audio
+from app.engine.prompt_layers import build_clip_video_motion_prompt, build_physics_first_image_blocks
 
 router = APIRouter()
 
@@ -6377,23 +6378,40 @@ def _build_comfy_image_prompt_assembly(
         "- if any connected input is ignored this is a logic error",
     ])
 
+    physics_blocks = build_physics_first_image_blocks(
+        scene_delta=scene_delta,
+        scene_text=scene_text or text_input or "",
+        scene_goal=scene_goal_value,
+        style=style,
+        lighting_anchor=lighting_anchor,
+        location_anchor=location_anchor,
+        environment_anchor=environment_anchor,
+        weather_anchor=weather_anchor,
+        surface_anchor=surface_anchor,
+        world_scale_context=world_scale_context,
+        entity_scale_anchor_text=entity_scale_anchor_text,
+        effective_character_anchor=effective_character_anchor,
+        effective_location_anchor=effective_location_anchor,
+        effective_style_anchor=effective_style_anchor,
+        continuity_hint=continuity_value,
+    )
+
     assembled_prompt = "\n\n".join([
         identity_layer_block,
-        scene_meaning_block,
-        continuity_block,
+        physics_blocks["lightWorldBlock"],
+        physics_blocks["subjectIdentityBlock"],
+        physics_blocks["environmentContactBlock"],
+        physics_blocks["geometryBlock"],
+        physics_blocks["textureBlock"],
+        physics_blocks["moodPhysicsBlock"],
         "CAST / ENTITY ANCHORS:\n" + ("\n".join(role_blocks) if role_blocks else "- none explicitly connected"),
         "WORLD / LOCATION ANCHOR:\n" + f"- {effective_location_anchor or location_anchor}",
         "STYLE ANCHOR:\n" + f"- {effective_style_anchor or style_anchor}",
         "PROPS ANCHOR:\n" + ("- props/items connected and must be preserved" if props_entities else "- no explicit props refs"),
-        "CAMERA / COMPOSITION BLOCK:\n"
-        f"- style: {style}\n"
-        f"- lighting anchor: {lighting_anchor}\n"
-        f"- environment anchor: {environment_anchor}\n"
-        f"- weather anchor: {weather_anchor}\n"
-        f"- surface anchor: {surface_anchor}\n"
-        f"- world scale context: {world_scale_context}\n"
-        f"- entity scale anchors: {entity_scale_anchor_text}",
+        scene_meaning_block,
+        continuity_block,
         anti_collage_block,
+        physics_blocks["negativeConstraintsBlock"],
         _comfy_text_rendering_block(allow_designed_text=allow_designed_text),
         priority_contract_block,
         identity_lock_block or "IDENTITY LOCK: no character_1 ref connected.",
@@ -6451,6 +6469,13 @@ def _build_comfy_image_prompt_assembly(
         "anatomyLockBlockPreview": anatomy_lock_block,
         "forbiddenChangesBlockPreview": forbidden_changes_block,
         "antiCollageBlockPreview": anti_collage_block,
+        "lightWorldBlockPreview": physics_blocks["lightWorldBlock"],
+        "subjectIdentityBlockPreview": physics_blocks["subjectIdentityBlock"],
+        "environmentContactBlockPreview": physics_blocks["environmentContactBlock"],
+        "geometryBlockPreview": physics_blocks["geometryBlock"],
+        "textureBlockPreview": physics_blocks["textureBlock"],
+        "moodPhysicsBlockPreview": physics_blocks["moodPhysicsBlock"],
+        "negativeConstraintsBlockPreview": physics_blocks["negativeConstraintsBlock"],
         "finalImagePromptPreview": _shorten_text(assembled_prompt, 1800),
         "unusedConnectedInputs": unused_connected_inputs,
     }
@@ -8020,7 +8045,12 @@ def clip_video(payload: ClipVideoIn):
             requested_duration = 5.0
         requested_duration = max(1.0, min(8.0, requested_duration))
 
-        effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip() or "cinematic motion, natural movement"
+        effective_prompt = build_clip_video_motion_prompt(
+            base_prompt=str(payload.videoPrompt or "").strip(),
+            transition_prompt=str(payload.transitionActionPrompt or "").strip(),
+            fmt=output_format,
+            seconds=requested_duration,
+        )
 
         try:
             image_bytes, image_ext = _download_image_from_source(source_image_url)
@@ -8117,13 +8147,23 @@ def clip_video(payload: ClipVideoIn):
 
     effective_prompt = ""
     if mode == "continuous":
-        effective_prompt = str(payload.transitionActionPrompt or payload.videoPrompt or "").strip()
+        effective_prompt = build_clip_video_motion_prompt(
+            base_prompt=str(payload.videoPrompt or "").strip(),
+            transition_prompt=str(payload.transitionActionPrompt or "").strip(),
+            fmt=output_format,
+            seconds=payload.requestedDurationSec,
+        )
     else:
-        effective_prompt = str(payload.videoPrompt or payload.transitionActionPrompt or "").strip()
+        effective_prompt = build_clip_video_motion_prompt(
+            base_prompt=str(payload.videoPrompt or "").strip(),
+            transition_prompt=str(payload.transitionActionPrompt or "").strip(),
+            fmt=output_format,
+            seconds=payload.requestedDurationSec,
+        )
     if mode == "lipsync":
         effective_prompt = _build_lipsync_avatar_prompt(effective_prompt, str(payload.shotType or ""))
     if not effective_prompt:
-        effective_prompt = "cinematic motion, natural movement"
+        effective_prompt = build_clip_video_motion_prompt(base_prompt="", fmt=output_format, seconds=payload.requestedDurationSec)
 
     print(f"[CLIP VIDEO] transition_type={transition_type}")
     print(f"[CLIP VIDEO] effective_prompt={effective_prompt[:300]}")
