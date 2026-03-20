@@ -11,6 +11,7 @@ import requests
 from app.core.static_paths import ASSETS_DIR
 from app.engine.audio_analyzer import analyze_audio
 from app.engine.audio_text_preprocessor import preprocess_audio_text
+from app.engine.prompt_layers import clean_physics_prompt_text
 
 COMFY_REF_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
 CAST_ROLES = ["character_1", "character_2", "character_3", "animal", "group"]
@@ -695,36 +696,36 @@ def _build_scene_prompts(
     world_bible: dict[str, Any],
 ) -> tuple[str, str]:
     subject = primary.replace("_", " ") if primary else "герой"
-    lens = str(world_bible.get("lensFamily") or "35mm и 50mm кинолинзы")
-    light = str(world_bible.get("lightingLogic") or "мотивационный кинематографичный свет")
-    color = str(world_bible.get("colorWorld") or "контрастная кинопалитра")
-    beat = beat_text or "развитие истории"
+    lens = str(world_bible.get("lensFamily") or "35mm или 50mm объектив, естественная глубина резкости")
+    light = str(world_bible.get("lightingLogic") or "единый свет среды с понятным направлением и правдоподобными тенями")
+    color = str(world_bible.get("colorWorld") or "цельная палитра реального пространства без плакатного блеска")
+    beat = clean_physics_prompt_text(beat_text) or "развитие истории"
     genre_hint = _genre_hint_text(genre)
+    physical_genre_hint = f"Жанровое состояние сцены через физическую атмосферу: {genre_hint}." if genre_hint else ""
 
     image_templates = {
-        "SING_CLOSEUP": f"Кинематографичный ключевой кадр: крупный план {subject}, фокус на губах и глазах во время музыкальной фразы; локация {location}; {light}; {lens}; {color}; эмоция {emotion}; в кадре чувствуется момент: {beat}. {continuity_hint}",
-        "TALK_CLOSEUP": f"Ключевой стоп-кадр сцены с {subject}: разговорный крупный/средне-крупный план, читаемая мимика и взгляд в осмысленной паузе; локация {location}; {light}; {lens}; {color}; драматургический подтекст: {beat}. {continuity_hint}",
-        "ATMOSPHERIC_WIDE": f"Широкий атмосферный кино-кадр: {location}, {subject} как часть пространства, выразительная глубина и воздух; {light}; {lens}; {color}; визуальная стадия {phase}; смысл кадра: {beat}. {continuity_hint}",
-        "DETAIL_INSERT": f"Детальный кинематографичный инсерт: важная фактура/жест {subject} в локации {location}; микрокомпозиция и предметный акцент; {light}; {lens}; {color}; эмоциональный подтекст {emotion}; смысл: {beat}. {continuity_hint}",
-        "EMOTIONAL_REACTION": f"Эмоциональный ключевой кадр: {subject} в {location}, акцент на реакции лица и пластике тела; {light}; {lens}; {color}; момент внутреннего перелома: {beat}. {continuity_hint}",
-        "TRANSITION_SHOT": f"Переходный кинока кадр: {subject} в {location}, ощущение смены состояния; композиция ведет к следующей сцене; {light}; {lens}; {color}; переходный смысл: {beat}. {continuity_hint}",
-        "STORY_ACTION": f"Кинематографичный стоп-кадр действия: {subject} в {location} в момент сюжетного действия; выразительная композиция, читаемый силуэт; {light}; {lens}; {color}; драматургическая цель: {beat}. {continuity_hint}",
+        "SING_CLOSEUP": f"Физически правдоподобный фото-кадр: {subject} в крупном или средне-крупном плане, внимание на губах, глазах и дыхании во время музыкальной фразы; локация {location}; {light}; {lens}; {color}; эмоция {emotion}; смысл момента: {beat}. {continuity_hint}",
+        "TALK_CLOSEUP": f"Реалистичный фотографический кадр с {subject}: разговорный крупный или средне-крупный план, читаемая мимика и взгляд в осмысленной паузе; локация {location}; {light}; {lens}; {color}; драматургический подтекст: {beat}. {continuity_hint}",
+        "ATMOSPHERIC_WIDE": f"Реалистичный широкий кадр: {location}, {subject} как часть реального пространства, воздух, глубина и физическая среда считываются сразу; {light}; {lens}; {color}; стадия сцены {phase}; смысл кадра: {beat}. {continuity_hint}",
+        "DETAIL_INSERT": f"Реалистичный детальный кадр: важная фактура или жест {subject} в локации {location}; предметный акцент и честная материальность; {light}; {lens}; {color}; эмоциональный подтекст {emotion}; смысл: {beat}. {continuity_hint}",
+        "EMOTIONAL_REACTION": f"Реалистичный эмоциональный кадр: {subject} в {location}, акцент на реакции лица, дыхании и пластике тела; {light}; {lens}; {color}; внутренний перелом считывается физически: {beat}. {continuity_hint}",
+        "TRANSITION_SHOT": f"Реалистичный переходный кадр: {subject} в {location}, ощущение смены состояния через свет, позу и геометрию пространства; {light}; {lens}; {color}; переходный смысл: {beat}. {continuity_hint}",
+        "STORY_ACTION": f"Реалистичный кадр сюжетного действия: {subject} в {location} в момент действия; читаемый силуэт, реальная физика среды и тела; {light}; {lens}; {color}; драматургическая цель: {beat}. {continuity_hint}",
     }
     video_templates = {
-        "SING_CLOSEUP": f"В этой же сцене {subject} исполняет фразу: артикуляция и дыхание синхронны эмоциональному пику, взгляд живо меняется; плечи и руки двигаются естественно; в окружении {location} работают частицы/дым/ткань; камера мягко подается с medium-close в close-up и фиксирует кульминацию, реалистично и кинематографично.",
-        "TALK_CLOSEUP": f"В той же сцене {subject} проговаривает мысль/реплику: мимика, взгляд и микропауза раскрывают смысл; корпус слегка смещается, руки дают естественный акцент; фон {location} живет мягким движением света и воздуха; камера идет мотивированным долли-ин с короткой стабилизацией в конце.",
-        "ATMOSPHERIC_WIDE": f"Сцена развивается в пространстве {location}: {subject} движется внутри кадра без спешки, среда реагирует ветром, дальними источниками света и фоновым движением; камера делает плавный establishing move с легким параллаксом, удерживая реалистичный cinematic tone.",
-        "DETAIL_INSERT": f"В той же сцене акцент на деталь: {subject} выполняет точный микрожест (касание, сжатие, поворот), лицо выдает эмоцию {emotion}; предметы и фактуры вокруг оживают в микродвижении; камера работает как controlled macro push-in и фиксирует смысловой акцент.",
-        "EMOTIONAL_REACTION": f"В том же моменте {subject} проживает внутреннюю реакцию: взгляд уходит, затем возвращается, дыхание меняет ритм, плечи и осанка перестраиваются; среда {location} отвечает изменением света/движения фона; камера держит мотивированный handheld/steady hybrid для живого драматического эффекта.",
-        "TRANSITION_SHOT": f"Переход внутри той же сцены: {subject} завершает действие и входит в новое состояние, в {location} смещается свет и глубина фона; камера делает связующее движение (arc/slide) к точке выхода сцены, сохраняя непрерывность мира.",
-        "STORY_ACTION": f"В той же сцене {subject} выполняет четкое сюжетное действие, пластика тела и лицо отражают {emotion}; в локации {location} есть естественное движение среды и второго плана; камера следует за действием мотивированным трекингом с мягкой сменой крупности, реалистично и кинематографично.",
+        "SING_CLOSEUP": f"В этой же сцене {subject} исполняет фразу: артикуляция и дыхание синхронны эмоциональному пику, плечи и руки движутся естественно, ткань и волосы мягко реагируют на воздух; в окружении {location} свет и тени остаются едиными; камера мягко подается ближе без искусственной плавучести.",
+        "TALK_CLOSEUP": f"В той же сцене {subject} проговаривает мысль или реплику: мимика, взгляд и микропауза раскрывают смысл, корпус слегка смещается, жесты имеют вес; фон {location} живет воздухом и изменением теней; камера делает мотивированный деликатный dolly-in.",
+        "ATMOSPHERIC_WIDE": f"Сцена развивается в пространстве {location}: {subject} движется внутри кадра без спешки, среда реагирует ветром, дальними источниками света и фоновым движением; камера делает плавное раскрывающее движение с легким параллаксом и сохраняет физическую целостность мира.",
+        "DETAIL_INSERT": f"В той же сцене акцент на деталь: {subject} выполняет точный микрожест, предметы и фактуры вокруг отвечают в микродвижении, а свет скользит по реальным материалам; камера делает короткий аккуратный push-in и фиксирует смысловой акцент.",
+        "EMOTIONAL_REACTION": f"В том же моменте {subject} проживает внутреннюю реакцию: взгляд уходит и возвращается, дыхание меняет ритм, осанка перестраивается, а среда {location} отвечает естественным движением воздуха и теней; камера удерживает живую, но контролируемую ручную динамику.",
+        "TRANSITION_SHOT": f"Переход внутри той же сцены: {subject} завершает действие и входит в новое состояние, в {location} смещаются свет, тень и глубина фона; камера делает связующее движение к точке выхода сцены и сохраняет непрерывность реального пространства.",
+        "STORY_ACTION": f"В той же сцене {subject} выполняет четкое сюжетное действие, пластика тела и лицо отражают {emotion}; в локации {location} есть естественное движение среды и второго плана; камера следует за действием мотивированным трекингом с правдоподобной инерцией.",
     }
     image_prompt_ru = image_templates.get(scene_type, image_templates["STORY_ACTION"])
     video_prompt_ru = video_templates.get(scene_type, video_templates["STORY_ACTION"])
-    if genre_hint:
-        image_prompt_ru = f"{image_prompt_ru}. Жанровая направленность: {genre_hint}."
-    if genre_hint:
-        video_prompt_ru = f"{video_prompt_ru}. Учитывать жанр: {genre_hint}."
+    if physical_genre_hint:
+        image_prompt_ru = f"{image_prompt_ru}. {physical_genre_hint}"
+        video_prompt_ru = f"{video_prompt_ru}. {physical_genre_hint}"
     return image_prompt_ru, video_prompt_ru
 
 
@@ -740,10 +741,10 @@ def _build_speech_scene_prompts(
     world_bible: dict[str, Any],
     refs_used: list[str],
 ) -> tuple[str, str, dict[str, str]]:
-    beat = semantic_text or "документальный смысловой фрагмент"
-    lens = str(world_bible.get("lensFamily") or "35mm и 50mm кинолинзы")
-    light = str(world_bible.get("lightingLogic") or "контролируемый индустриальный свет")
-    color = str(world_bible.get("colorWorld") or "сдержанная документальная палитра")
+    beat = clean_physics_prompt_text(semantic_text) or "документальный смысловой фрагмент"
+    lens = str(world_bible.get("lensFamily") or "35mm или 50mm объектив, естественная глубина пространства")
+    light = str(world_bible.get("lightingLogic") or "контролируемый индустриальный свет с понятным направлением и правдоподобными тенями")
+    color = str(world_bible.get("colorWorld") or "сдержанная документальная палитра без декоративного блеска")
     style_tag = "документальная реалистичность, инфраструктурная точность, без гламура"
     environment_focus = "среда, объекты и инфраструктура в приоритете" if not characters_allowed else "среда и действия должны оставаться предметно мотивированными"
     subject = location if location and location != "cinematic_world_main_location" else _pick_environment_subject({"location": [], "props": []}, beat)
@@ -761,7 +762,7 @@ def _build_speech_scene_prompts(
         f"визуально показать: {scene_brief['imageSubject']}; {environment_focus}; {light}; {lens}; {color}; {style_tag}. {world_continuity}"
     )
     if genre_hint:
-        image_prompt += f" Жанровая направленность: {genre_hint}."
+        image_prompt += f" Жанровое состояние сцены выражать через физическую атмосферу: {genre_hint}."
 
     video_actions = [
         f"камера медленно и осмысленно проходит через пространство {location}, раскрывая смысл фрагмента: {beat}; движение сцены: {scene_brief['motionSubject']}",
@@ -776,9 +777,9 @@ def _build_speech_scene_prompts(
             f"тяжёлые механические элементы {location} работают или застыли в ожидании; камера проводит документальную панораму, удерживая смысл: {beat}; движение сцены: {scene_brief['motionSubject']}",
             f"ветер, пыль или вентиляция создают реалистичное движение среды вокруг {location}; камера считывает инфраструктуру как главный персонаж сцены, раскрывая: {beat}; движение сцены: {scene_brief['motionSubject']}",
         ]
-    video_prompt = video_actions[scene_idx % len(video_actions)] + f". Сохранять единый реалистичный тон и непрерывность мира от сцены к сцене."
+    video_prompt = video_actions[scene_idx % len(video_actions)] + f". Сохранять единый реалистичный тон, физическую непрерывность мира и согласованное поведение света и теней."
     if genre_hint:
-        video_prompt += f" Учитывать жанр: {genre_hint}."
+        video_prompt += f" Жанр переводить в физическое состояние сцены: {genre_hint}."
     return image_prompt, video_prompt, scene_brief
 
 
@@ -1002,6 +1003,8 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "videoPromptRu": video_prompt_ru,
             "imagePromptEn": "",
             "videoPromptEn": "",
+            "imagePromptPhysicalRu": clean_physics_prompt_text(image_prompt_ru),
+            "videoPromptPhysicalRu": clean_physics_prompt_text(video_prompt_ru),
             "continuity": continuity,
             "sceneGoal": scene_goal,
             "sceneNarrativeStep": narrative_step,
@@ -1081,6 +1084,8 @@ def plan_comfy_clip(payload: dict[str, Any]) -> dict[str, Any]:
             "videoPromptRu": fallback_video_prompt_ru,
             "imagePromptEn": fallback_image_prompt_en,
             "videoPromptEn": fallback_video_prompt_en,
+            "imagePromptPhysicalRu": clean_physics_prompt_text(fallback_image_prompt_ru),
+            "videoPromptPhysicalRu": clean_physics_prompt_text(fallback_video_prompt_ru),
             "continuity": fallback_continuity,
             "sceneGoal": "базовый сторителлинг",
             "sceneNarrativeStep": "beat_1",

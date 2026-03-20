@@ -15,6 +15,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from app.engine.prompt_layers import build_clip_video_motion_prompt
+
 logger = logging.getLogger(__name__)
 
 
@@ -538,7 +540,16 @@ def generate_video(kind: str, source_image: str, fmt: str, model: str, camera: s
 
         # Prepend lighting so both Kling and Veo see it.
         world_lock = "Relight all characters and props to match the same scene environment. Ignore source/reference lighting. Keep consistent light direction, color temperature, ambient bounce, reflections, atmospheric diffusion, and contact shadows. No studio or invisible lights."
-        prompt = f"{lighting_prompt}. {world_lock}\n{prompt or ''}".strip()
+        prompt = "\n".join([
+            build_clip_video_motion_prompt(
+                base_prompt=prompt,
+                transition_prompt="",
+                camera=camera,
+                fmt=fmt,
+                seconds=seconds,
+            ),
+            f"{lighting_prompt}. {world_lock}",
+        ]).strip()
 
         if model == "classic":
             api_key = load_env_value("KLING_API_KEY")
