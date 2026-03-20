@@ -162,6 +162,9 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
         return None, f"prompt_read_timeout:{str(exc)[:300]}"
     except RequestException as exc:
         return None, f"prompt_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        logger.exception("[COMFY REMOTE] prompt unexpected error url=%s", url)
+        return None, f"prompt_unexpected_error:{str(exc)[:300]}"
 
     prompt_id = str(payload.get("prompt_id") or "").strip()
     if not prompt_id:
@@ -176,19 +179,35 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
 
     deadline = time.time() + max(5, int(timeout_sec or 0))
     sleep_sec = max(1, int(poll_interval_sec or 1))
+    connect_timeout = max(1, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 10))
+    read_timeout = max(1, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 60))
 
     while time.time() < deadline:
         url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history/{safe_prompt_id}"
-        logger.info("[COMFY REMOTE] request history url=%s", url)
+        logger.info(
+            "[COMFY REMOTE] request history url=%s connect_timeout=%s read_timeout=%s",
+            url,
+            connect_timeout,
+            read_timeout,
+        )
         try:
-            resp = requests.get(url, timeout=30)
+            resp = requests.get(url, timeout=(connect_timeout, read_timeout))
+            body_snippet = _response_body_snippet(resp)
+            logger.info("[COMFY REMOTE] history response status=%s body=%r", resp.status_code, body_snippet)
             if resp.status_code >= 400:
-                return None, f"history_http_{resp.status_code}:{resp.text[:300]}"
-            payload = resp.json()
+                return None, f"history_non_200:status={resp.status_code}:body={body_snippet}"
+            payload, parse_err = _parse_json_response(resp, stage="history_response")
+            if parse_err or not payload:
+                return None, parse_err or "history_response_invalid_json"
+        except ConnectTimeout as exc:
+            return None, f"history_connect_timeout:{str(exc)[:300]}"
+        except ReadTimeout as exc:
+            return None, f"history_read_timeout:{str(exc)[:300]}"
         except RequestException as exc:
             return None, f"history_request_error:{str(exc)[:300]}"
         except Exception as exc:
-            return None, f"history_parse_error:{str(exc)[:300]}"
+            logger.exception("[COMFY REMOTE] history unexpected error url=%s prompt_id=%s", url, safe_prompt_id)
+            return None, f"history_unexpected_error:{str(exc)[:300]}"
 
         if isinstance(payload, dict) and isinstance(payload.get(safe_prompt_id), dict):
             return payload, None
