@@ -139,8 +139,8 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
 
 def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
-    connect_timeout = max(1, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 10))
-    read_timeout = max(1, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 60))
+    connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
+    read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
     logger.info(
         "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s",
         url,
@@ -195,7 +195,14 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
             body_snippet = _response_body_snippet(resp)
             logger.info("[COMFY REMOTE] history response status=%s body=%r", resp.status_code, body_snippet)
             if resp.status_code >= 400:
-                return None, f"history_non_200:status={resp.status_code}:body={body_snippet}"
+                logger.warning(
+                    "[COMFY REMOTE] history temporary non-200 prompt_id=%s status=%s body=%r",
+                    safe_prompt_id,
+                    resp.status_code,
+                    body_snippet,
+                )
+                time.sleep(sleep_sec)
+                continue
             payload, parse_err = _parse_json_response(resp, stage="history_response")
             if parse_err or not payload:
                 logger.warning(
