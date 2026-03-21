@@ -6,7 +6,6 @@ from requests import RequestException
 import tempfile
 import subprocess
 import math
-import random
 import base64
 import json
 import re
@@ -20,7 +19,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from typing import Any
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
@@ -1732,261 +1731,47 @@ def _draw_intro_vertical_fade(overlay: Image.Image, *, top_alpha: int, bottom_al
         draw.line((0, y, width, y), fill=(6, 9, 18, min(255, alpha)))
 
 
-INTRO_OVERLAY_STYLES = [
-    "cinematic",
-    "minimal",
-    "trailer",
-    "soft",
-    "contrast",
-]
-
-
 def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, preview_format: str) -> tuple[bytes, dict[str, Any]]:
     base = Image.open(io.BytesIO(raw)).convert("RGBA")
     width, height = base.size
     normalized_preview_format = _normalize_intro_preview_format(preview_format)
     style_meta = _get_intro_style_meta(style_preset)
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow)
-
     accent = _hex_to_rgba(style_meta.get("accent", "#f6d365"), 255)
-    secondary = _hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 255)
-
-    _draw_intro_vertical_fade(overlay, top_alpha=108, bottom_alpha=206)
-    glow_draw.ellipse(
-        (
-            int(width * 0.02),
-            int(height * 0.02),
-            int(width * (0.38 if normalized_preview_format != "9:16" else 0.58)),
-            int(height * (0.30 if normalized_preview_format != "9:16" else 0.24)),
-        ),
-        fill=_hex_to_rgba(style_meta.get("accent", "#f6d365"), 64),
-    )
-    glow_draw.ellipse(
-        (
-            int(width * 0.58),
-            int(height * 0.01),
-            int(width * 1.02),
-            int(height * (0.26 if normalized_preview_format != "9:16" else 0.19)),
-        ),
-        fill=_hex_to_rgba(style_meta.get("secondary", "#5ee7df"), 48),
-    )
-    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(width, height) * 0.022))))
-    overlay = Image.alpha_composite(overlay, glow)
-
+    _draw_intro_vertical_fade(overlay, top_alpha=32, bottom_alpha=64)
     draw = ImageDraw.Draw(overlay)
     margin_x = int(width * (0.065 if normalized_preview_format == "16:9" else 0.078))
-    title_box = {
-        "9:16": (int(width * 0.12), int(height * 0.67), int(width * 0.88), int(height * 0.91)),
-        "1:1": (int(width * 0.12), int(height * 0.66), int(width * 0.88), int(height * 0.90)),
-        "16:9": (int(width * 0.24), int(height * 0.67), int(width * 0.76), int(height * 0.91)),
-    }[normalized_preview_format]
-    title_box_w = max(120, title_box[2] - title_box[0])
-    title_box_h = max(120, title_box[3] - title_box[1])
-    font, lines, spacing = _fit_intro_title(draw, title, title_box_w, title_box_h, normalized_preview_format)
-    truetype_loaded = isinstance(font, ImageFont.FreeTypeFont)
-    title_text = "\n".join(lines)
-    overlay_style = random.choice(INTRO_OVERLAY_STYLES)
-    base_font_size = int(getattr(font, "size", 0) or 0)
-    if overlay_style == "trailer" and truetype_loaded and base_font_size > 0:
-        font = _get_intro_font(max(24, int(base_font_size * 1.08)), bold=True)
-        truetype_loaded = isinstance(font, ImageFont.FreeTypeFont)
-
-    text_stroke_width = 4
-    text_fill = (255, 255, 255, 248)
-    text_stroke_fill = (4, 6, 12, 242)
-    text_glow_stroke_width = 5
-    text_shadow_stroke_width = 5
-    text_shadow_fill = (0, 0, 0, 196)
-    text_shadow_stroke_fill = (0, 0, 0, 168)
-    text_glow_offsets = [(0, 0, 154), (4, 4, 104), (-3, 1, 88), (0, 6, 82)]
-    plate_shadow_fill = (0, 0, 0, 196)
-    plate_fill = (3, 5, 14, 228 if normalized_preview_format == "16:9" else 236)
-    plate_outline = (accent[0], accent[1], accent[2], 118)
-    plate_outline_width = max(3, int(min(width, height) * 0.0038))
-    plate_highlight_fill = (accent[0], accent[1], accent[2], 82)
-    plate_shadow_blur = max(14, int(min(width, height) * 0.022))
-    plate_highlight_blur = max(10, int(min(width, height) * 0.015))
-    draw_plate = True
-    draw_plate_highlight = True
-
-    if overlay_style == "minimal":
-        draw_plate = False
-        draw_plate_highlight = False
-        text_stroke_width = 1
-        text_fill = (255, 255, 255, 220)
-        text_glow_stroke_width = 1
-        text_shadow_stroke_width = 1
-        text_shadow_fill = (0, 0, 0, 140)
-        text_shadow_stroke_fill = (0, 0, 0, 120)
-        text_glow_offsets = [(0, 0, 90), (2, 2, 58)]
-    elif overlay_style == "trailer":
-        text_stroke_width = 5
-        text_glow_stroke_width = 6
-        text_shadow_stroke_width = 6
-        plate_fill = (2, 3, 10, 240 if normalized_preview_format == "16:9" else 246)
-        plate_outline = (accent[0], accent[1], accent[2], 172)
-        plate_highlight_fill = (accent[0], accent[1], accent[2], 106)
-        text_glow_offsets = [(0, 0, 178), (5, 5, 124), (-4, 2, 104), (0, 7, 96)]
-    elif overlay_style == "soft":
-        text_stroke_width = 2
-        text_fill = (255, 255, 255, 236)
-        text_glow_stroke_width = 2
-        text_shadow_stroke_width = 2
-        text_shadow_fill = (0, 0, 0, 154)
-        text_shadow_stroke_fill = (0, 0, 0, 132)
-        plate_fill = (5, 8, 18, 188 if normalized_preview_format == "16:9" else 196)
-        plate_outline = (accent[0], accent[1], accent[2], 88)
-        plate_highlight_fill = (accent[0], accent[1], accent[2], 62)
-        plate_shadow_blur = max(18, int(plate_shadow_blur * 1.3))
-        plate_highlight_blur = max(13, int(plate_highlight_blur * 1.3))
-        text_glow_offsets = [(0, 0, 124), (3, 3, 84), (-2, 1, 70), (0, 5, 62)]
-    elif overlay_style == "contrast":
-        text_fill = (255, 255, 255, 255)
-        text_stroke_width = 4
-        text_stroke_fill = (0, 0, 0, 248)
-        text_glow_stroke_width = 5
-        text_shadow_stroke_width = 5
-        plate_fill = (0, 0, 0, 244)
-        plate_outline = (secondary[0], secondary[1], secondary[2], 190)
-        plate_highlight_fill = (secondary[0], secondary[1], secondary[2], 72)
-        text_glow_offsets = [(0, 0, 170), (4, 4, 118), (-3, 1, 94), (0, 6, 86)]
-
-    title_bbox = draw.multiline_textbbox((0, 0), title_text, font=font, spacing=spacing, stroke_width=text_stroke_width, align="left")
-    title_w = title_bbox[2] - title_bbox[0]
-    title_h = title_bbox[3] - title_bbox[1]
-    title_x = title_box[0]
-    title_y = max(title_box[1], min(title_box[3] - title_h, title_box[1] + max(0, (title_box_h - title_h) // 2)))
-
-    plate_pad_x = max(24 if normalized_preview_format == "9:16" else 28, int(width * (0.025 if normalized_preview_format == "9:16" else 0.032)))
-    plate_pad_y = max(18 if normalized_preview_format == "9:16" else 24, int(height * (0.018 if normalized_preview_format == "9:16" else 0.024)))
-    plate_rect = (
-        max(18, title_x - plate_pad_x),
-        max(18, title_y - plate_pad_y),
-        min(width - 18, title_x + title_w + plate_pad_x),
-        min(height - 18, title_y + title_h + plate_pad_y),
-    )
-    plate_radius = max(24, int(min(width, height) * 0.032))
-
-    plate_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    plate_shadow_draw = ImageDraw.Draw(plate_shadow)
-    if draw_plate:
-        plate_shadow_draw.rounded_rectangle(
-            plate_rect,
-            radius=plate_radius,
-            fill=plate_shadow_fill,
-        )
-        plate_shadow = plate_shadow.filter(ImageFilter.GaussianBlur(radius=plate_shadow_blur))
-        overlay = Image.alpha_composite(overlay, plate_shadow)
-    draw = ImageDraw.Draw(overlay)
-    if draw_plate:
-        draw.rounded_rectangle(
-            plate_rect,
-            radius=plate_radius,
-            fill=plate_fill,
-            outline=plate_outline,
-            width=plate_outline_width,
-        )
-
-    plate_highlight = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    plate_highlight_draw = ImageDraw.Draw(plate_highlight)
-    if draw_plate and draw_plate_highlight:
-        plate_highlight_draw.rounded_rectangle(
-            (
-                plate_rect[0],
-                plate_rect[1],
-                plate_rect[2],
-                min(plate_rect[3], plate_rect[1] + max(22, int((plate_rect[3] - plate_rect[1]) * 0.42))),
-            ),
-            radius=max(22, int(min(width, height) * 0.028)),
-            fill=plate_highlight_fill,
-        )
-        plate_highlight = plate_highlight.filter(ImageFilter.GaussianBlur(radius=plate_highlight_blur))
-        overlay = Image.alpha_composite(overlay, plate_highlight)
-
-    text_glow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    text_glow_draw = ImageDraw.Draw(text_glow)
-    glow_color = secondary if overlay_style == "contrast" else accent
-    for dx, dy, alpha in text_glow_offsets:
-        text_glow_draw.multiline_text(
-            (title_x + dx, title_y + dy),
-            title_text,
-            font=font,
-            fill=(glow_color[0], glow_color[1], glow_color[2], alpha),
-            spacing=spacing,
-            stroke_width=text_glow_stroke_width,
-            stroke_fill=(6, 8, 16, min(255, alpha + 40)),
-            align="left",
-        )
-    text_glow = text_glow.filter(ImageFilter.GaussianBlur(radius=max(7, int(min(width, height) * 0.011))))
-    overlay = Image.alpha_composite(overlay, text_glow)
-
-    text_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    text_shadow_draw = ImageDraw.Draw(text_shadow)
-    text_shadow_draw.multiline_text(
-        (title_x + max(4, int(width * 0.004)), title_y + max(6, int(height * 0.006))),
-        title_text,
-        font=font,
-        fill=text_shadow_fill,
-        spacing=spacing,
-        stroke_width=text_shadow_stroke_width,
-        stroke_fill=text_shadow_stroke_fill,
-        align="left",
-    )
-    text_shadow = text_shadow.filter(ImageFilter.GaussianBlur(radius=max(4, int(min(width, height) * 0.006))))
-    overlay = Image.alpha_composite(overlay, text_shadow)
-    draw = ImageDraw.Draw(overlay)
-    draw.multiline_text(
-        (title_x, title_y),
-        title_text,
-        font=font,
-        fill=text_fill,
-        spacing=spacing,
-        stroke_width=text_stroke_width,
-        stroke_fill=text_stroke_fill,
-        align="left",
-    )
-
-    brand_font = _get_intro_font(max(20, int(width * 0.022)), bold=True)
-    footer_font = _get_intro_font(max(15, int(width * 0.015)), bold=False)
+    brand_font = _get_intro_font(max(12, int(width * 0.013)), bold=True)
+    footer_font = _get_intro_font(max(11, int(width * 0.0105)), bold=False)
+    watermark_font = _get_intro_font(max(10, int(width * 0.009)), bold=False)
     brand_x = margin_x
-    brand_y = max(18, int(height * 0.05))
-    _draw_text_tracking(draw, (brand_x, brand_y), "ava-studio", brand_font, (255, 255, 255, 218), tracking=max(0, int(width * 0.0018)))
+    brand_y = max(16, int(height * 0.045))
     footer_text = "ava-studio product 2026"
-    footer_y = height - int(height * 0.06) - getattr(footer_font, "size", 16)
-    _draw_text_tracking(draw, (margin_x, footer_y), footer_text, footer_font, (232, 236, 255, 170), tracking=max(0, int(width * 0.0011)))
+    footer_y = height - int(height * 0.04) - getattr(footer_font, "size", 12)
+    watermark_text = style_meta.get("label") or "ava-studio"
+    watermark_bbox = draw.textbbox((0, 0), watermark_text, font=watermark_font)
+    watermark_w = (watermark_bbox[2] - watermark_bbox[0]) if watermark_bbox else int(width * 0.08)
+    watermark_h = (watermark_bbox[3] - watermark_bbox[1]) if watermark_bbox else getattr(watermark_font, "size", 10)
+    watermark_x = max(16, width - margin_x - watermark_w)
+    watermark_y = max(brand_y, footer_y - watermark_h - max(12, int(height * 0.018)))
 
-    title_size_ratio = round(title_w / max(1, width), 3)
-    plate_width = max(1, plate_rect[2] - plate_rect[0])
-    plate_height = max(1, plate_rect[3] - plate_rect[1])
-    visibility_score = round(
-        min(
-            1.0,
-            0.45
-            + min(0.22, title_size_ratio * 0.55)
-            + min(0.18, (getattr(font, "size", 0) or 0) / max(1, height) * 1.6)
-            + min(0.15, (plate_width * plate_height) / max(1, width * height) * 2.4),
-        ),
-        3,
-    )
+    _draw_text_tracking(draw, (brand_x, brand_y), "ava-studio", brand_font, (255, 255, 255, 178), tracking=max(0, int(width * 0.0009)))
+    _draw_text_tracking(draw, (margin_x, footer_y), footer_text, footer_font, (232, 236, 255, 150), tracking=max(0, int(width * 0.0007)))
+    draw.text((watermark_x, watermark_y), watermark_text, font=watermark_font, fill=(accent[0], accent[1], accent[2], 72))
 
     overlay_debug = {
         "title": title,
         "previewFormat": normalized_preview_format,
-        "overlayStyle": overlay_style,
-        "titleBox": [int(v) for v in title_box],
-        "plateRect": [int(v) for v in plate_rect],
-        "fontSize": int(getattr(font, "size", 0) or 0),
-        "truetypeLoaded": truetype_loaded,
-        "fontName": str(getattr(font, "path", "") or getattr(font, "font", "") or ""),
-        "lines": lines,
-        "lineCount": len(lines),
-        "titleRendered": bool(title_text.strip()),
-        "titleSizeRatio": title_size_ratio,
-        "titlePosition": "center-bottom-safe",
-        "platePadding": {"x": int(plate_pad_x), "y": int(plate_pad_y)},
-        "visibilityScore": visibility_score,
+        "mainTitleRenderedBy": "gemini",
+        "brandingOverlayApplied": True,
+        "footerOverlayApplied": True,
+        "watermarkOverlayApplied": bool(str(watermark_text or "").strip()),
+        "brandingText": "ava-studio",
+        "footerText": footer_text,
+        "watermarkText": watermark_text,
+        "brandingFontSize": int(getattr(brand_font, "size", 0) or 0),
+        "footerFontSize": int(getattr(footer_font, "size", 0) or 0),
+        "watermarkFontSize": int(getattr(watermark_font, "size", 0) or 0),
     }
     print(
         "[INTRO FRAME OVERLAY] "
@@ -1994,17 +1779,13 @@ def _render_intro_frame_asset(raw: bytes, *, title: str, style_preset: str, prev
             {
                 "title": title,
                 "previewFormat": normalized_preview_format,
-                "overlay.overlayStyle": overlay_debug["overlayStyle"],
-                "overlay.titleBox": overlay_debug["titleBox"],
-                "overlay.plateRect": overlay_debug["plateRect"],
-                "overlay.fontSize": overlay_debug["fontSize"],
-                "overlay.truetypeLoaded": overlay_debug["truetypeLoaded"],
-                "overlay.lines": lines,
-                "overlay.titleRendered": overlay_debug["titleRendered"],
-                "overlay.titleSizeRatio": overlay_debug["titleSizeRatio"],
-                "overlay.titlePosition": overlay_debug["titlePosition"],
-                "overlay.platePadding": overlay_debug["platePadding"],
-                "overlay.visibilityScore": overlay_debug["visibilityScore"],
+                "overlay.mainTitleRenderedBy": overlay_debug["mainTitleRenderedBy"],
+                "overlay.brandingOverlayApplied": overlay_debug["brandingOverlayApplied"],
+                "overlay.footerOverlayApplied": overlay_debug["footerOverlayApplied"],
+                "overlay.watermarkOverlayApplied": overlay_debug["watermarkOverlayApplied"],
+                "overlay.brandingFontSize": overlay_debug["brandingFontSize"],
+                "overlay.footerFontSize": overlay_debug["footerFontSize"],
+                "overlay.watermarkFontSize": overlay_debug["watermarkFontSize"],
             },
             ensure_ascii=False,
         )
@@ -2120,7 +1901,9 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "Keep the image as one clean hook frame, not a collage, poster mockup, or UI layout.",
         "Attached reference images are the exact cast package and exact world anchors.",
         "Use the attached references as strict identity anchors, not loose inspiration.",
-        "Do not render readable text inside the image; backend will add the final readable title overlay.",
+        "The main headline title must be rendered directly inside the image as part of the thumbnail design.",
+        "Do not leave the main title for backend overlay.",
+        "The title should be large, bold, clickable, readable, and stylistically integrated into the thumbnail.",
         "Preserve the original title casing from the user; do not force uppercase treatment.",
         "Preserve a safe readable area for title text.",
         "Do not place text over the main face if it can be avoided.",
@@ -3001,9 +2784,9 @@ def clip_intro_generate(payload: IntroGenerateIn):
                 "refsPipelineWarning": refs_pipeline_warning or None,
                 "backendBrandedAsset": True,
                 "overlay": overlay_debug,
-                "overlay.lines": overlay_debug.get("lines") or [],
-                "overlay.fontSize": overlay_debug.get("fontSize"),
-                "overlay.truetypeLoaded": bool(overlay_debug.get("truetypeLoaded")),
+                "overlay.mainTitleRenderedBy": overlay_debug.get("mainTitleRenderedBy"),
+                "overlay.brandingOverlayApplied": bool(overlay_debug.get("brandingOverlayApplied")),
+                "overlay.footerOverlayApplied": bool(overlay_debug.get("footerOverlayApplied")),
             },
         }
     except Exception as exc:
