@@ -3607,8 +3607,12 @@ function IntroFrameNode({ id, data }) {
                           style={{
                             alignSelf: "start",
                             width: "100%",
-                            maxWidth: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%",
-                            maxHeight: `${previewTitleLayout.maxPlateHeight}px`,
+                            maxWidth: previewTitleLayout.maxWidth
+                              ? `${previewTitleLayout.maxWidth}px`
+                              : (previewTitleLayout.plateMaxWidth
+                                ? `${previewTitleLayout.plateMaxWidth}px`
+                                : (previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%")),
+                            maxHeight: `${(previewTitleLayout.maxHeight ?? previewTitleLayout.maxPlateHeight)}px`,
                             padding: `${previewTitleLayout.platePaddingY}px ${previewTitleLayout.platePaddingX}px`,
                             borderRadius: 18,
                             background: "linear-gradient(180deg, rgba(4,6,12,0.74) 0%, rgba(4,6,12,0.92) 100%)",
@@ -3622,10 +3626,17 @@ function IntroFrameNode({ id, data }) {
                             style={{
                               fontSize: `${previewTitleLayout.fontSize}px`,
                               lineHeight: `${previewTitleLayout.lineHeight}px`,
-                              maxHeight: `${previewTitleLayout.maxPlateHeight - (previewTitleLayout.platePaddingY * 2)}px`,
+                              maxHeight: `${(previewTitleLayout.maxHeight ?? previewTitleLayout.maxPlateHeight) - (previewTitleLayout.platePaddingY * 2)}px`,
                             }}
                           >
-                            {previewTitle}
+                            {(Array.isArray(previewTitleLayout.lines) && previewTitleLayout.lines.length
+                              ? previewTitleLayout.lines
+                              : [previewTitle]
+                            ).map((line, index) => (
+                              <span key={`${line}-${index}`} style={{ display: "block" }}>
+                                {line}
+                              </span>
+                            ))}
                           </div>
                         </div>
                         <div style={{ width: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%", height: 4, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
@@ -3693,7 +3704,6 @@ function IntroFrameNode({ id, data }) {
             src={zoomedPreview}
             alt={`${previewTitle} preview`}
             className="clipSB_previewZoomImage"
-            onClick={(event) => event.stopPropagation()}
           />
         </div>
       ) : null}
