@@ -179,8 +179,8 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
 
     deadline = time.time() + max(600, int(timeout_sec or 0))
     sleep_sec = max(2, int(poll_interval_sec or 2))
-    connect_timeout = max(1, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 10))
-    read_timeout = max(1, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 60))
+    connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
+    read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
 
     while time.time() < deadline:
         url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history/{safe_prompt_id}"
