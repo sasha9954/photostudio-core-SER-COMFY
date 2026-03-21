@@ -3324,10 +3324,20 @@ function IntroFrameNode({ id, data }) {
   const [durationDraft, setDurationDraft] = useState(
     () => String(durationSec).replace(".", ",")
   );
+  const [zoomedPreview, setZoomedPreview] = useState(null);
 
   useEffect(() => {
     setDurationDraft(String(durationSec).replace(".", ","));
   }, [durationSec]);
+
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.key === "Escape") setZoomedPreview(null);
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const commitDurationDraft = useCallback(() => {
     const parsed = parseLocaleFloat(durationDraft);
@@ -3521,7 +3531,8 @@ function IntroFrameNode({ id, data }) {
 
               <div className="clipSB_introFramePreviewCol">
                 <div
-                  className="clipSB_introFramePreviewBox"
+                  className={`clipSB_introFramePreviewBox${previewUrl ? " clipSB_previewCard" : ""}`}
+                  onClick={previewUrl ? () => setZoomedPreview(previewUrl) : undefined}
                   style={{
                     '--intro-style-accent': `${styleMeta.accent}`,
                     '--intro-style-secondary': `${styleMeta.secondary}`,
@@ -3607,24 +3618,14 @@ function IntroFrameNode({ id, data }) {
                           }}
                         >
                           <div
+                            className="clipSB_previewTitle"
                             style={{
-                              fontSize: previewTitleLayout.fontSize,
+                              fontSize: `${previewTitleLayout.fontSize}px`,
                               lineHeight: `${previewTitleLayout.lineHeight}px`,
-                              fontWeight: 900,
-                              letterSpacing: "0.018em",
-                              textTransform: "uppercase",
-                              color: "#ffffff",
-                              textShadow: "0 2px 0 rgba(0,0,0,0.32), 0 0 18px rgba(255,255,255,0.12)",
-                              overflow: "hidden",
-                              display: "grid",
-                              gap: 2,
-                              wordBreak: "break-word",
-                              overflowWrap: "anywhere",
+                              maxHeight: `${previewTitleLayout.maxPlateHeight - (previewTitleLayout.platePaddingY * 2)}px`,
                             }}
                           >
-                            {previewTitleLayout.lines.map((line, index) => (
-                              <span key={`${line}-${index}`}>{line}</span>
-                            ))}
+                            {previewTitle}
                           </div>
                         </div>
                         <div style={{ width: previewFormat === INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE ? "72%" : "100%", height: 4, borderRadius: 999, background: `linear-gradient(90deg, ${styleMeta.accent} 0%, ${styleMeta.secondary} 100%)`, opacity: 0.95 }} />
@@ -3683,6 +3684,19 @@ function IntroFrameNode({ id, data }) {
           </div>
         </div>
       </NodeShell>
+      {zoomedPreview ? (
+        <div
+          className="clipSB_previewZoomOverlay"
+          onClick={() => setZoomedPreview(null)}
+        >
+          <img
+            src={zoomedPreview}
+            alt={`${previewTitle} preview`}
+            className="clipSB_previewZoomImage"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      ) : null}
     </>
   );
 }
