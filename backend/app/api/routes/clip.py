@@ -1089,6 +1089,98 @@ def _append_unique_prompt_lines(target: list[str], *sections: list[str]) -> None
             seen.add(marker)
 
 
+_HOOK_STOPWORDS = {
+    "a", "an", "and", "at", "for", "from", "in", "into", "of", "on", "or", "the", "to", "with",
+    "а", "в", "во", "для", "за", "и", "из", "к", "ко", "на", "над", "не", "но", "о", "об", "от", "по", "под", "при", "с", "со", "у",
+}
+_STYLE_HOOK_ENDINGS = {
+    "breaking_alert": "?",
+    "shock_reveal": "?",
+    "mystery_horror": "?",
+    "tutorial_clean": "?",
+    "ai_product": "?",
+}
+_STRONG_HOOK_MARKERS = ("?", "!", ":")
+
+
+def _is_strong_hook_title(title: str) -> bool:
+    normalized = str(title or "").strip()
+    if not normalized:
+        return False
+    words = [word for word in re.split(r"\s+", normalized) if word]
+    if not words:
+        return False
+    if len(words) <= 5 and any(marker in normalized for marker in _STRONG_HOOK_MARKERS):
+        return True
+    if len(words) <= 4 and any(marker in normalized for marker in ("...", "…")):
+        return any(char.isupper() for char in normalized if char.isalpha())
+    alpha_chars = [char for char in normalized if char.isalpha()]
+    if alpha_chars and sum(1 for char in alpha_chars if char.isupper()) / len(alpha_chars) >= 0.75 and len(words) <= 5:
+        return True
+    impactful_words = sum(1 for word in words if len(re.sub(r"[^\wА-Яа-яЁё]", "", word, flags=re.UNICODE)) >= 4)
+    return len(words) <= 4 and impactful_words >= 2
+
+
+def buildHookTitle(originalTitle: str | None, styleKey: str | None = None) -> str:
+    title = re.sub(r"\s+", " ", str(originalTitle or "").strip())
+    if not title:
+        return "Intro frame"
+    if _is_strong_hook_title(title):
+        return title
+
+    style_key = _normalize_intro_style_preset(styleKey)
+    raw_tokens = [token.strip(" \t\n\r\"'“”‘’.,!?:;()[]{}") for token in re.split(r"\s+", title) if token.strip()]
+    meaningful_tokens = [token for token in raw_tokens if token and token.lower() not in _HOOK_STOPWORDS]
+    core_tokens = meaningful_tokens or raw_tokens
+    if not core_tokens:
+        return title
+
+    limited_tokens = core_tokens[: min(4, max(2, len(core_tokens)))]
+    candidate = " ".join(limited_tokens).strip()
+    if len(limited_tokens) >= 4:
+        candidate = " ".join(limited_tokens[:3]).strip()
+    if len(limited_tokens) <= 2 and len(raw_tokens) > len(limited_tokens):
+        candidate = " ".join(raw_tokens[: min(3, len(raw_tokens))]).strip()
+    candidate = candidate.rstrip(" .,!?:;…")
+    if not candidate:
+        return title
+
+    ending = _STYLE_HOOK_ENDINGS.get(style_key, "?")
+    if ending.strip() and not candidate.endswith(("?", "!", "...", "…")):
+        candidate = f"{candidate}{ending}".strip()
+    return candidate[:64].strip()
+
+
+def splitTitleIntoLines(title: str | None) -> list[str]:
+    normalized = re.sub(r"\s+", " ", str(title or "").strip())
+    if not normalized:
+        return []
+    tokens = [token for token in normalized.split(" ") if token]
+    if len(tokens) <= 2:
+        return [normalized]
+    if len(tokens) <= 4:
+        pivot = math.ceil(len(tokens) / 2)
+        return [" ".join(tokens[:pivot]), " ".join(tokens[pivot:])]
+
+    best_lines = [normalized]
+    best_score = None
+    for line_count in (2, 3):
+        if len(tokens) < line_count:
+            continue
+        chunk = math.ceil(len(tokens) / line_count)
+        lines = [" ".join(tokens[i:i + chunk]) for i in range(0, len(tokens), chunk)]
+        lines = [line for line in lines if line]
+        if len(lines) > 3:
+            continue
+        longest = max(len(line) for line in lines)
+        shortest = min(len(line) for line in lines)
+        score = (longest - shortest) + abs(len(lines) - 2) * 3
+        if best_score is None or score < best_score:
+            best_lines = lines
+            best_score = score
+    return best_lines[:3]
+
+
 def _resolve_intro_composition_plan(
     connected_refs_by_role: dict[str, list[str]] | None,
     hero_participants: list[str] | None = None,
@@ -1110,11 +1202,13 @@ def _resolve_intro_composition_plan(
     ]
     if mode == "subject_led":
         prompt_lines.extend([
+            "Subjects MUST remain dominant in the thumbnail.",
             "Visible characters and/or objects MUST remain the main heroes of the thumbnail.",
-            "They should occupy roughly 50-60% of the visual attention.",
+            "Subjects should occupy roughly 50-60% of the visual attention.",
             "Text, glow, arrows, accents, overlays, and decorative elements should occupy the remaining 40-50%.",
             "Do NOT let text, graphics, glow, or decorative overlays overpower the subject heroes.",
-            "Do NOT hide faces, bodies, or the main object core unless absolutely necessary for readability.",
+            "Do NOT hide faces, bodies, eyes, or the main object core unless absolutely necessary for readability.",
+            "Subject readability is priority over style treatment when the two conflict.",
             "Subject readability and focal clarity are high priority and must survive the final composition.",
         ])
     else:
@@ -1460,6 +1554,11 @@ def _get_intro_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont 
 
 
 def _wrap_intro_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int, max_lines: int) -> list[str]:
+    preset_lines = splitTitleIntoLines(text)
+    if preset_lines and len(preset_lines) <= max_lines:
+        candidate_boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=2) for line in preset_lines]
+        if candidate_boxes and all(bbox and (bbox[2] - bbox[0]) <= max_width for bbox in candidate_boxes):
+            return preset_lines
     words = [word for word in re.split(r"\s+", str(text or "").strip()) if word]
     if not words:
         return []
@@ -1827,7 +1926,9 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
     style_meta = _get_intro_style_meta(style_preset)
-    title = str(payload.title or "").strip() or "Intro frame"
+    original_title = str(payload.title or "").strip() or "Intro frame"
+    title = buildHookTitle(original_title, style_preset)
+    title_transformed = title != original_title
     title_context = str(payload.titleContext or "").strip()
     story_context = str(payload.storyContext or "").strip()
     source_node_types = [str(item or "").strip() for item in (payload.sourceNodeTypes or []) if str(item or "").strip()]
@@ -1931,6 +2032,15 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         "Title should support the composition, not destroy it.",
         "Avoid turning the thumbnail into mostly text.",
         "Keep the thumbnail readable at small size.",
+        "DESIGN BRAIN RULES:",
+        "- This is not just an image — this is a high-performing YouTube thumbnail.",
+        "- You must design it like a thumbnail designer, not a photographer.",
+        "- Apply strong visual hierarchy: first attention is bold readable headline text, second attention is the main subject, third attention is background and context.",
+        "- Use rule of thirds: place subjects in lower or side zones and reserve clean space for text.",
+        "- Create a strong visual hook with emotion, tension, curiosity, or contrast and avoid passive or neutral scenes.",
+        "- Enhance subjects: increase brightness and contrast on faces, slightly darken or simplify the background with a vignette feel, and add rim light or glow for separation.",
+        "- Make the thumbnail readable at small size.",
+        "- Avoid flat composition, weak contrast, caption-like text, and lifeless poses.",
     ]
     style_fragment_lines = [
         f"Prompt fragment: {style_meta['promptFragment']}.",
@@ -1942,6 +2052,43 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     composition_lines = [
         "COMPOSITION SYSTEM:",
         *composition_plan["promptLines"],
+    ]
+    text_line_layout = splitTitleIntoLines(title)
+    hook_rule_lines = [
+        "HOOK RULES:",
+        "- Create curiosity and tension.",
+        "- The viewer must instantly wonder what is happening.",
+        "- Use incomplete action or reaction.",
+        "- Avoid fully explained scenes.",
+        "- Strong hooks include surprised face, unexpected interaction, visual contradiction, and hidden or unclear cause.",
+        "- The thumbnail must trigger a click.",
+    ]
+    text_rule_lines = [
+        "TEXT RULES:",
+        "- Text must feel like a headline, not a caption.",
+        "- Break into 2-3 lines with visually balanced lengths when possible.",
+        "- Keep words short and impactful.",
+        "- Use strong contrast like white or yellow on dark areas.",
+        "- Add shadow or glow for readability.",
+        "- Placement: top center or top side.",
+        "- Text must not overlap faces.",
+        "- Text must stay inside the safe area.",
+        "- IMPORTANT: preserve original letter case from user input and DO NOT auto-uppercase.",
+        f"- Suggested line layout: {' / '.join(text_line_layout) if text_line_layout else title}.",
+    ]
+    contrast_rule_lines = [
+        "VISUAL CONTRAST RULES:",
+        "- Brighten subjects slightly.",
+        "- Darken or simplify background.",
+        "- Increase vibrance moderately, not oversaturated.",
+        "- Maintain clean separation between subject and background.",
+        "- Goal: subjects must pop instantly.",
+    ]
+    focus_rule_lines = [
+        "FOCUS RULES:",
+        "- Emphasize faces and eyes.",
+        "- If face present, it becomes the focal anchor.",
+        "- If no face is present, the main object becomes the focal anchor.",
     ]
     prompt_lines = [
         "STRICT INTRO CONTRACT:",
@@ -2116,6 +2263,10 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
         style_fragment_lines,
         style_rule_lines,
         composition_lines,
+        hook_rule_lines,
+        text_rule_lines,
+        contrast_rule_lines,
+        focus_rule_lines,
         context_lines,
         prompt_lines,
         negative_rule_lines,
@@ -2125,11 +2276,18 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     debug = {
         "rawConnectedRefsByRoleCounts": {role: len(connected_refs_by_role.get(role) or []) for role in connected_refs_by_role},
         "title": title,
+        "originalTitle": original_title,
         "stylePreset": style_preset,
+        "styleKey": style_preset,
         "previewFormat": preview_format,
         "sceneCount": scene_count,
         "durationSec": round(duration_sec, 1),
         "compositionMode": composition_plan["mode"],
+        "hookUsed": True,
+        "titleTransformed": title_transformed,
+        "subjectWeight": composition_plan["weights"].get("subject"),
+        "textLinesCount": len(text_line_layout) if text_line_layout else 1,
+        "splitTitleLines": text_line_layout,
         "compositionFocusTargets": composition_plan["focusTargets"],
         "compositionWeights": composition_plan["weights"],
         "sourceNodeTypes": source_node_types,
@@ -2501,7 +2659,7 @@ def _summarize_gemini_image_response(resp: dict) -> dict:
 def clip_intro_generate(payload: IntroGenerateIn):
     style_preset = _normalize_intro_style_preset(payload.stylePreset)
     preview_format = _normalize_intro_preview_format(payload.previewFormat)
-    title = str(payload.title or "").strip() or "Intro frame"
+    title = buildHookTitle(str(payload.title or "").strip() or "Intro frame", style_preset)
     width, height = _resolve_intro_preview_dimensions(preview_format)
     connected_refs_by_role = _normalize_intro_connected_refs_by_role(getattr(payload, "connectedRefsByRole", None))
     raw_connected_ref_counts = {role: len(connected_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}
