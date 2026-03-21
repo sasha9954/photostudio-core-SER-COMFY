@@ -2,11 +2,14 @@ import React from "react";
 import { COMFY_BRAIN_GENRE_OPTIONS, normalizeComfyGenre } from "./comfyBrainDomain";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 
+const COMFY_BRAIN_FORMAT_OPTIONS = ["9:16", "16:9", "1:1"];
+
 export default function ComfyBrainNode({ id, data }) {
   const mode = data?.mode || "clip";
   const plannerMode = data?.plannerMode || "legacy";
   const output = data?.output || "comfy image";
   const genre = normalizeComfyGenre(data?.genre || "");
+  const format = COMFY_BRAIN_FORMAT_OPTIONS.includes(data?.format) ? data.format : "9:16";
   const parseStatus = data?.parseStatus || "idle";
   const isParsing = parseStatus === "parsing";
   const isReady = parseStatus === "ready";
@@ -60,6 +63,15 @@ export default function ComfyBrainNode({ id, data }) {
           <select className="clipSB_select" value={genre} onChange={(e) => data?.onGenre?.(id, e.target.value)}>
             {!genre ? <option value="">Select genre</option> : null}
             {COMFY_BRAIN_GENRE_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </section>
+
+        <section className="clipSB_comfyBrainSection">
+          <div className="clipSB_brainLabel">FORMAT</div>
+          <select className="clipSB_select" value={format} onChange={(e) => data?.onFormat?.(id, e.target.value)}>
+            {COMFY_BRAIN_FORMAT_OPTIONS.map((option) => (
               <option key={option} value={option}>{option}</option>
             ))}
           </select>

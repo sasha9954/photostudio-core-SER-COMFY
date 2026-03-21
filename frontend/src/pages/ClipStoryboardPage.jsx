@@ -1166,6 +1166,14 @@ function normalizeSceneImageFormat(format) {
   return SCENE_IMAGE_FORMATS.includes(format) ? format : DEFAULT_SCENE_IMAGE_FORMAT;
 }
 
+function resolvePreferredSceneFormat(...candidates) {
+  for (const candidate of candidates) {
+    if (!String(candidate || "").trim()) continue;
+    return normalizeSceneImageFormat(candidate);
+  }
+  return DEFAULT_SCENE_IMAGE_FORMAT;
+}
+
 function getSceneImageSize(format) {
   const normalized = normalizeSceneImageFormat(format);
   if (normalized === "1:1") return { width: 1024, height: 1024 };
@@ -1544,7 +1552,7 @@ function extractStoryboardScenesFromNodes(nodes = []) {
   return Array.isArray(storyboardNode?.data?.scenes) ? storyboardNode.data.scenes : [];
 }
 
-function normalizeComfyScenesForAssembly(scenes = []) {
+function normalizeComfyScenesForAssembly(scenes = [], fallbackFormat = DEFAULT_SCENE_IMAGE_FORMAT) {
   return normalizeSceneCollectionWithSceneId(scenes, "comfy_scene").map((scene, idx) => {
     const durationFromScene = normalizeDurationSec(scene?.durationSec);
     const requestedDurationSec = durationFromScene != null
@@ -1554,7 +1562,7 @@ function normalizeComfyScenesForAssembly(scenes = []) {
         t0: scene?.startSec,
         t1: scene?.endSec,
       });
-    const normalizedFormat = normalizeSceneImageFormat(scene?.imageFormat || scene?.format || "9:16");
+    const normalizedFormat = resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, fallbackFormat);
     return {
       ...scene,
       sceneId: buildCanonicalSceneId(scene, idx, "comfy_scene"),
@@ -1589,7 +1597,12 @@ function removeAssemblyIncomingSourceEdges(edges = [], assemblyNodeId = "", targ
 
 function extractComfyScenesFromNodes(nodes = []) {
   const comfyStoryboardNode = (Array.isArray(nodes) ? nodes : []).find((n) => n?.type === "comfyStoryboard") || null;
-  return normalizeComfyScenesForAssembly(comfyStoryboardNode?.data?.mockScenes);
+  const fallbackFormat = resolvePreferredSceneFormat(
+    comfyStoryboardNode?.data?.format,
+    comfyStoryboardNode?.data?.plannerMeta?.format,
+    comfyStoryboardNode?.data?.plannerMeta?.plannerInput?.format
+  );
+  return normalizeComfyScenesForAssembly(comfyStoryboardNode?.data?.mockScenes, fallbackFormat);
 }
 
 function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } = {}) {
@@ -1654,13 +1667,19 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
   }
 
   if (sourceNode?.type === "comfyStoryboard") {
-    const scenes = normalizeComfyScenesForAssembly(sourceNode?.data?.mockScenes);
+    const sourceFormat = resolvePreferredSceneFormat(
+      sourceNode?.data?.format,
+      sourceNode?.data?.plannerMeta?.format,
+      sourceNode?.data?.plannerMeta?.plannerInput?.format
+    );
+    const scenes = normalizeComfyScenesForAssembly(sourceNode?.data?.mockScenes, sourceFormat);
     return {
       assemblyNodeId: effectiveAssemblyNodeId,
       sourceNodeId: String(sourceNode?.id || ""),
       sourceNodeType: "comfyStoryboard",
       scenesSource: "comfyStoryboard",
       scenes,
+      scenarioFormat: sourceFormat,
       introSourceNodeId: String(introFrame?.nodeId || ""),
       introSourceNodeType: introFrame?.nodeType || "",
       introFrame,
@@ -1673,6 +1692,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     sourceNodeType: "",
     scenesSource: "none",
     scenes: [],
+    scenarioFormat: DEFAULT_SCENE_IMAGE_FORMAT,
     introSourceNodeId: String(introFrame?.nodeId || ""),
     introSourceNodeType: introFrame?.nodeType || "",
     introFrame,
@@ -2019,6 +2039,16 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
   if (textValue) summaryParts.push(`text: ${truncateIntroText(textValue, 42)}`);
   if (sourceLabels.length) summaryParts.push(`inputs: ${sourceLabels.join(", ")}`);
   const plannerInput = comfyNode?.data?.plannerMeta?.plannerInput || comfyBrainNode?.data?.plannerMeta?.plannerInput || {};
+  const scenarioFormatCandidates = [
+    comfyBrainNode?.data?.format,
+    comfyNode?.data?.format,
+    plannerInput?.format,
+    comfyNode?.data?.plannerMeta?.format,
+    comfyBrainNode?.data?.plannerMeta?.format,
+  ].filter((value) => String(value || "").trim());
+  const scenarioFormat = scenarioFormatCandidates.length
+    ? resolvePreferredSceneFormat(...scenarioFormatCandidates)
+    : "";
   const plannerConnectedRefsByRole = normalizeIntroConnectedRefsByRole(plannerInput?.refsByRole || {});
   const graphRefPackage = collectIntroConnectedRefPackage({
     comfyNode,
@@ -2110,6 +2140,7 @@ function collectIntroFrameContext({ nodeId = "", nodes = [], edges = [] } = {}) 
     importantProps,
     worldContext,
     styleContext,
+    scenarioFormat,
     activeRefRoles,
     introActiveCastRoles,
     introMustAppear,
@@ -3512,7 +3543,7 @@ function IntroFrameNode({ id, data }) {
   const hasBackendGeneratedAsset = previewKind === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED && !!previewUrl;
   const autoTitle = !!data?.autoTitle;
   const styleMeta = getIntroStyleMeta(data?.stylePreset || "cinematic_dark");
-  const previewFormat = normalizeIntroFramePreviewFormat(data?.previewFormat);
+  const previewFormat = normalizeIntroFramePreviewFormat(data?.scenarioFormat || data?.previewFormat);
   const previewFormatMeta = getIntroFramePreviewFormatMeta(previewFormat);
   const durationSec = normalizeIntroDurationSec(data?.durationSec);
   const [durationDraft, setDurationDraft] = useState(
@@ -3679,15 +3710,11 @@ function IntroFrameNode({ id, data }) {
 
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
                     <label>
-                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Preview</div>
-                      <select
-                        className="clipSB_select"
-                        value={previewFormat}
-                        onChange={(e) => data?.onField?.(id, "previewFormat", e.target.value)}
-                        style={{ minHeight: 42 }}
-                      >
-                        {INTRO_FRAME_PREVIEW_FORMAT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                      </select>
+                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Format</div>
+                      <div className="clipSB_input clipSB_inputReadonly" style={{ minHeight: 42, display: "flex", alignItems: "center" }}>
+                        {previewFormatMeta.label}
+                        {data?.scenarioFormat ? <span className="clipSB_small" style={{ marginLeft: 8, opacity: 0.72 }}>from COMFY BRAIN</span> : null}
+                      </div>
                     </label>
                     <label>
                       <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
@@ -3895,6 +3922,15 @@ function AssemblyNode({ id, data }) {
   const resultTotalSegments = Number(result?.totalSegments || 0);
   const audioApplied = !!result?.audioApplied;
   const isStale = !!data?.isStale;
+  const statusLabel = status === "done"
+    ? "готово"
+    : status === "building"
+      ? "сборка"
+      : status === "ready"
+        ? "готово к сборке"
+        : status === "error"
+          ? "ошибка"
+          : "ожидание";
 
   return (
     <>
@@ -3907,27 +3943,13 @@ function AssemblyNode({ id, data }) {
         className="clipSB_nodeAssembly"
       >
         <div className="clipSB_assemblyStats">
-          <div className="clipSB_assemblyRow"><span>Сцен готово</span><strong>{data?.readyScenes || 0}/{data?.totalScenes || 0}</strong></div>
-          <div className="clipSB_assemblyRow"><span>Источник</span><strong>{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</strong></div>
-          <div className="clipSB_assemblyRow"><span>Intro</span><strong>{data?.introLabel || "НЕТ INTRO"}</strong></div>
-          <div className="clipSB_assemblyRow"><span>Аудио</span><strong>{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Source</span><strong className="clipSB_assemblyValue">{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Intro</span><strong className="clipSB_assemblyValue">{data?.introLabel || "НЕТ INTRO"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Audio</span><strong className="clipSB_assemblyValue">{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
+          <div className="clipSB_assemblyRow"><span>Статус</span><strong className="clipSB_assemblyValue">{statusLabel}</strong></div>
         </div>
-
-        <div className="clipSB_small" style={{ marginTop: 8 }}>
-          Main source: <b>{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</b> · Intro: <b>{data?.introLabel || "НЕТ INTRO"}</b>
-        </div>
-        {data?.debugSummary ? (
-          <div className="clipSB_selectHint" style={{ marginTop: 6 }}>
-            trace: {data.debugSummary}
-          </div>
-        ) : null}
-        {result ? (
-          <div className="clipSB_selectHint" style={{ marginTop: 6 }}>
-            result: scenes={resultSceneCount}; intro={result?.introIncluded ? "yes" : "no"}; totalSegments={resultTotalSegments || resultSceneCount}; totalSteps={Number(data?.assemblyStageTotal || 0) || Number(result?.totalSteps || 0) || 0}; introDuration={Number(result?.introDurationSec || 0) || 0}
-          </div>
-        ) : null}
 
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button className={`clipSB_btn ${!canAssemble ? "clipSB_btnMuted" : ""}`} onClick={data?.onAssemble} disabled={!canAssemble}>
@@ -3988,6 +4010,22 @@ function AssemblyNode({ id, data }) {
               <a className="clipSB_btn clipSB_btnLink" href={finalVideoUrl} download>Скачать mp4</a>
             </div>
           </div>
+        ) : null}
+
+        {(data?.debugSummary || result) ? (
+          <details className="clipSB_assemblyDetails">
+            <summary>Details</summary>
+            <div className="clipSB_assemblyDetailsBody">
+              {data?.debugSummary ? (
+                <div className="clipSB_small clipSB_assemblyDetailsText">{data.debugSummary}</div>
+              ) : null}
+              {result ? (
+                <div className="clipSB_small clipSB_assemblyDetailsText">
+                  scenes={resultSceneCount}; intro={result?.introIncluded ? "yes" : "no"}; totalSegments={resultTotalSegments || resultSceneCount}; totalSteps={Number(data?.assemblyStageTotal || 0) || Number(result?.totalSteps || 0) || 0}; introDuration={Number(result?.introDurationSec || 0) || 0}
+                </div>
+              ) : null}
+            </div>
+          </details>
         ) : null}
       </NodeShell>
     </>
@@ -5785,12 +5823,22 @@ const comfyShowVideoSection = Boolean(
         edgesNow,
         normalizeRefDataFn: normalizeRefData,
       });
+      const comfyScenarioFormat = resolvePreferredSceneFormat(
+        comfySceneForImageContract?.imageFormat,
+        comfySceneForImageContract?.format,
+        linkedComfyBrainNode?.data?.format,
+        comfyNode?.data?.format,
+        comfyNode?.data?.plannerMeta?.format,
+        comfyNode?.data?.plannerMeta?.plannerInput?.format
+      );
+      const { width, height } = getSceneImageSize(comfyScenarioFormat);
       const plannerInput = {
         text: liveDerived?.meaningfulText || "",
         audioUrl: liveDerived?.meaningfulAudio || "",
         audioDurationSec: liveDerived?.meaningfulAudioDurationSec || null,
         refsByRole: liveDerived?.refsByRole || {},
         mode: liveDerived?.modeValue || String(deriveNode?.data?.mode || "clip"),
+        format: comfyScenarioFormat,
         stylePreset: liveDerived?.stylePreset || String(deriveNode?.data?.styleKey || "realism"),
       };
       const readyLiveRefsSelection = pickReadyLiveRefsByRoleForScene({
@@ -5904,11 +5952,13 @@ const comfyShowVideoSection = Boolean(
           prompt: imagePrompt,
           sceneDelta: `${imagePrompt}
 
-${contextPrompt}`.trim(),
+${contextPrompt}
+
+Aspect ratio: ${comfyScenarioFormat}`.trim(),
           sceneText: contextPrompt,
           style: String(plannerInput?.stylePreset || comfyNode?.data?.stylePreset || 'realism'),
-          width: 1024,
-          height: 1792,
+          width,
+          height,
           refs: refsForImageRequest,
           promptDebug: {
             sceneId,
@@ -5922,7 +5972,7 @@ ${contextPrompt}`.trim(),
       });
       console.log("[COMFY DEBUG FRONT] /clip/image final request body refs", refsForImageRequest);
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || 'image_generation_failed');
-      updateComfyScene(comfySafeIndex, { imageUrl: String(out.imageUrl || '') });
+      updateComfyScene(comfySafeIndex, { imageUrl: String(out.imageUrl || ''), imageFormat: comfyScenarioFormat, format: comfyScenarioFormat });
     } catch (e) {
       console.error(e);
       setComfyImageError(String(e?.message || e));
@@ -5954,6 +6004,13 @@ ${contextPrompt}`.trim(),
     try {
       if (!sceneId) throw new Error("scene_id_required");
       const comfySceneSnapshot = comfyScenesRef.current[findComfySceneIndexById(sceneId)] || comfySelectedScene;
+      const comfyScenarioFormat = resolvePreferredSceneFormat(
+        comfySceneSnapshot?.imageFormat,
+        comfySceneSnapshot?.format,
+        comfyNode?.data?.format,
+        comfyNode?.data?.plannerMeta?.format,
+        comfyNode?.data?.plannerMeta?.plannerInput?.format
+      );
       const contextPrompt = buildComfySceneContextPrompt({
         scene: comfySceneSnapshot,
         mode: comfyNode?.data?.mode || "clip",
@@ -5978,7 +6035,7 @@ ${contextPrompt}`.trim(),
           requestedDurationSec: Number(comfySceneSnapshot.generationDurationSec) || Math.ceil(Number(comfySceneSnapshot.durationSec) || 3),
           shotType: String(comfySceneSnapshot.sceneNarrativeStep || ''),
           sceneType: String(comfySceneSnapshot.sceneGoal || ''),
-          format: '9:16',
+          format: comfyScenarioFormat,
           provider: 'comfy_remote',
         },
       });
@@ -6102,7 +6159,7 @@ ${contextPrompt}`.trim(),
           requestedDurationSec: Number(comfySelectedScene.generationDurationSec) || Math.ceil(Number(comfySelectedScene.durationSec) || 3),
           shotType: String(comfySelectedScene.sceneNarrativeStep || ''),
           sceneType: String(comfySelectedScene.sceneGoal || ''),
-          format: '9:16',
+          format: comfyScenarioFormat,
           provider: 'comfy_remote',
         },
       });
@@ -6820,16 +6877,18 @@ Aspect ratio: ${imageFormat}`,
   );
 
   const assemblyPayload = useMemo(() => {
-    const sceneFormat = assemblyScenesForPayload.find((scene) => String(scene?.imageFormat || scene?.format || "").trim())?.imageFormat
-      || assemblyScenesForPayload.find((scene) => String(scene?.format || "").trim())?.format
-      || "9:16";
+    const sceneFormat = resolvePreferredSceneFormat(
+      assemblySource.scenarioFormat,
+      assemblyScenesForPayload.find((scene) => String(scene?.imageFormat || scene?.format || "").trim())?.imageFormat,
+      assemblyScenesForPayload.find((scene) => String(scene?.format || "").trim())?.format
+    );
     return buildAssemblyPayload({
       scenes: assemblyScenesForPayload,
       audioUrl: globalAudioUrlRaw,
       format: sceneFormat,
       intro: assemblyIntroFrame,
     });
-  }, [assemblyIntroFrame, assemblyScenesForPayload, globalAudioUrlRaw]);
+  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.scenarioFormat, globalAudioUrlRaw]);
 
   const assemblySourceNodeId = String(assemblySource.sourceNodeId || "");
   const assemblySourceNodeType = String(assemblySource.sourceNodeType || "");
@@ -8199,6 +8258,7 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               output: derived.outputValue,
+              format: resolvePreferredSceneFormat(base.data?.format),
               connectedRefsCount: presentation.meaningfulRefRoles.length,
               connectedCastCount: presentation.sceneRoleModel.cast.length,
               hasAudio: !!derived.meaningfulAudio,
@@ -8215,6 +8275,7 @@ onClipSec: (nodeId, value) => {
               hiddenReferenceProfiles,
               plannerMeta: {
                 ...(base.data?.plannerMeta || {}),
+                format: resolvePreferredSceneFormat(base.data?.plannerMeta?.format, base.data?.format),
                 connectedRefsSummary,
                 connectedRefsWarnings,
                 referenceProfiles: hiddenReferenceProfiles,
@@ -8224,6 +8285,12 @@ onClipSec: (nodeId, value) => {
               onMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, mode: value } } : x))),
               onOutput: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, output: normalizeRenderProfile(value) } } : x))),
               onGenre: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, genre: normalizeComfyGenre(value) } } : x))),
+              onFormat: (nodeId, value) => setNodes((prev) => prev.map((x) => {
+                if (x.id === nodeId) {
+                  return { ...x, data: { ...x.data, format: normalizeSceneImageFormat(value) } };
+                }
+                return x;
+              })),
               onAudioStoryMode: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, audioStoryMode: normalizeAudioStoryMode(value) } } : x))),
               onStyle: (nodeId, value) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, styleKey: value } } : x))),
               onFreezeStyle: (nodeId, checked) => setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, freezeStyle: !!checked } } : x))),
@@ -8275,6 +8342,7 @@ onClipSec: (nodeId, value) => {
                   mode: freshDerived.modeValue,
                   plannerMode: String(freshDerived.plannerMode || "legacy"),
                   output: freshDerived.outputValue,
+                  format: resolvePreferredSceneFormat(activeNode?.data?.format),
                   stylePreset: freshDerived.stylePreset,
                   genre: freshDerived.genreValue,
                   freezeStyle: freshDerived.freezeStyle,
@@ -8351,7 +8419,7 @@ onClipSec: (nodeId, value) => {
                   let response;
                   try {
                     if (USE_COMFY_MOCK) {
-                      const plannerMeta = { plannerInput: payload, mode: payload.mode, plannerMode: payload.plannerMode, output: payload.output, stylePreset: payload.stylePreset, genre: payload.genre, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
+                      const plannerMeta = { plannerInput: payload, mode: payload.mode, plannerMode: payload.plannerMode, output: payload.output, format: payload.format, stylePreset: payload.stylePreset, genre: payload.genre, narrativeSource: payload.narrativeSource, timelineSource: payload.timelineSource, storyControlMode: payload.storyControlMode, storyMissionSummary: payload.storyMissionSummary, audioStoryMode: payload.audioStoryMode, warnings: [...freshPresentation.critical, ...freshPresentation.warnings], summary: freshPresentation.brainSummary, sceneRoleModel: freshPresentation.sceneRoleModel, referenceSummary: freshPresentation.referenceSummary };
                       const scenes = buildMockComfyScenes(plannerMeta);
                       response = { ok: true, planMeta: plannerMeta, globalContinuity: scenes[0]?.plannerMeta?.globalContinuity || "", scenes, warnings: plannerMeta.warnings, errors: [], debug: {} };
                     } else {
@@ -8408,11 +8476,16 @@ onClipSec: (nodeId, value) => {
 
                   resetComfyVideoJobsState();
                   const scenes = normalizeSceneCollectionWithSceneId(Array.isArray(response?.scenes) ? response.scenes : [], "comfy_scene");
-                  const resetBrainScenes = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" });
+                  const plannerMeta = response?.planMeta || {};
+                  const resolvedPlannerFormat = resolvePreferredSceneFormat(plannerMeta?.format, payload?.format, activeNode?.data?.format);
+                  const resetBrainScenes = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => ({
+                    ...scene,
+                    imageFormat: resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, resolvedPlannerFormat),
+                    format: resolvePreferredSceneFormat(scene?.format, scene?.imageFormat, resolvedPlannerFormat),
+                  }));
                   const comfyStoryboardTargets = comfyStoryTargets.length
                     ? comfyStoryTargets
                     : (nodesRef.current || []).filter((nodeItem) => nodeItem?.type === 'comfyStoryboard').map((nodeItem) => nodeItem.id);
-                  const plannerMeta = response?.planMeta || {};
                   const globalContinuity = response?.globalContinuity || "";
                   const normalizedSources = normalizeStoryboardSourcesForUi({
                     narrativeSource: plannerMeta?.narrativeSource || response?.debug?.narrativeSource || freshDerived.narrativeSource,
@@ -8425,7 +8498,17 @@ onClipSec: (nodeId, value) => {
                   };
                   const parsedAt = new Date().toLocaleTimeString();
                   const parsedAtIso = new Date().toISOString();
-                  const storyboardScenesWithResetState = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") }));
+                  const storyboardScenesWithResetState = resetVideoStateBySceneId(scenes, { panelField: "videoPanelOpen" }).map((scene) => {
+                    const sceneFormat = resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, resolvedPlannerFormat);
+                    return {
+                      ...scene,
+                      imageFormat: sceneFormat,
+                      format: sceneFormat,
+                      videoJobId: String(scene?.videoJobId || ""),
+                      videoStatus: String(scene?.videoStatus || ""),
+                      videoError: String(scene?.videoError || ""),
+                    };
+                  });
 
                   console.log("[COMFY PLAN RESPONSE APPLIED]", {
                     nodeId,
@@ -8451,6 +8534,7 @@ onClipSec: (nodeId, value) => {
                             parseStatus: 'ready',
                             parsedAt,
                             plannerMode: String(plannerMeta?.plannerMode || payload?.plannerMode || freshDerived.plannerMode || "legacy"),
+                            format: resolvePreferredSceneFormat(plannerMeta?.format, payload?.format, x?.data?.format),
                             mockScenes: resetBrainScenes.map((scene) => ({ ...scene, videoJobId: String(scene?.videoJobId || ""), videoStatus: String(scene?.videoStatus || ""), videoError: String(scene?.videoError || "") })),
                             lastPlannerMeta: { ...plannerMeta, globalContinuity, debugFields },
                             comfyDebug: debugFields,
@@ -8469,6 +8553,7 @@ onClipSec: (nodeId, value) => {
                             mode: freshDerived.modeValue,
                             plannerMode: String(plannerMeta?.plannerMode || payload?.plannerMode || freshDerived.plannerMode || "legacy"),
                             output: freshDerived.outputValue,
+                            format: resolvePreferredSceneFormat(plannerMeta?.format, payload?.format, x?.data?.format),
                             stylePreset: freshDerived.stylePreset,
                             narrativeSource: normalizedSources.narrativeSource,
                             timelineSource: freshDerived.timelineSource,
@@ -8563,6 +8648,8 @@ onClipSec: (nodeId, value) => {
             ...base,
             data: {
               ...base.data,
+              scenarioFormat: introContext.scenarioFormat,
+              previewFormat: introContext.scenarioFormat || base.data?.previewFormat,
               title: userTitleRaw,
               userTitleRaw,
               derivedTitle,
@@ -8648,7 +8735,7 @@ onClipSec: (nodeId, value) => {
                   manualTitleRaw,
                   autoTitle: !!currentNode?.data?.autoTitle,
                   stylePreset: normalizeIntroStylePreset(currentNode?.data?.stylePreset || "cinematic_dark"),
-                  previewFormat: normalizeIntroFramePreviewFormat(currentNode?.data?.previewFormat),
+                  previewFormat: normalizeIntroFramePreviewFormat(currentNode?.data?.scenarioFormat || currentNode?.data?.previewFormat),
                   durationSec: normalizeIntroDurationSec(currentNode?.data?.durationSec),
                   storyContext,
                   titleContext: String(freshContext.titleText || "").trim(),
@@ -9425,7 +9512,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyBrain") {
-      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', genre: '', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
+      node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', format: DEFAULT_SCENE_IMAGE_FORMAT, genre: '', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
       node = { id, type: "comfyStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mockScenes: [], sceneCount: 0, mode: 'clip', parseStatus: 'idle' } };
     } else if (type === "comfyVideoPreview") {
