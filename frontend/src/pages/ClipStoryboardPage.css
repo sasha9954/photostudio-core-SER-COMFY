@@ -1629,7 +1629,63 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_brainPillCritical { background: rgba(255,95,125,.1); color: rgba(255,210,219,.95); box-shadow: inset 0 0 0 1px rgba(255,95,125,.3); }
 .clipSB_brainPillOk { background: rgba(147,221,111,.08); color: rgba(220,248,202,.95); box-shadow: inset 0 0 0 1px rgba(147,221,111,.24); }
 .clipSB_inlineBtns { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
-.clipSB_previewCard { margin-top:8px; border-radius: 12px; padding: 10px; min-height: 120px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); display:flex; align-items:center; justify-content:center; }
+.clipSB_previewCard { margin-top:8px; border-radius: 12px; padding: 10px; min-height: 120px; background: rgba(255,255,255,.04); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); display:flex; align-items:center; justify-content:center; cursor: zoom-in; transition: transform .2s ease, box-shadow .2s ease; }
+.clipSB_previewCard:hover { transform: translateY(-2px) scale(1.01); box-shadow: 0 18px 36px rgba(0,0,0,.24), inset 0 0 0 1px rgba(255,255,255,.08); }
+.clipSB_introFramePreviewBox.clipSB_previewCard { margin-top: 0; padding: 0; min-height: 0; display: block; background: var(--intro-style-background, rgba(5, 8, 16, 0.86)); }
+.clipSB_previewTitle {
+  position: relative;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  padding: 0 12px;
+  box-sizing: border-box;
+  font-size: clamp(12px, 2.2vw, 18px);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: 0.018em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.85), 0 0 18px rgba(255,255,255,0.12);
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.clipSB_previewZoomOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn .2s ease;
+}
+.clipSB_previewZoomImage {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 14px;
+  box-shadow: 0 20px 80px rgba(0,0,0,0.6);
+  animation: zoomIn .2s ease;
+}
+@keyframes zoomIn {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .clipSB_drawerGroupTitle { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: rgba(255,255,255,.62); margin: 4px 2px; text-transform: uppercase; }
 .clipSB_comfyBrainPanel {
   display: grid;
