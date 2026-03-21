@@ -240,7 +240,8 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
                         safe_prompt_id,
                         list(outputs.keys())[:50],
                     )
-                return payload, None
+                    if outputs:
+                        return payload, None
         except ConnectTimeout as exc:
             logger.warning(
                 "[COMFY REMOTE] history connect timeout prompt_id=%s error=%s",
@@ -319,6 +320,14 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
                 return value.strip(), {"filename": "", "subfolder": subfolder, "type": file_type, "source_key": key}
         return None, None
 
+    def _is_mp4(candidate, file_meta: dict | None) -> bool:
+        filename = str((file_meta or {}).get("filename") or "").strip().lower()
+        if filename.endswith(".mp4"):
+            return True
+        if isinstance(candidate, str):
+            return candidate.strip().lower().endswith(".mp4")
+        return False
+
     for history_key, entry in history_payload.items():
         if not isinstance(entry, dict):
             continue
@@ -331,6 +340,7 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
             logger.info("[COMFY REMOTE] outputs[75]=%s", outputs.get("75"))
 
         inspected_node_ids: list[str] = []
+        fallback_file_ref: str | None = None
         for node_id, node_output in outputs.items():
             inspected_node_ids.append(str(node_id))
             if not isinstance(node_output, dict):
@@ -348,36 +358,54 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
                 isinstance(node_output.get("files"), list),
             )
 
+            for list_key in ("videos", "gifs", "files"):
+                items = node_output.get(list_key)
+                if not isinstance(items, list):
+                    continue
+                logger.info(
+                    "[COMFY REMOTE] inspect output list history=%s node_id=%s list_key=%s items=%s",
+                    history_key,
+                    node_id,
+                    list_key,
+                    len(items),
+                )
+                for item in items:
+                    file_ref, file_meta = _extract_file_ref(item)
+                    if not file_ref:
+                        continue
+                    if _is_mp4(item, file_meta):
+                        logger.info(
+                            "[COMFY REMOTE] selected mp4 history=%s node_id=%s list_key=%s filename=%s subfolder=%s type=%s",
+                            history_key,
+                            node_id,
+                            list_key,
+                            file_meta.get("filename") if file_meta else "",
+                            file_meta.get("subfolder") if file_meta else "",
+                            file_meta.get("type") if file_meta else "",
+                        )
+                        return file_ref, None
+                    if fallback_file_ref is None:
+                        fallback_file_ref = file_ref
+
             for list_key in ("videos", "files", "gifs", "images"):
                 items = node_output.get(list_key)
-                if isinstance(items, list):
-                    logger.info(
-                        "[COMFY REMOTE] inspect output list history=%s node_id=%s list_key=%s items=%s",
-                        history_key,
-                        node_id,
-                        list_key,
-                        len(items),
-                    )
-                    for item in items:
-                        file_ref, file_meta = _extract_file_ref(item)
-                        if file_ref:
-                            if isinstance(item, dict) and str(item.get("filename") or "").strip().lower().endswith(".mp4"):
-                                logger.info(
-                                    "[COMFY REMOTE] selected mp4 history=%s node_id=%s list_key=%s filename=%s subfolder=%s type=%s",
-                                    history_key,
-                                    node_id,
-                                    list_key,
-                                    file_meta.get("filename") if file_meta else "",
-                                    file_meta.get("subfolder") if file_meta else "",
-                                    file_meta.get("type") if file_meta else "",
-                                )
-                            else:
-                                logger.info("[COMFY REMOTE] matched output node_id=%s list_key=%s file_ref=%s", node_id, list_key, file_ref)
-                            return file_ref, None
+                if not isinstance(items, list):
+                    continue
+                logger.info(
+                    "[COMFY REMOTE] inspect output list history=%s node_id=%s list_key=%s items=%s",
+                    history_key,
+                    node_id,
+                    list_key,
+                    len(items),
+                )
+                for item in items:
+                    file_ref, _ = _extract_file_ref(item)
+                    if file_ref and fallback_file_ref is None:
+                        fallback_file_ref = file_ref
 
             file_ref, file_meta = _extract_file_ref(node_output)
             if file_ref:
-                if str((file_meta or {}).get("filename") or "").lower().endswith(".mp4"):
+                if _is_mp4(node_output, file_meta):
                     logger.info(
                         "[COMFY REMOTE] selected direct mp4 history=%s node_id=%s filename=%s subfolder=%s type=%s",
                         history_key,
@@ -388,7 +416,11 @@ def extract_video_result(history_payload: dict) -> tuple[str | None, str | None]
                     )
                 else:
                     logger.info("[COMFY REMOTE] matched direct output node_id=%s file_ref=%s", node_id, file_ref)
-                return file_ref, None
+                    if fallback_file_ref is None:
+                        fallback_file_ref = file_ref
+
+        if fallback_file_ref:
+            return fallback_file_ref, None
 
         logger.warning(
             "[COMFY REMOTE] no video output found history=%s inspected_node_ids=%s available_output_keys=%s",
