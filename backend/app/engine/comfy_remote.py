@@ -71,9 +71,9 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
     safe_name = str(filename or "source.jpg").strip() or "source.jpg"
     size_bytes = len(image_bytes or b"")
-    connect_timeout = max(1, int(settings.COMFY_UPLOAD_CONNECT_TIMEOUT_SEC or 10))
-    read_timeout = max(1, int(settings.COMFY_UPLOAD_READ_TIMEOUT_SEC or 60))
-    max_attempts = max(1, int(settings.COMFY_UPLOAD_MAX_ATTEMPTS or 1))
+    connect_timeout = max(20, int(settings.COMFY_UPLOAD_CONNECT_TIMEOUT_SEC or 20))
+    read_timeout = max(180, int(settings.COMFY_UPLOAD_READ_TIMEOUT_SEC or 180))
+    max_attempts = max(4, int(settings.COMFY_UPLOAD_MAX_ATTEMPTS or 4))
 
     logger.info(
         "[COMFY REMOTE] upload start url=%s filename=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
@@ -130,7 +130,7 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
             return None, last_error
 
         if attempt < max_attempts:
-            backoff_sec = min(2.0, 0.5 * attempt)
+            backoff_sec = min(8.0, 2.0 * attempt)
             logger.info("[COMFY REMOTE] upload retrying attempt=%s next_attempt=%s sleep_sec=%.1f", attempt, attempt + 1, backoff_sec)
             time.sleep(backoff_sec)
 
@@ -177,8 +177,8 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
     if not safe_prompt_id:
         return None, "prompt_id_empty"
 
-    deadline = time.time() + max(5, int(timeout_sec or 0))
-    sleep_sec = max(1, int(poll_interval_sec or 1))
+    deadline = time.time() + max(600, int(timeout_sec or 0))
+    sleep_sec = max(2, int(poll_interval_sec or 2))
     connect_timeout = max(1, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 10))
     read_timeout = max(1, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 60))
 
@@ -198,13 +198,39 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
                 return None, f"history_non_200:status={resp.status_code}:body={body_snippet}"
             payload, parse_err = _parse_json_response(resp, stage="history_response")
             if parse_err or not payload:
-                return None, parse_err or "history_response_invalid_json"
+                logger.warning(
+                    "[COMFY REMOTE] history temporary invalid response prompt_id=%s err=%s",
+                    safe_prompt_id,
+                    parse_err or "history_response_invalid_json",
+                )
+                time.sleep(sleep_sec)
+                continue
         except ConnectTimeout as exc:
-            return None, f"history_connect_timeout:{str(exc)[:300]}"
+            logger.warning(
+                "[COMFY REMOTE] history connect timeout prompt_id=%s error=%s",
+                safe_prompt_id,
+                str(exc)[:200],
+            )
+            time.sleep(sleep_sec)
+            continue
+
         except ReadTimeout as exc:
-            return None, f"history_read_timeout:{str(exc)[:300]}"
+            logger.warning(
+                "[COMFY REMOTE] history read timeout prompt_id=%s error=%s",
+                safe_prompt_id,
+                str(exc)[:200],
+            )
+            time.sleep(sleep_sec)
+            continue
+
         except RequestException as exc:
-            return None, f"history_request_error:{str(exc)[:300]}"
+            logger.warning(
+                "[COMFY REMOTE] history request error prompt_id=%s error=%s",
+                safe_prompt_id,
+                str(exc)[:200],
+            )
+            time.sleep(sleep_sec)
+            continue
         except Exception as exc:
             logger.exception("[COMFY REMOTE] history unexpected error url=%s prompt_id=%s", url, safe_prompt_id)
             return None, f"history_unexpected_error:{str(exc)[:300]}"
@@ -468,7 +494,7 @@ def run_comfy_image_to_video(
     history, wait_err = wait_for_comfy_result(
         prompt_id,
         timeout_sec=max(10, int(settings.COMFY_POLL_TIMEOUT_SEC or 600)),
-        poll_interval_sec=max(1, int(settings.COMFY_POLL_INTERVAL_SEC or 2)),
+        poll_interval_sec=max(2, int(settings.COMFY_POLL_INTERVAL_SEC or 2)),
     )
     if wait_err or not history:
         return None, f"history_wait_failed:{wait_err or 'unknown_wait_error'}"
