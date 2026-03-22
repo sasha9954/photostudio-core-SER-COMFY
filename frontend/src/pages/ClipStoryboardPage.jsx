@@ -340,7 +340,17 @@ function extractNarrativeTesterPayload({ testerType = "", sourceNode = null, sou
 
   if (config.payloadKey === "brainPackage" || String(sourceHandle || "") === "brain_package_out") {
     const brainPackage = outputs?.brainPackage;
-    return brainPackage && typeof brainPackage === "object" && !Array.isArray(brainPackage) ? brainPackage : null;
+    console.log("[BRAIN TESTER FLOW]", {
+      step: "extractNarrativeTesterPayload:narrative.outputs.brainPackage",
+      value: brainPackage,
+      type: typeof brainPackage,
+      isArray: Array.isArray(brainPackage),
+      isObject: !!brainPackage && typeof brainPackage === "object" && !Array.isArray(brainPackage),
+      testerType,
+      sourceHandle,
+      sourceNodeType: sourceNode?.type || null,
+    });
+    return brainPackage && typeof brainPackage === "object" && !Array.isArray(brainPackage) ? brainPackage : brainPackage || null;
   }
 
   const payload = outputs?.[config.payloadKey];
@@ -8931,6 +8941,22 @@ onClipSec: (nodeId, value) => {
             sourceNode,
             sourceHandle: String(incomingEdge?.sourceHandle || ""),
           });
+          const hasPayload = payload != null && (!(typeof payload === "string") || !!String(payload || "").trim());
+          if (n.type === "brainPackageTesterNode") {
+            console.log("[BRAIN TESTER FLOW]", {
+              step: "bindHandlers:node.data.payload",
+              value: payload,
+              type: typeof payload,
+              isArray: Array.isArray(payload),
+              isObject: !!payload && typeof payload === "object" && !Array.isArray(payload),
+              testerNodeId: n.id,
+              incomingEdge,
+              sourceNodeType: sourceNode?.type || null,
+              sourceNodeId: sourceNode?.id || null,
+              hasPayload,
+              testerType: n.type,
+            });
+          }
           return {
             ...base,
             data: {
@@ -8939,7 +8965,7 @@ onClipSec: (nodeId, value) => {
               testerConfig,
               acceptedHandle: testerConfig?.acceptHandle || "",
               isConnected: !!incomingEdge && sourceNode?.type === "comfyNarrative" && String(incomingEdge?.sourceHandle || "") === String(testerConfig?.acceptHandle || ""),
-              hasPayload: payload != null && (!(typeof payload === "string") || !!String(payload || "").trim()),
+              hasPayload,
               payload,
             },
           };
@@ -10259,6 +10285,19 @@ const hydrate = useCallback((source = "unknown") => {
             };
           }
 
+          if (n.type === "brainPackageTesterNode") {
+            console.log("[BRAIN TESTER FLOW]", {
+              step: "hydrate:raw_node.data.payload",
+              value: data?.payload,
+              type: typeof data?.payload,
+              isArray: Array.isArray(data?.payload),
+              isObject: !!data?.payload && typeof data?.payload === "object" && !Array.isArray(data?.payload),
+              testerPayloadType: typeof data?.testerPayload,
+              testerPayloadValue: data?.testerPayload,
+              nodeId: n.id,
+            });
+          }
+
           return {
             id: n.id,
             type: n.type,
@@ -10661,6 +10700,18 @@ const hydrate = useCallback((source = "unknown") => {
 
     // strip handlers from data
     const serialNodes = serializeNodesForStorage(nodes);
+    serialNodes
+      .filter((nodeItem) => nodeItem?.type === "brainPackageTesterNode")
+      .forEach((nodeItem) => {
+        console.log("[BRAIN TESTER FLOW]", {
+          step: "persist:serializeNodesForStorage",
+          value: nodeItem?.data?.payload,
+          type: typeof nodeItem?.data?.payload,
+          isArray: Array.isArray(nodeItem?.data?.payload),
+          isObject: !!nodeItem?.data?.payload && typeof nodeItem.data.payload === "object" && !Array.isArray(nodeItem.data.payload),
+          nodeId: nodeItem?.id || null,
+        });
+      });
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
     if (CLIP_TRACE_COMFY_REFS) {
       const tracedNodes = serialNodes
