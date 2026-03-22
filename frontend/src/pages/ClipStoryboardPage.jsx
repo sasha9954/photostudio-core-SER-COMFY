@@ -52,9 +52,9 @@ const PORT_COLORS = {
   text: "var(--family-text)",
   text_in: "var(--family-text)",
   audio_in: "var(--family-audio)",
-  video_ref_in: "var(--family-narrative)",
+  video_ref_in: "var(--family-storyboard)",
   scenario_out: "var(--family-narrative)",
-  voice_script_out: "var(--family-narrative)",
+  voice_script_out: "var(--family-audio)",
   brain_package_out: "var(--family-brain)",
   bg_music_prompt_out: "var(--family-music)",
   ref_character: "var(--family-ref-character)",
@@ -226,6 +226,7 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
   if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
   if (targetType === "comfyNarrative" && isNarrativeInput(targetHandle)) return targetHandle;
   if (sourceType === "comfyBrain" && isComfyBrainInput(sourceHandle)) return sourceHandle;
+  if (sourceType === "comfyNarrative" && ["scenario_out", "voice_script_out", "brain_package_out", "bg_music_prompt_out"].includes(String(sourceHandle || ""))) return sourceHandle;
 
   if (targetType === "introFrame" && targetHandle === INTRO_FRAME_STORY_HANDLE) return "intro_context";
 

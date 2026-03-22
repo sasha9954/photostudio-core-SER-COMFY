@@ -49,14 +49,16 @@ export default function ComfyNarrativeNode({ id, data }) {
   const activeResultTab = data?.activeResultTab || "scenario";
   const outputs = data?.outputs || {};
   const resolvedSource = data?.resolvedSource || {};
+  const activeSourceMode = resolvedSource?.mode || sourceMode;
   const isConnectedSource = resolvedSource?.origin === "connected";
-  const sourceStatusText = sourceMode === "TEXT"
+  const hasLockedExternalSource = isConnectedSource;
+  const sourceStatusText = activeSourceMode === "TEXT"
     ? (isConnectedSource ? "Подключён внешний текстовый источник" : "Используется ручной ввод")
-    : sourceMode === "AUDIO"
+    : activeSourceMode === "AUDIO"
       ? (isConnectedSource ? "Подключён внешний аудио-источник" : "Используется ручной ввод")
       : (isConnectedSource ? "Подключён внешний видео-референс" : "Используется ручной ввод");
 
-  const sourceInput = sourceMode === "TEXT"
+  const sourceInput = activeSourceMode === "TEXT"
     ? (
       <div className="clipSB_narrativeField">
         <div className="clipSB_brainLabel">Описание / история</div>
@@ -69,7 +71,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         />
       </div>
     )
-    : sourceMode === "AUDIO"
+    : activeSourceMode === "AUDIO"
       ? (
         <div className="clipSB_narrativeField">
           <div className="clipSB_brainLabel">Аудио</div>
@@ -125,15 +127,6 @@ export default function ComfyNarrativeNode({ id, data }) {
       >
         <div className="clipSB_narrativeSubtitle">Создание истории и логики сцен</div>
 
-        <div className="clipSB_narrativePorts">
-          {NARRATIVE_INPUT_HANDLES.map((item) => (
-            <div key={item.id} className="clipSB_narrativePortLabel clipSB_narrativePortLabel--input">{item.labelRu}</div>
-          ))}
-          {OUTPUT_HANDLES.map((item) => (
-            <div key={item.id} className="clipSB_narrativePortLabel">{item.labelRu}</div>
-          ))}
-        </div>
-
         <section className="clipSB_narrativeSection">
           <div className="clipSB_brainLabel">Источник</div>
           <div className="clipSB_narrativeSegmented">
@@ -141,8 +134,9 @@ export default function ComfyNarrativeNode({ id, data }) {
               <button
                 key={option.value}
                 type="button"
-                className={`clipSB_narrativeChip ${sourceMode === option.value ? "isActive" : ""}`.trim()}
+                className={`clipSB_narrativeChip ${activeSourceMode === option.value ? "isActive" : ""}`.trim()}
                 onClick={() => data?.onFieldChange?.(id, { sourceMode: option.value })}
+                disabled={hasLockedExternalSource && activeSourceMode !== option.value}
               >
                 {option.labelRu}
               </button>
