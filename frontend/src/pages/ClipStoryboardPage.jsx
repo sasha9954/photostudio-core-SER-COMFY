@@ -2035,7 +2035,47 @@ function getSceneListThumb(scene, previousScene = null) {
   return String(scene?.imageUrl || "").trim();
 }
 
-async function uploadAsset(file) {
+function isUploadableFile(file) {
+  if (!file || typeof file !== "object") return false;
+  const hasFileBits = typeof file.name === "string" && typeof file.size === "number";
+  const hasBlobBits = typeof file.arrayBuffer === "function" || typeof file.stream === "function";
+  return hasFileBits && hasBlobBits;
+}
+
+function getUploadDebugPayload(file) {
+  return {
+    file,
+    name: String(file?.name || ""),
+    type: String(file?.type || ""),
+    size: Number(file?.size || 0),
+    lastModified: Number(file?.lastModified || 0) || null,
+  };
+}
+
+function buildUploadGuardKey(file) {
+  const debug = getUploadDebugPayload(file);
+  return `${debug.name}::${debug.type}::${debug.size}::${debug.lastModified || 0}`;
+}
+
+async function uploadAsset(file, options = {}) {
+  const debugTag = String(options?.debugTag || "").trim();
+  const debugPayload = getUploadDebugPayload(file);
+  if (debugTag) {
+    console.log(`[${debugTag} upload request]`, debugPayload);
+  }
+  if (!isUploadableFile(file)) {
+    const invalidResponse = {
+      ok: false,
+      detail: "invalid_file_payload",
+      debugTag,
+      ...debugPayload,
+    };
+    if (debugTag) {
+      console.log(`[${debugTag} upload response]`, invalidResponse);
+    }
+    throw new Error(`upload_invalid_file:${debugTag || "unknown"}`);
+  }
+
   const fd = new FormData();
   fd.append("file", file);
 
@@ -2044,16 +2084,29 @@ async function uploadAsset(file) {
     body: fd,
     credentials: "include",
   });
-  if (!res.ok) {
-    let txt = "";
+  const resClone = res.clone();
+
+  let responseJson = null;
+  let responseText = "";
+  try {
+    responseJson = await res.json();
+  } catch {
     try {
-      txt = await res.text();
+      responseText = await resClone.text();
     } catch {
       // ignore
     }
-    throw new Error(`upload_failed:${res.status}:${txt || res.statusText}`);
   }
-  return await res.json();
+
+  if (debugTag) {
+    console.log(`[${debugTag} upload response]`, responseJson || { ok: res.ok, status: res.status, text: responseText || res.statusText });
+  }
+
+  if (!res.ok) {
+    const detail = responseJson?.detail || responseText || res.statusText;
+    throw new Error(`upload_failed:${res.status}:${detail}`);
+  }
+  return responseJson || {};
 }
 
 function readFileAsDataUrl(file) {
@@ -2705,6 +2758,7 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
     refHiddenProfile: normalized?.refHiddenProfile && typeof normalized.refHiddenProfile === "object" ? normalized.refHiddenProfile : null,
     refAnalysisError: refStatus === "error" ? String(normalized?.refAnalysisError || "").trim() : "",
     refAnalyzedAt: String(normalized?.refAnalyzedAt || "").trim(),
+    uploadSoftError: String(normalized?.uploadSoftError || "").trim(),
   };
 }
 
@@ -3857,6 +3911,7 @@ function RefNode({ id, data }) {
   const isReady = refStatus === "ready";
   const shortLabel = String(data?.refShortLabel || "").trim();
   const analysisError = String(data?.refAnalysisError || "").trim();
+  const uploadSoftError = String(data?.uploadSoftError || "").trim();
   const detailsOpen = !!data?.refDetailsOpen;
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
@@ -3883,6 +3938,7 @@ function RefNode({ id, data }) {
         className={`clipSB_nodeRef clipSB_nodeRef--${kind} ${isDraft ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}
       >
         <div className="clipSB_refGrid" style={{ marginBottom: 10 }}>
+          {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
           {refs.map((item, idx) => (
             <div className="clipSB_refThumb" key={`${item.url}-${idx}`}>
               <img src={resolveAssetUrl(item.url)} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
@@ -7861,6 +7917,7 @@ Aspect ratio: ${imageFormat}`,
 
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const refUploadGuardRef = useRef(new Map());
 
   useEffect(() => {
     nodesRef.current = nodes || [];
@@ -8484,19 +8541,61 @@ onClipSec: (nodeId, value) => {
               onPickImage: async (nodeId, file) => {
                 const pickedFiles = Array.isArray(file) ? file : (file ? [file] : []);
                 if (!pickedFiles.length) return;
-                setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: true } } : x))));
+                setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: true, uploadSoftError: "" } } : x))));
                 try {
                   const targetNode = nodesRef.current.find((x) => x.id === nodeId);
+                  const normalizedTarget = normalizeRefData(targetNode?.data || {}, targetNode?.data?.kind || "");
                   const maxFiles = targetNode?.data?.kind === "ref_style" ? 1 : 5;
-                  const prevRefs = normalizeRefData(targetNode?.data || {}, targetNode?.data?.kind || "").refs;
+                  const prevRefs = normalizedTarget.refs;
                   const room = Math.max(0, maxFiles - (maxFiles === 1 ? 0 : prevRefs.length));
                   const queue = (maxFiles === 1 ? pickedFiles.slice(0, 1) : pickedFiles.slice(0, room));
+                  const nodeKind = String(targetNode?.data?.kind || "").trim();
+                  const debugTag = nodeKind === "ref_location" ? "LOCATION" : "REF";
+                  const seenUploadKeys = new Set();
+                  const guardBucket = refUploadGuardRef.current.get(nodeId) || new Map();
+                  refUploadGuardRef.current.set(nodeId, guardBucket);
+                  const guardNow = Date.now();
 
                   for (const oneFile of queue) {
+                    const uploadKey = buildUploadGuardKey(oneFile);
+                    if (!isUploadableFile(oneFile)) {
+                      console.warn(`[${debugTag} upload skipped] invalid file payload`, {
+                        nodeId,
+                        kind: nodeKind,
+                        uploadKey,
+                        file: oneFile,
+                      });
+                      setNodes((prev) => prev.map((x) => (x.id === nodeId
+                        ? { ...x, data: { ...x.data, uploadSoftError: "Лишний upload пропущен: в повторный шаг пришёл не File-объект." } }
+                        : x)));
+                      continue;
+                    }
+                    if (seenUploadKeys.has(uploadKey)) {
+                      console.warn(`[${debugTag} upload skipped] duplicate file in same pick`, {
+                        nodeId,
+                        kind: nodeKind,
+                        uploadKey,
+                        file: getUploadDebugPayload(oneFile),
+                      });
+                      continue;
+                    }
+                    const guardMeta = guardBucket.get(uploadKey);
+                    if (guardMeta && (guardMeta.status === "uploading" || (guardNow - Number(guardMeta.ts || 0)) < 5000)) {
+                      console.warn(`[${debugTag} upload skipped] duplicate rapid re-upload`, {
+                        nodeId,
+                        kind: nodeKind,
+                        uploadKey,
+                        guardMeta,
+                      });
+                      continue;
+                    }
+                    seenUploadKeys.add(uploadKey);
+                    guardBucket.set(uploadKey, { status: "uploading", ts: guardNow });
                     try {
-                      const out = await uploadAsset(oneFile);
-                      const url = String(out?.url || "").trim();
+                      const out = await uploadAsset(oneFile, { debugTag });
+                      const url = String(out?.url || out?.assetUrl || "").trim();
                       if (!url) continue;
+                      guardBucket.set(uploadKey, { status: "done", ts: Date.now(), url });
                       setNodes((prev) => prev.map((x) => {
                         if (x.id !== nodeId) return x;
                         const nextPrevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
@@ -8504,10 +8603,31 @@ onClipSec: (nodeId, value) => {
                         const nextRefs = nextMax === 1
                           ? [{ url, name: out?.name || oneFile.name }]
                           : nextPrevRefs.concat({ url, name: out?.name || oneFile.name }).slice(0, nextMax);
-                        return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "" } };
+                        return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "", uploadSoftError: "" } };
                       }));
                     } catch (err) {
                       console.error(err);
+                      guardBucket.set(uploadKey, { status: "failed", ts: Date.now(), error: String(err?.message || err) });
+                      setNodes((prev) => prev.map((x) => {
+                        if (x.id !== nodeId) return x;
+                        const existingRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
+                        return {
+                          ...x,
+                          data: {
+                            ...x.data,
+                            refs: existingRefs,
+                            refStatus: existingRefs.length ? (String(x?.data?.refStatus || "").trim() || "draft") : "empty",
+                            uploadSoftError: existingRefs.length
+                              ? "Повторный upload завершился ошибкой, но уже загруженная картинка сохранена."
+                              : "Не удалось загрузить изображение. Смотри console/backend log для детали 400.",
+                          },
+                        };
+                      }));
+                    }
+                  }
+                  for (const [guardKey, meta] of guardBucket.entries()) {
+                    if ((Date.now() - Number(meta?.ts || 0)) > 30000) {
+                      guardBucket.delete(guardKey);
                     }
                   }
                 } finally {

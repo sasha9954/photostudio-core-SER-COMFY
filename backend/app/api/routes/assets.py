@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import logging
 import os
 import re
 import base64
@@ -15,6 +16,7 @@ import subprocess
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url, resolve_asset_filename_with_image_fallback
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
@@ -151,6 +153,18 @@ def _probe_audio_duration_sec(raw: bytes, ext: str) -> float | None:
         return None
 
 
+def _raise_upload_bad_request(*, file: UploadFile | None, ext: str, content_type: str, size: int | None, detail: str) -> None:
+    logger.warning(
+        "[ASSET UPLOAD 400] filename=%s ext=%s content_type=%s size=%s detail=%s",
+        getattr(file, "filename", None),
+        ext or "none",
+        content_type or "none",
+        size if size is not None else "unknown",
+        detail,
+    )
+    raise HTTPException(status_code=400, detail=detail)
+
+
 @router.post("/assets/upload")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     """Generic upload endpoint for small user-provided files (images/video/audio).
@@ -160,16 +174,16 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     _ensure_assets_dir()
 
     if file is None:
-        raise HTTPException(status_code=400, detail="no_file")
+        _raise_upload_bad_request(file=file, ext="", content_type="", size=None, detail="no_file")
 
     ct = (file.content_type or "").split(";", 1)[0].strip().lower()
     try:
         raw = await file.read()
     except Exception:
-        raise HTTPException(status_code=400, detail="read_failed")
+        _raise_upload_bad_request(file=file, ext="", content_type=ct, size=None, detail="read_failed")
 
     if not raw:
-        raise HTTPException(status_code=400, detail="empty")
+        _raise_upload_bad_request(file=file, ext="", content_type=ct, size=0, detail="empty")
 
     # soft limits to avoid abuse in local dev
     if len(raw) > 60 * 1024 * 1024:
@@ -184,9 +198,14 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     guessed_ext = _guess_ext_from_content_type(ct)
     ext = filename_ext or guessed_ext
     if not ext:
-        raise HTTPException(status_code=400, detail="unsupported_ext:none")
+        _raise_upload_bad_request(file=file, ext="", content_type=ct, size=len(raw), detail="unsupported_ext:none")
 
-    ext, media_kind = _validate_upload_media(ext=ext, content_type=ct)
+    try:
+        ext, media_kind = _validate_upload_media(ext=ext, content_type=ct)
+    except HTTPException as exc:
+        if int(getattr(exc, "status_code", 500)) == 400:
+            _raise_upload_bad_request(file=file, ext=ext, content_type=ct, size=len(raw), detail=str(exc.detail))
+        raise
 
     hid = _hash_bytes(raw)
     fn = f"{hid}{ext}"

@@ -19,6 +19,7 @@ export default function RefLiteNode({ id, data, title, className, handleId }) {
   const isDraft = refStatus === "draft";
   const isError = refStatus === "error";
   const shortLabel = String(data?.refShortLabel || "").trim();
+  const uploadSoftError = String(data?.uploadSoftError || "").trim();
   const detailsOpen = !!data?.refDetailsOpen;
   const detailsLines = formatRefProfileDetails(data?.refHiddenProfile);
   const canToggleDetails = refStatus === "ready" && detailsLines.length > 0;
@@ -30,6 +31,7 @@ export default function RefLiteNode({ id, data, title, className, handleId }) {
     <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
     <NodeShell title={title} onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧷</span>} className={`${className} ${isDraft ? "clipSB_nodeRefDraft" : ""} ${isError ? "clipSB_nodeRefError" : ""}`.trim()}>
       <div className="clipSB_small" style={{ marginBottom: 8 }}>статус: {REF_STATUS_LABELS[refStatus] || refStatus}</div>
+      {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
       {isDraft ? <div className="clipSB_refWarningBadge">⚠ Нажмите «Добавить», чтобы подтвердить реф</div> : null}
       {isError ? <div className="clipSB_refErrorBadge">⚠ {String(data?.refAnalysisError || "Не удалось проанализировать реф")}</div> : null}
       {refStatus === "ready" && shortLabel ? <div className="clipSB_refReadyBadge">label: {shortLabel}</div> : null}
