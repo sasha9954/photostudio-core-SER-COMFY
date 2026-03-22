@@ -9,6 +9,9 @@ import {
   NARRATIVE_RESULT_TABS,
 } from "./comfyNarrativeDomain";
 
+const NARRATIVE_HANDLE_TOP = 106;
+const NARRATIVE_HANDLE_STEP = 38;
+
 const OUTPUT_HANDLES = [
   { id: "scenario_out", labelRu: "Сценарий" },
   { id: "voice_script_out", labelRu: "Озвучка" },
@@ -56,7 +59,7 @@ export default function ComfyNarrativeNode({ id, data }) {
       : activeSourceMode === "AUDIO"
         ? "Подключён внешний аудио-источник"
         : activeSourceMode === "LINK"
-          ? "Подключён внешний web/source URL"
+          ? "Подключён внешний web / URL источник"
         : "Подключён внешний видео-референс"
     : "Подключите один источник: текст, аудио, ссылка или видео-референс.";
 
@@ -93,7 +96,7 @@ export default function ComfyNarrativeNode({ id, data }) {
           position={Position.Left}
           id={item.id}
           className="clipSB_handle"
-          style={handleStyle(item.id, { top: 92 + index * 34 })}
+          style={handleStyle(item.id, { top: NARRATIVE_HANDLE_TOP + index * NARRATIVE_HANDLE_STEP })}
         />
       ))}
       {OUTPUT_HANDLES.map((item, index) => (
@@ -103,7 +106,7 @@ export default function ComfyNarrativeNode({ id, data }) {
           position={Position.Right}
           id={item.id}
           className="clipSB_handle"
-          style={handleStyle(item.id, { top: 92 + index * 34 })}
+          style={handleStyle(item.id, { top: NARRATIVE_HANDLE_TOP + index * NARRATIVE_HANDLE_STEP })}
         />
       ))}
       <NodeShell

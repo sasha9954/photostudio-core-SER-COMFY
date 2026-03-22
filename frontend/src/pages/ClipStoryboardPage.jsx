@@ -55,7 +55,7 @@ const PORT_COLORS = {
   text_in: "var(--family-text)",
   audio_in: "var(--family-audio)",
   link_in: "var(--family-link)",
-  video_ref_in: "var(--family-storyboard)",
+  video_ref_in: "var(--family-video-ref)",
   scenario_out: "var(--family-narrative)",
   voice_script_out: "var(--family-audio)",
   brain_package_out: "var(--family-brain)",
