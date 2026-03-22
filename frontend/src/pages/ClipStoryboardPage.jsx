@@ -6,6 +6,7 @@ import {
   Handle,
   Position,
   addEdge,
+  applyEdgeChanges,
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
@@ -189,7 +190,10 @@ function enforceSingleNarrativeSourceEdge(edges = []) {
     if (!edge?.target || !isNarrativeInput(edge?.targetHandle)) return true;
     const keepIndex = latestByNode.get(edge.target);
     const keep = keepIndex === index;
-    if (!keep) changed = true;
+    if (!keep) {
+      changed = true;
+      console.warn("[NARRATIVE EDGE FIX]", edge.target);
+    }
     return keep;
   });
 
@@ -4480,7 +4484,10 @@ useEffect(() => {
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
+  const [edges, setEdges] = useEdgesState(defaultEdges);
+  const onEdgesChange = useCallback((changes) => {
+    setEdges((currentEdges) => enforceSingleNarrativeSourceEdge(applyEdgeChanges(changes, currentEdges)));
+  }, [setEdges]);
 
   useEffect(() => {
     nodesCountRef.current = nodes.length;
@@ -8236,6 +8243,8 @@ onClipSec: (nodeId, value) => {
                           ...nextData,
                           sourceOrigin: nextResolvedSource.origin,
                           resolvedSource: nextResolvedSource,
+                          error: "NO_SOURCE",
+                          outputs: getDefaultNarrativeNodeData().outputs,
                         },
                       };
                     }
@@ -8250,6 +8259,7 @@ onClipSec: (nodeId, value) => {
                         ...nextData,
                         sourceOrigin: nextResolvedSource.origin,
                         resolvedSource: nextResolvedSource,
+                        error: null,
                         outputs,
                       },
                     };

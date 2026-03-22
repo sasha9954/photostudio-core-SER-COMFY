@@ -71,13 +71,12 @@ export default function ComfyNarrativeNode({ id, data }) {
   ) : (
     <div className="clipSB_narrativeField clipSB_narrativeField--disabled" aria-disabled="true">
       <div className="clipSB_brainLabel">Основа сценария</div>
-      <textarea
-        className="clipSB_textarea clipSB_narrativeTextarea"
-        value=""
-        disabled
-        placeholder="Подключите один внешний источник к Narrative node, чтобы получить основу сценария."
-        rows={7}
-      />
+      <div className="clipSB_narrativeEmptyBlock">
+        <div>Подключите источник:</div>
+        <div>— Текст</div>
+        <div>— Аудио</div>
+        <div>— Видео</div>
+      </div>
       <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: text_in, audio_in или video_ref_in.</div>
     </div>
   );
