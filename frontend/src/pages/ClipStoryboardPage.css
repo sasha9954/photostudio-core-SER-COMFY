@@ -2578,27 +2578,6 @@ body.ps_clip_fullscreen .mainCol {
   color: var(--text-soft);
 }
 
-.clipSB_narrativePorts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 12px;
-  padding-right: 72px;
-}
-
-.clipSB_narrativePortLabel {
-  font-size: 11px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  color: rgba(255,255,255,0.84);
-  background: color-mix(in srgb, var(--family-narrative) 18%, rgba(255,255,255,0.04));
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
-}
-
-.clipSB_narrativePortLabel--input {
-  background: color-mix(in srgb, var(--family-text) 14%, rgba(255,255,255,0.04));
-}
-
 .clipSB_narrativeSection,
 .clipSB_narrativeField {
   display: flex;
@@ -2632,6 +2611,11 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_narrativeTab.isActive {
   background: color-mix(in srgb, var(--family-narrative) 30%, rgba(255,255,255,0.06));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--family-narrative) 55%, rgba(255,255,255,0.08));
+}
+
+.clipSB_narrativeChip:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .clipSB_narrativeGrid {

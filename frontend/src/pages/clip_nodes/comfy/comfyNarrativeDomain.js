@@ -92,27 +92,31 @@ export function getDefaultNarrativeNodeData() {
 export function resolveNarrativeSource(state = {}) {
   const sourceMode = NARRATIVE_SOURCE_OPTIONS.some((item) => item.value === state.sourceMode) ? state.sourceMode : "TEXT";
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
-  const connectedSource = sourceMode === "TEXT"
-    ? connectedInputs.text_in
-    : sourceMode === "AUDIO"
-      ? connectedInputs.audio_in
-      : connectedInputs.video_ref_in;
+  const connectedOption = NARRATIVE_INPUT_HANDLES.find((item) => normalizeText(connectedInputs?.[item.id]?.value));
+  const resolvedMode = connectedOption?.mode || sourceMode;
+  const connectedSource = connectedOption
+    ? connectedInputs[connectedOption.id]
+    : resolvedMode === "TEXT"
+      ? connectedInputs.text_in
+      : resolvedMode === "AUDIO"
+        ? connectedInputs.audio_in
+        : connectedInputs.video_ref_in;
 
-  const internalValue = sourceMode === "TEXT"
+  const internalValue = resolvedMode === "TEXT"
     ? normalizeText(state.textInput)
-    : sourceMode === "AUDIO"
+    : resolvedMode === "AUDIO"
       ? normalizeText(state.audioInput)
       : normalizeText(state.videoUrlInput);
 
   const connectedValue = normalizeText(connectedSource?.value);
   const origin = connectedValue ? "connected" : "internal";
-  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, sourceMode, "Текст");
+  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, resolvedMode, "Текст");
   const fallbackSourceLabel = origin === "connected"
     ? `Подключённый источник (${modeLabel.toLowerCase()})`
     : "Ручной ввод";
 
   return {
-    mode: sourceMode,
+    mode: resolvedMode,
     origin,
     value: connectedValue || internalValue,
     label: modeLabel,
