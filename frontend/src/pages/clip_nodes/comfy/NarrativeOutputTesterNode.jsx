@@ -87,58 +87,113 @@ function TesterTextBody({ config, payload, isConnected }) {
   );
 }
 
+function buildBrainTesterPreview(payload) {
+  if (payload == null) return "null";
+  if (typeof payload === "string") return payload.slice(0, 140);
+  if (typeof payload === "number" || typeof payload === "boolean") return String(payload);
+  try {
+    return JSON.stringify(payload, null, 2).slice(0, 280);
+  } catch {
+    return "[unserializable payload]";
+  }
+}
+
 function resolveBrainTesterPayload(payload) {
+  const debugMeta = {
+    payloadType: typeof payload,
+    isArray: Array.isArray(payload),
+    isObject: !!payload && typeof payload === "object" && !Array.isArray(payload),
+    preview: buildBrainTesterPreview(payload),
+  };
+
   if (isBrainPackageObject(payload)) {
-    return { brain: payload, textFallback: "", fallbackLabel: "" };
+    return { brain: payload, debugMeta, errorMessage: "", errorStage: "" };
   }
 
   if (typeof payload === "string") {
     const trimmed = payload.trim();
     if (!trimmed) {
-      return { brain: null, textFallback: "", fallbackLabel: "" };
+      return { brain: null, debugMeta: { ...debugMeta, preview: "" }, errorMessage: "", errorStage: "" };
     }
 
     if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
       try {
         const parsed = JSON.parse(trimmed);
         if (isBrainPackageObject(parsed)) {
-          return { brain: parsed, textFallback: "", fallbackLabel: "" };
+          return {
+            brain: parsed,
+            debugMeta: {
+              ...debugMeta,
+              preview: buildBrainTesterPreview(parsed),
+              parsedFromJsonString: true,
+            },
+            errorMessage: "",
+            errorStage: "",
+          };
         }
+        return {
+          brain: null,
+          debugMeta,
+          errorMessage: "Brain tester получил JSON-строку, но внутри не brain package object.",
+          errorStage: "json_string_non_brain_object",
+        };
       } catch {
-        // ignore parse failure and keep text fallback below
+        return {
+          brain: null,
+          debugMeta,
+          errorMessage: "Brain tester получил строку, похожую на JSON, но JSON.parse не удался.",
+          errorStage: "json_parse_failed",
+        };
       }
     }
 
     if (trimmed === "[object Object]") {
       return {
         brain: null,
-        textFallback: "Payload был приведён к строке '[object Object]' до brain tester render path.",
-        fallbackLabel: "Нужен object payload",
+        debugMeta,
+        errorMessage: "brain payload был испорчен в строку '[object Object]' раньше рендера",
+        errorStage: "stringified_object_before_render",
       };
     }
 
-    return { brain: null, textFallback: trimmed, fallbackLabel: "Text fallback" };
+    return {
+      brain: null,
+      debugMeta,
+      errorMessage: "Brain tester получил строковый payload вместо object payload.",
+      errorStage: "plain_string_payload",
+    };
   }
 
-  return { brain: null, textFallback: "", fallbackLabel: "" };
+  if (payload == null) {
+    return { brain: null, debugMeta, errorMessage: "", errorStage: "" };
+  }
+
+  return {
+    brain: null,
+    debugMeta,
+    errorMessage: "Brain tester получил payload неподдерживаемого типа до structured renderer.",
+    errorStage: "unsupported_payload_type",
+  };
 }
 
-function TesterBrainBody({ config, payload, isConnected }) {
-  const { brain, textFallback, fallbackLabel } = useMemo(() => resolveBrainTesterPayload(payload), [payload]);
+function TesterBrainBody({ config, payload, isConnected, data }) {
+  const { brain, debugMeta, errorMessage, errorStage } = useMemo(() => resolveBrainTesterPayload(payload), [payload]);
   const [showRawJson, setShowRawJson] = useState(false);
   const rawJson = useMemo(() => (brain ? JSON.stringify(brain, null, 2) : ""), [brain]);
 
   useEffect(() => {
-    console.log("[BRAIN TESTER payload]", {
+    console.log("[BRAIN TESTER RENDER REAL]", {
+      nodeType: data?.type || data?.testerType || null,
       payload,
-      type: typeof payload,
+      payloadType: typeof payload,
       isArray: Array.isArray(payload),
       isObject: !!payload && typeof payload === "object" && !Array.isArray(payload),
+      payloadValue: payload,
     });
-  }, [payload]);
+  }, [data, payload]);
 
   if (!brain) {
-    if (!textFallback) {
+    if (!errorMessage) {
       return <TesterEmptyState config={config} isConnected={isConnected} />;
     }
 
@@ -146,10 +201,18 @@ function TesterBrainBody({ config, payload, isConnected }) {
       <>
         <div className="clipSB_testerMetaRow">
           <span className="clipSB_testerStatusBadge isReady">{config.statusLabel}</span>
-          <span className="clipSB_testerMetric">{fallbackLabel || "Text fallback"}</span>
+          <span className="clipSB_testerMetric">BRAIN TESTER V2 · debug error</span>
         </div>
         <div className="clipSB_testerPayload clipSB_testerPayload--text">
-          <pre>{textFallback}</pre>
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontWeight: 700, color: "#ffb4b4" }}>BRAIN TESTER V2</div>
+            <div style={{ fontSize: 12, opacity: 0.84 }}>stage: {errorStage || "unknown"}</div>
+            <div style={{ fontSize: 12, opacity: 0.84 }}>typeof payload: {debugMeta.payloadType}</div>
+            <div style={{ fontSize: 12, opacity: 0.84 }}>isObject: {String(!!debugMeta.isObject)}</div>
+            <div style={{ fontSize: 12, opacity: 0.84 }}>preview:</div>
+            <pre>{debugMeta.preview || "(empty)"}</pre>
+            <pre>{errorMessage}</pre>
+          </div>
         </div>
       </>
     );
@@ -217,6 +280,7 @@ function NarrativeOutputTesterNode({ id, data }) {
         className={`clipSB_nodeTester clipSB_nodeTester--${config.payloadKind}`}
       >
         <div className="clipSB_testerSubtitle">LAB / DEBUG RECEIVER · временная технода для проверки narrative pipeline</div>
+        {config.payloadKind === "brain" ? <div className="clipSB_testerSubtitle">BRAIN TESTER V2 · real render path debug enabled</div> : null}
         <div className="clipSB_testerMetaRow">
           <span className={`clipSB_testerStatusBadge ${isConnected ? "isConnected" : ""}`.trim()}>
             {isConnected ? config.waitingLabel : "Не подключено"}
@@ -224,7 +288,7 @@ function NarrativeOutputTesterNode({ id, data }) {
           <span className="clipSB_testerMetric">accept: {config.acceptHandle}</span>
         </div>
         {config.payloadKind === "brain"
-          ? <TesterBrainBody config={config} payload={hasPayload ? data?.payload : null} isConnected={isConnected} />
+          ? <TesterBrainBody config={config} payload={hasPayload ? data?.payload : null} isConnected={isConnected} data={data} />
           : <TesterTextBody config={config} payload={hasPayload ? data?.payload : ""} isConnected={isConnected} />}
       </NodeShell>
     </>
