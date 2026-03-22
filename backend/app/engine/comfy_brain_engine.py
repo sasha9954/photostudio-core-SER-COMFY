@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 PRIMARY_GEMINI_PLANNER_MODEL = "gemini-3.1-pro-preview"
-FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
+FALLBACK_GEMINI_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 RAW_GEMINI_FALLBACK_CHAIN = str(getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK_CHAIN", "") or "").strip()
 GEMINI_ONLY_PLANNER_MODEL_FALLBACKS = [
     model.strip()
-    for model in (RAW_GEMINI_FALLBACK_CHAIN.split(",") if RAW_GEMINI_FALLBACK_CHAIN else [FALLBACK_GEMINI_MODEL, "gemini-2.5-pro", "gemini-2.5-flash"])
+    for model in (RAW_GEMINI_FALLBACK_CHAIN.split(",") if RAW_GEMINI_FALLBACK_CHAIN else [FALLBACK_GEMINI_MODEL, "gemini-2.5-pro"])
     if model.strip()
 ]
 if FALLBACK_GEMINI_MODEL not in GEMINI_ONLY_PLANNER_MODEL_FALLBACKS:
@@ -1831,6 +1831,7 @@ def _call_gemini_plan_with_model_fallback(api_key: str, requested_model: str, bo
         parsed, diagnostics = _call_gemini_plan(api_key, candidate_model, body)
         diagnostics["requestedModel"] = requested_model
         diagnostics["modelCandidates"] = model_candidates
+        next_candidate = model_candidates[idx + 1] if idx + 1 < len(model_candidates) else None
         if idx > 0:
             diagnostics["fallbackFrom"] = model_candidates[idx - 1]
             diagnostics["fallbackTo"] = candidate_model
@@ -1841,8 +1842,8 @@ def _call_gemini_plan_with_model_fallback(api_key: str, requested_model: str, bo
         logger.warning(
             "[COMFY PLAN] gemini_only model fallback requested=%s fallback_from=%s fallback_to=%s status=%s",
             requested_model,
-            diagnostics.get("fallbackFrom") or candidate_model,
             candidate_model,
+            next_candidate,
             diagnostics.get("httpStatus"),
         )
 
