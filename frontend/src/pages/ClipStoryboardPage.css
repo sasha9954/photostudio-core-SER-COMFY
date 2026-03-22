@@ -2595,6 +2595,10 @@ body.ps_clip_fullscreen .mainCol {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
 }
 
+.clipSB_narrativePortLabel--input {
+  background: color-mix(in srgb, var(--family-text) 14%, rgba(255,255,255,0.04));
+}
+
 .clipSB_narrativeSection,
 .clipSB_narrativeField {
   display: flex;
@@ -2643,6 +2647,39 @@ body.ps_clip_fullscreen .mainCol {
 
 .clipSB_narrativeTextarea--compact {
   min-height: 76px;
+}
+
+.clipSB_narrativeSourceStatus {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+.clipSB_narrativeSourceStatus.isConnected {
+  background: color-mix(in srgb, var(--family-narrative) 18%, rgba(255,255,255,0.05));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--family-narrative) 42%, rgba(255,255,255,0.08));
+}
+
+.clipSB_narrativeSourceStatusTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.92);
+}
+
+.clipSB_narrativeSourceStatusHint,
+.clipSB_narrativeSourceStatusPreview {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255,255,255,0.72);
+}
+
+.clipSB_narrativeSourceStatusPreview {
+  max-height: 48px;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .clipSB_narrativeActions {

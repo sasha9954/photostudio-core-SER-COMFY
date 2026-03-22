@@ -41,7 +41,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildNarrativeOutputs, getDefaultNarrativeNodeData } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildNarrativeOutputs, getDefaultNarrativeNodeData, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 
 
 // -------------------------
@@ -50,6 +50,9 @@ import { buildNarrativeOutputs, getDefaultNarrativeNodeData } from "./clip_nodes
 const PORT_COLORS = {
   audio: "var(--family-audio)",
   text: "var(--family-text)",
+  text_in: "var(--family-text)",
+  audio_in: "var(--family-audio)",
+  video_ref_in: "var(--family-narrative)",
   scenario_out: "var(--family-narrative)",
   voice_script_out: "var(--family-narrative)",
   brain_package_out: "var(--family-brain)",
@@ -160,9 +163,16 @@ function isComfyBrainInput(handleId) {
   return ["audio", "text", ...Object.keys(COMFY_BRAIN_REF_HANDLE_CONFIG)].includes(handleId);
 }
 
+function isNarrativeInput(handleId) {
+  return ["text_in", "audio_in", "video_ref_in"].includes(String(handleId || ""));
+}
+
 const EDGE_STYLE_BY_KIND = {
   audio: { color: PORT_COLORS.audio, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   text: { color: PORT_COLORS.text, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  text_in: { color: PORT_COLORS.text_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  audio_in: { color: PORT_COLORS.audio_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  video_ref_in: { color: PORT_COLORS.video_ref_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   scenario_out: { color: PORT_COLORS.scenario_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   voice_script_out: { color: PORT_COLORS.voice_script_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   brain_package_out: { color: PORT_COLORS.brain_package_out, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -214,6 +224,7 @@ const EDGE_STYLE_BY_KIND = {
 function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "", targetType = "", existingKind = "" }) {
   if (targetType === "brainNode" && isBrainInput(targetHandle)) return targetHandle;
   if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
+  if (targetType === "comfyNarrative" && isNarrativeInput(targetHandle)) return targetHandle;
   if (sourceType === "comfyBrain" && isComfyBrainInput(sourceHandle)) return sourceHandle;
 
   if (targetType === "introFrame" && targetHandle === INTRO_FRAME_STORY_HANDLE) return "intro_context";
@@ -1943,6 +1954,85 @@ function getLatestIncomingNodeForHandle({ targetNodeId = "", targetHandle = "", 
     .reverse()
     .find((item) => item?.target === targetNodeId && String(item?.targetHandle || "") === String(targetHandle || ""));
   return edge ? (nodesById.get(edge?.source) || null) : null;
+}
+
+function getLatestIncomingEdgeForHandle({ targetNodeId = "", targetHandle = "", edges = [] } = {}) {
+  if (!targetNodeId || !targetHandle) return null;
+  return [...(Array.isArray(edges) ? edges : [])]
+    .reverse()
+    .find((item) => item?.target === targetNodeId && String(item?.targetHandle || "") === String(targetHandle || ""))
+    || null;
+}
+
+function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", targetHandle = "" } = {}) {
+  if (!sourceNode) return null;
+
+  if (targetHandle === "text_in" && sourceNode.type === "textNode" && sourceHandle === "text") {
+    const textValue = String(sourceNode?.data?.textValue || sourceNode?.data?.text || "").trim();
+    if (!textValue) return null;
+    return {
+      value: textValue,
+      preview: textValue,
+      sourceLabel: "Внешний текстовый источник",
+    };
+  }
+
+  if (targetHandle === "audio_in" && sourceNode.type === "audioNode" && sourceHandle === "audio") {
+    const audioUrl = String(sourceNode?.data?.audioUrl || "").trim();
+    if (!audioUrl) return null;
+    const audioName = String(sourceNode?.data?.audioName || "").trim();
+    return {
+      value: audioUrl,
+      preview: audioName || audioUrl,
+      sourceLabel: "Внешний аудио-источник",
+    };
+  }
+
+  if (targetHandle === "video_ref_in" && sourceNode.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
+    const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
+    const videoUrls = scenes
+      .map((scene) => String(scene?.videoUrl || "").trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    const fallbackPreview = `${scenes.length || 0} сцен в COMFY STORYBOARD`;
+    if (!videoUrls.length && !scenes.length) return null;
+    return {
+      value: videoUrls.join("\n") || fallbackPreview,
+      preview: videoUrls[0] || fallbackPreview,
+      sourceLabel: "Внешний видео-референс",
+    };
+  }
+
+  return null;
+}
+
+function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(), edges = [] } = {}) {
+  if (!node?.id) {
+    return {
+      text_in: null,
+      audio_in: null,
+      video_ref_in: null,
+    };
+  }
+
+  return ["text_in", "audio_in", "video_ref_in"].reduce((acc, handleId) => {
+    const edge = getLatestIncomingEdgeForHandle({ targetNodeId: node.id, targetHandle: handleId, edges });
+    const sourceNode = edge ? (nodesById.get(edge.source) || null) : null;
+    const extracted = extractNarrativeConnectedValue({
+      sourceNode,
+      sourceHandle: String(edge?.sourceHandle || ""),
+      targetHandle: handleId,
+    });
+    acc[handleId] = extracted
+      ? {
+          handleId,
+          sourceNodeId: edge?.source || "",
+          sourceHandle: String(edge?.sourceHandle || ""),
+          ...extracted,
+        }
+      : null;
+    return acc;
+  }, {});
 }
 
 function extractIntroRefUrlsFromNode(node = null, role = "") {
@@ -8058,26 +8148,61 @@ onClipSec: (nodeId, value) => {
         }
 
         if (n.type === "comfyNarrative") {
+          const nodesById = new Map((Array.isArray(effectiveNodes) ? effectiveNodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
+          const connectedInputs = getNarrativeConnectedInputsSnapshot({
+            node: n,
+            nodesById,
+            edges: effectiveEdges,
+          });
+          const resolvedSource = resolveNarrativeSource({
+            ...(base.data || {}),
+            connectedInputs,
+          });
           return {
             ...base,
             data: {
               ...getDefaultNarrativeNodeData(),
               ...base.data,
+              connectedInputs,
+              sourceOrigin: resolvedSource.origin,
+              resolvedSource,
               onFieldChange: (nodeId, patch) => {
-                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, ...(patch || {}) } } : x)));
+                setNodes((prev) => {
+                  const nextNodes = prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, ...(patch || {}) } } : x));
+                  return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "narrative:field-change" });
+                });
               },
               onGenerate: (nodeId) => {
-                setNodes((prev) => prev.map((x) => {
-                  if (x.id !== nodeId) return x;
-                  const outputs = buildNarrativeOutputs(x.data || {});
-                  return {
-                    ...x,
-                    data: {
+                setNodes((prev) => {
+                  const nextNodes = prev.map((x) => {
+                    if (x.id !== nodeId) return x;
+                    const narrativeConnectedInputs = getNarrativeConnectedInputsSnapshot({
+                      node: x,
+                      nodesById: new Map(prev.map((nodeItem) => [nodeItem.id, nodeItem])),
+                      edges: edgesRef.current || [],
+                    });
+                    const nextData = {
                       ...x.data,
-                      outputs,
-                    },
-                  };
-                }));
+                      connectedInputs: narrativeConnectedInputs,
+                    };
+                    const nextResolvedSource = resolveNarrativeSource(nextData);
+                    const outputs = buildNarrativeOutputs({
+                      ...nextData,
+                      sourceOrigin: nextResolvedSource.origin,
+                      resolvedSource: nextResolvedSource,
+                    });
+                    return {
+                      ...x,
+                      data: {
+                        ...nextData,
+                        sourceOrigin: nextResolvedSource.origin,
+                        resolvedSource: nextResolvedSource,
+                        outputs,
+                      },
+                    };
+                  });
+                  return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "narrative:generate" });
+                });
               },
             },
           };
@@ -9035,6 +9160,11 @@ return base;
     ]
   );
 
+  useEffect(() => {
+    if (!didHydrateRef.current) return;
+    setNodes((prev) => bindHandlers(prev, { nodesNow: prev, edgesNow: edgesRef.current || [], traceReason: "edges:refresh-node-bindings" }));
+  }, [bindHandlers, edges, setNodes]);
+
   const bindHandlersRef = useRef(bindHandlers);
 
   useEffect(() => {
@@ -9888,6 +10018,19 @@ const hydrate = useCallback((source = "unknown") => {
             (!!refCfg && src.type === refCfg.sourceType && sourceHandle === refCfg.sourceHandle);
           if (!ok) return eds;
           const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || '') === h));
+          const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
+          return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+        }
+
+        if (dst.type === "comfyNarrative") {
+          const h = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
+          const ok =
+            (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
+            (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
+            (h === "video_ref_in" && src.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE);
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === h));
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           return addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
         }
