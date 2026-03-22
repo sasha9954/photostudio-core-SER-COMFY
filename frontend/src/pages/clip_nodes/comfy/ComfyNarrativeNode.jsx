@@ -1,6 +1,7 @@
 import React from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 import {
+  NARRATIVE_INPUT_HANDLES,
   NARRATIVE_SOURCE_OPTIONS,
   NARRATIVE_CONTENT_TYPE_OPTIONS,
   NARRATIVE_MODE_OPTIONS,
@@ -28,6 +29,8 @@ function renderBrainPackage(brainPackage) {
       <div><strong>Тип контента:</strong> {brainPackage.contentTypeLabel}</div>
       <div><strong>Стиль:</strong> {brainPackage.styleLabel}</div>
       <div><strong>Главный источник:</strong> {brainPackage.sourceLabel}</div>
+      <div><strong>Происхождение:</strong> {brainPackage.sourceOrigin === "connected" ? "Подключённый источник" : "Ручной ввод"}</div>
+      <div><strong>Превью источника:</strong> {brainPackage.sourcePreview || "—"}</div>
       <div><strong>Сущности:</strong> {entities.join(", ") || "—"}</div>
       <div>
         <strong>Логика сцен:</strong>
@@ -45,6 +48,13 @@ export default function ComfyNarrativeNode({ id, data }) {
   const sourceMode = data?.sourceMode || "TEXT";
   const activeResultTab = data?.activeResultTab || "scenario";
   const outputs = data?.outputs || {};
+  const resolvedSource = data?.resolvedSource || {};
+  const isConnectedSource = resolvedSource?.origin === "connected";
+  const sourceStatusText = sourceMode === "TEXT"
+    ? (isConnectedSource ? "Подключён внешний текстовый источник" : "Используется ручной ввод")
+    : sourceMode === "AUDIO"
+      ? (isConnectedSource ? "Подключён внешний аудио-источник" : "Используется ручной ввод")
+      : (isConnectedSource ? "Подключён внешний видео-референс" : "Используется ручной ввод");
 
   const sourceInput = sourceMode === "TEXT"
     ? (
@@ -87,6 +97,16 @@ export default function ComfyNarrativeNode({ id, data }) {
 
   return (
     <>
+      {NARRATIVE_INPUT_HANDLES.map((item, index) => (
+        <Handle
+          key={item.id}
+          type="target"
+          position={Position.Left}
+          id={item.id}
+          className="clipSB_handle"
+          style={handleStyle(item.id, { top: 92 + index * 34 })}
+        />
+      ))}
       {OUTPUT_HANDLES.map((item, index) => (
         <Handle
           key={item.id}
@@ -94,7 +114,7 @@ export default function ComfyNarrativeNode({ id, data }) {
           position={Position.Right}
           id={item.id}
           className="clipSB_handle"
-          style={handleStyle("text", { top: 92 + index * 34 })}
+          style={handleStyle(item.id, { top: 92 + index * 34 })}
         />
       ))}
       <NodeShell
@@ -106,6 +126,9 @@ export default function ComfyNarrativeNode({ id, data }) {
         <div className="clipSB_narrativeSubtitle">Создание истории и логики сцен</div>
 
         <div className="clipSB_narrativePorts">
+          {NARRATIVE_INPUT_HANDLES.map((item) => (
+            <div key={item.id} className="clipSB_narrativePortLabel clipSB_narrativePortLabel--input">{item.labelRu}</div>
+          ))}
           {OUTPUT_HANDLES.map((item) => (
             <div key={item.id} className="clipSB_narrativePortLabel">{item.labelRu}</div>
           ))}
@@ -162,6 +185,16 @@ export default function ComfyNarrativeNode({ id, data }) {
         </label>
 
         {sourceInput}
+
+        <div className={`clipSB_narrativeSourceStatus ${isConnectedSource ? "isConnected" : ""}`.trim()}>
+          <div className="clipSB_narrativeSourceStatusTitle">{sourceStatusText}</div>
+          {isConnectedSource ? <div className="clipSB_narrativeSourceStatusHint">Сейчас приоритет у подключённого источника</div> : null}
+          {resolvedSource?.preview ? (
+            <div className="clipSB_narrativeSourceStatusPreview" title={resolvedSource.preview}>
+              {resolvedSource.preview}
+            </div>
+          ) : null}
+        </div>
 
         <div className="clipSB_narrativeActions">
           <button className="clipSB_btn clipSB_narrativeGenerate" onClick={() => data?.onGenerate?.(id)}>

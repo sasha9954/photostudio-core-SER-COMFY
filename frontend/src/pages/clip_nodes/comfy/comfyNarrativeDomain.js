@@ -39,6 +39,12 @@ export const NARRATIVE_RESULT_TABS = [
   { value: "music", labelRu: "Музыка" },
 ];
 
+export const NARRATIVE_INPUT_HANDLES = [
+  { id: "text_in", labelRu: "Текст", mode: "TEXT" },
+  { id: "audio_in", labelRu: "Аудио", mode: "AUDIO" },
+  { id: "video_ref_in", labelRu: "Видео (реф)", mode: "VIDEO_REF" },
+];
+
 const lookupLabel = (options, value, fallback) => options.find((option) => option.value === value)?.labelRu || fallback;
 
 const normalizeText = (value) => String(value || "").trim();
@@ -52,6 +58,7 @@ const splitEntities = (text) => normalizeText(text)
 export function getDefaultNarrativeNodeData() {
   return {
     sourceMode: "TEXT",
+    sourceOrigin: "internal",
     contentType: "story",
     narrativeMode: "cinematic_expand",
     styleProfile: "realistic",
@@ -59,6 +66,19 @@ export function getDefaultNarrativeNodeData() {
     textInput: "",
     audioInput: "",
     videoUrlInput: "",
+    connectedInputs: {
+      text_in: null,
+      audio_in: null,
+      video_ref_in: null,
+    },
+    resolvedSource: {
+      mode: "TEXT",
+      origin: "internal",
+      value: "",
+      label: "Текст",
+      sourceLabel: "Ручной ввод",
+      preview: "",
+    },
     activeResultTab: "scenario",
     outputs: {
       scenario: "",
@@ -69,8 +89,41 @@ export function getDefaultNarrativeNodeData() {
   };
 }
 
-export function buildNarrativeOutputs(state = {}) {
+export function resolveNarrativeSource(state = {}) {
   const sourceMode = NARRATIVE_SOURCE_OPTIONS.some((item) => item.value === state.sourceMode) ? state.sourceMode : "TEXT";
+  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
+  const connectedSource = sourceMode === "TEXT"
+    ? connectedInputs.text_in
+    : sourceMode === "AUDIO"
+      ? connectedInputs.audio_in
+      : connectedInputs.video_ref_in;
+
+  const internalValue = sourceMode === "TEXT"
+    ? normalizeText(state.textInput)
+    : sourceMode === "AUDIO"
+      ? normalizeText(state.audioInput)
+      : normalizeText(state.videoUrlInput);
+
+  const connectedValue = normalizeText(connectedSource?.value);
+  const origin = connectedValue ? "connected" : "internal";
+  const modeLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, sourceMode, "Текст");
+  const fallbackSourceLabel = origin === "connected"
+    ? `Подключённый источник (${modeLabel.toLowerCase()})`
+    : "Ручной ввод";
+
+  return {
+    mode: sourceMode,
+    origin,
+    value: connectedValue || internalValue,
+    label: modeLabel,
+    sourceLabel: normalizeText(connectedSource?.sourceLabel) || fallbackSourceLabel,
+    preview: normalizeText(connectedSource?.preview) || (connectedValue || internalValue),
+  };
+}
+
+export function buildNarrativeOutputs(state = {}) {
+  const resolvedSource = resolveNarrativeSource(state);
+  const sourceMode = resolvedSource.mode;
   const contentType = NARRATIVE_CONTENT_TYPE_OPTIONS.some((item) => item.value === state.contentType) ? state.contentType : "story";
   const narrativeMode = NARRATIVE_MODE_OPTIONS.some((item) => item.value === state.narrativeMode) ? state.narrativeMode : "cinematic_expand";
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";
@@ -80,24 +133,28 @@ export function buildNarrativeOutputs(state = {}) {
   const audioInput = normalizeText(state.audioInput) || "Аудио-референс будет добавлен позже.";
   const videoUrlInput = normalizeText(state.videoUrlInput) || "Ссылка на видео пока не указана.";
 
-  const sourcePayload = sourceMode === "TEXT"
-    ? (textInput || "История пока не добавлена.")
-    : sourceMode === "AUDIO"
-      ? audioInput
-      : videoUrlInput;
+  const sourcePayload = normalizeText(resolvedSource.value)
+    || (sourceMode === "TEXT"
+      ? (textInput || "История пока не добавлена.")
+      : sourceMode === "AUDIO"
+        ? audioInput
+        : videoUrlInput);
 
   const sourceLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, sourceMode, "Текст");
   const contentTypeLabel = lookupLabel(NARRATIVE_CONTENT_TYPE_OPTIONS, contentType, "История");
   const narrativeModeLabel = lookupLabel(NARRATIVE_MODE_OPTIONS, narrativeMode, "Расширить кинематографично");
   const styleLabel = lookupLabel(NARRATIVE_STYLE_OPTIONS, styleProfile, "Реалистичный");
-  const entities = splitEntities(sourceMode === "TEXT" ? textInput : `${audioInput}. ${videoUrlInput}`);
+  const entities = splitEntities(sourceMode === "TEXT" ? sourcePayload : `${sourcePayload}. ${directorNote}`);
   const readableEntities = entities.length ? entities : ["Главный герой", "Ключевой объект", "Среда действия"];
+  const sourceOriginLabel = resolvedSource.origin === "connected" ? "Подключённый источник" : "Ручной ввод";
+  const sourcePreview = normalizeText(resolvedSource.preview) || sourcePayload;
 
   const shortDescription = `${contentTypeLabel} в стиле «${styleLabel}». Основа: ${sourceLabel.toLowerCase()}.`;
   const fullScenario = [
     `Кратко: ${shortDescription}`,
     `Режим обработки: ${narrativeModeLabel}.`,
     `Режиссёрская задача: ${directorNote}.`,
+    `Источник сейчас: ${sourceOriginLabel}.`,
     `Исходный материал: ${sourcePayload}`,
     "",
     "Рабочая драматургия:",
@@ -112,6 +169,7 @@ export function buildNarrativeOutputs(state = {}) {
     `Тип видео: ${contentTypeLabel}.`,
     `Стиль подачи: ${styleLabel}.`,
     `Главный источник: ${sourceLabel}.`,
+    `Происхождение источника: ${sourceOriginLabel}.`,
   ].join("\n");
 
   const scenario = [
@@ -142,7 +200,9 @@ export function buildNarrativeOutputs(state = {}) {
     styleProfile,
     styleLabel,
     sourceMode,
+    sourceOrigin: resolvedSource.origin,
     sourceLabel,
+    sourcePreview,
     entities: readableEntities,
     sceneLogic: [
       "Вход в мир истории и настрой атмосферы.",
