@@ -62,9 +62,6 @@ export function getDefaultNarrativeNodeData() {
     narrativeMode: "cinematic_expand",
     styleProfile: "realistic",
     directorNote: "",
-    textInput: "",
-    audioInput: "",
-    videoUrlInput: "",
     connectedInputs: {
       text_in: null,
       audio_in: null,
@@ -78,6 +75,7 @@ export function getDefaultNarrativeNodeData() {
       sourceLabel: "Ожидается внешний источник",
       preview: "",
     },
+    error: null,
     activeResultTab: "scenario",
     outputs: {
       scenario: "",
@@ -125,16 +123,16 @@ export function buildNarrativeOutputs(state = {}) {
   const styleProfile = NARRATIVE_STYLE_OPTIONS.some((item) => item.value === state.styleProfile) ? state.styleProfile : "realistic";
 
   const directorNote = normalizeText(state.directorNote) || "Без дополнительных правок";
-  const textInput = normalizeText(state.textInput);
-  const audioInput = normalizeText(state.audioInput) || "Аудио-референс будет добавлен позже.";
-  const videoUrlInput = normalizeText(state.videoUrlInput) || "Ссылка на видео пока не указана.";
+  const sourcePayload = normalizeText(resolvedSource.value);
 
-  const sourcePayload = normalizeText(resolvedSource.value)
-    || (sourceMode === "TEXT"
-      ? (textInput || "История пока не добавлена.")
-      : sourceMode === "AUDIO"
-        ? audioInput
-        : videoUrlInput);
+  if (!sourcePayload) {
+    return {
+      scenario: "",
+      voiceScript: "",
+      brainPackage: null,
+      bgMusicPrompt: "",
+    };
+  }
 
   const sourceLabel = lookupLabel(NARRATIVE_SOURCE_OPTIONS, sourceMode, "Текст");
   const contentTypeLabel = lookupLabel(NARRATIVE_CONTENT_TYPE_OPTIONS, contentType, "История");
@@ -142,7 +140,7 @@ export function buildNarrativeOutputs(state = {}) {
   const styleLabel = lookupLabel(NARRATIVE_STYLE_OPTIONS, styleProfile, "Реалистичный");
   const entities = splitEntities(sourceMode === "TEXT" ? sourcePayload : `${sourcePayload}. ${directorNote}`);
   const readableEntities = entities.length ? entities : ["Главный герой", "Ключевой объект", "Среда действия"];
-  const sourceOriginLabel = resolvedSource.origin === "connected" ? "Подключённый источник" : "Ручной ввод";
+  const sourceOriginLabel = resolvedSource.origin === "connected" ? "Подключённый источник" : "Источник не подключён";
   const sourcePreview = normalizeText(resolvedSource.preview) || sourcePayload;
 
   const shortDescription = `${contentTypeLabel} в стиле «${styleLabel}». Основа: ${sourceLabel.toLowerCase()}.`;
