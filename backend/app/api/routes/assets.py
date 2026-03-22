@@ -18,7 +18,7 @@ from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url, res
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".jfif", ".webp"}
 ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 ALLOWED_AUDIO_EXT = {".mp3", ".wav", ".ogg", ".m4a"}
 
@@ -56,7 +56,7 @@ def _normalize_ext(ext: str | None) -> str:
         return ""
     if not ext.startswith("."):
         ext = f".{ext}"
-    if ext == ".jpe":
+    if ext in {".jpe", ".jfif"}:
         return ".jpg"
     return ext
 
@@ -108,6 +108,7 @@ def _expected_mimes_for_ext(ext: str) -> set[str]:
 def _validate_upload_media(*, ext: str, content_type: str) -> tuple[str, str]:
     normalized_ext = _normalize_ext(ext)
     kind = _classify_media(normalized_ext)
+    logger.debug("[ASSET UPLOAD VALIDATE] ext=%s normalized_ext=%s content_type=%s kind=%s", ext or "none", normalized_ext or "none", (content_type or "none"), kind or "none")
     if not kind:
         raise HTTPException(status_code=400, detail=f"unsupported_ext:{normalized_ext or 'none'}")
 
@@ -200,6 +201,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     if not ext:
         _raise_upload_bad_request(file=file, ext="", content_type=ct, size=len(raw), detail="unsupported_ext:none")
 
+    logger.debug("[ASSET UPLOAD] filename=%s ext=%s filename_ext=%s guessed_ext=%s content_type=%s size=%s", file.filename or "", ext or "none", filename_ext or "none", guessed_ext or "none", ct or "none", len(raw))
+
     try:
         ext, media_kind = _validate_upload_media(ext=ext, content_type=ct)
     except HTTPException as exc:
@@ -227,6 +230,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             duration_sec = _probe_audio_duration_sec(raw, ext)
         except Exception:
             duration_sec = None
+
+    logger.debug("[ASSET UPLOAD DECISION] filename=%s normalized_ext=%s media_kind=%s response_mime=%s", file.filename or "", ext or "none", media_kind, (ct or EXTENSION_TO_MIME.get(ext, "application/octet-stream")))
 
     response_mime = ct or EXTENSION_TO_MIME.get(ext, "application/octet-stream")
     url = asset_url(fn)

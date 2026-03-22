@@ -2057,6 +2057,35 @@ function buildUploadGuardKey(file) {
   return `${debug.name}::${debug.type}::${debug.size}::${debug.lastModified || 0}`;
 }
 
+function extractUploadErrorDetail(error) {
+  const raw = String(error?.message || error || "").trim();
+  const match = raw.match(/^upload_failed:(\d+):(.*)$/);
+  if (!match) return raw || "upload_failed";
+  const [, statusCode, detailRaw] = match;
+  const detail = String(detailRaw || "").trim();
+  if (!detail) return `upload_failed:${statusCode}`;
+  if (detail.startsWith("unsupported_ext:")) {
+    const ext = detail.slice("unsupported_ext:".length) || "unknown";
+    return `Формат ${ext} не поддерживается.`;
+  }
+  if (detail.startsWith("invalid_mime:")) {
+    const mime = detail.slice("invalid_mime:".length) || "unknown";
+    return `Сервер отклонил MIME type: ${mime}.`;
+  }
+  return detail;
+}
+
+function deriveRefStatusAfterUploadError(data = {}, refs = []) {
+  const safeRefs = Array.isArray(refs) ? refs.filter((item) => !!String(item?.url || "").trim()) : [];
+  if (!safeRefs.length) return "empty";
+  return deriveRefNodeStatus({
+    ...(data || {}),
+    refs: safeRefs,
+    refStatus: "",
+    uploading: false,
+  });
+}
+
 async function uploadAsset(file, options = {}) {
   const debugTag = String(options?.debugTag || "").trim();
   const debugPayload = getUploadDebugPayload(file);
@@ -8607,19 +8636,29 @@ onClipSec: (nodeId, value) => {
                       }));
                     } catch (err) {
                       console.error(err);
+                      const responseDetail = extractUploadErrorDetail(err);
+                      console.warn(`[${debugTag} upload error detail]`, {
+                        nodeId,
+                        kind: nodeKind,
+                        uploadKey,
+                        responseDetail,
+                        file: getUploadDebugPayload(oneFile),
+                      });
                       guardBucket.set(uploadKey, { status: "failed", ts: Date.now(), error: String(err?.message || err) });
                       setNodes((prev) => prev.map((x) => {
                         if (x.id !== nodeId) return x;
                         const existingRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
+                        const fallbackStatus = deriveRefStatusAfterUploadError(x?.data || {}, existingRefs);
+                        const softErrorMessage = existingRefs.length
+                          ? `Upload завершился ошибкой, но уже загруженные изображения сохранены. ${responseDetail}`.trim()
+                          : `Не удалось загрузить изображение. ${responseDetail}`.trim();
                         return {
                           ...x,
                           data: {
                             ...x.data,
                             refs: existingRefs,
-                            refStatus: existingRefs.length ? (String(x?.data?.refStatus || "").trim() || "draft") : "empty",
-                            uploadSoftError: existingRefs.length
-                              ? "Повторный upload завершился ошибкой, но уже загруженная картинка сохранена."
-                              : "Не удалось загрузить изображение. Смотри console/backend log для детали 400.",
+                            refStatus: fallbackStatus,
+                            uploadSoftError: softErrorMessage,
                           },
                         };
                       }));
