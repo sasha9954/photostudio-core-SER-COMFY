@@ -23,7 +23,29 @@ export function getModeDisplayMeta(mode = "clip") { return MODE_DISPLAY_META[Str
 export function getStyleDisplayMeta(stylePreset = "realism") { return STYLE_DISPLAY_META[String(stylePreset || "realism").toLowerCase()] || STYLE_DISPLAY_META.realism; }
 
 const PORT_COLORS = {
-  audio: "var(--family-audio)", text: "var(--family-text)", text_in: "var(--family-text)", audio_in: "var(--family-audio)", video_ref_in: "var(--family-storyboard)", scenario_out: "var(--family-narrative)", voice_script_out: "var(--family-audio)", brain_package_out: "var(--family-brain)", bg_music_prompt_out: "var(--family-music)", ref_character_1: "var(--family-ref-character)", ref_character_2: "var(--family-ref-character)", ref_character_3: "var(--family-ref-character)", ref_animal: "var(--family-ref-animal)", ref_group: "var(--family-ref-group)", ref_location: "var(--family-ref-location)", ref_style: "var(--family-ref-style)", ref_props: "var(--family-ref-items)", ref_items: "var(--family-ref-items)", comfy_plan: "var(--family-brain)", comfy_video: "var(--family-generation)", intro_context: "var(--family-text)",
+  audio: "var(--family-audio)",
+  text: "var(--family-text)",
+  link: "var(--family-link)",
+  text_in: "var(--family-text)",
+  audio_in: "var(--family-audio)",
+  link_in: "var(--family-link)",
+  video_ref_in: "var(--family-video-ref)",
+  scenario_out: "var(--family-narrative)",
+  voice_script_out: "var(--family-audio)",
+  brain_package_out: "var(--family-brain)",
+  bg_music_prompt_out: "var(--family-music)",
+  ref_character_1: "var(--family-ref-character)",
+  ref_character_2: "var(--family-ref-character)",
+  ref_character_3: "var(--family-ref-character)",
+  ref_animal: "var(--family-ref-animal)",
+  ref_group: "var(--family-ref-group)",
+  ref_location: "var(--family-ref-location)",
+  ref_style: "var(--family-ref-style)",
+  ref_props: "var(--family-ref-items)",
+  ref_items: "var(--family-ref-items)",
+  comfy_plan: "var(--family-brain)",
+  comfy_video: "var(--family-generation)",
+  intro_context: "var(--family-text)",
 };
 
 const HANDLE_BASE_STYLE = {
