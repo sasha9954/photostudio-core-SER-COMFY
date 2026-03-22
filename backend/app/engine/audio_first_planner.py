@@ -436,6 +436,8 @@ def _build_render_task(
 def validate_planned_shot(shot: PlannedShot, project_input: ProjectPlanningInput) -> PlannerValidation:
     errors = list(shot.validation_errors)
     warnings = list(shot.validation_warnings)
+    if shot.render_mode == RenderMode.lip_sync and shot.lipsync_policy.allowed is not True:
+        errors.append("lip_sync_policy_disallows_selected_render_mode")
     if shot.render_mode == RenderMode.lip_sync and shot.has_vocal_rhythm is not True:
         errors.append("lip_sync_requires_has_vocal_rhythm_true")
     if shot.audio_segment_type == AudioSegmentType.narration and shot.render_mode == RenderMode.lip_sync:
