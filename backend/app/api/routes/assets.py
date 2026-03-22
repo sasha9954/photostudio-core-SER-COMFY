@@ -16,17 +16,54 @@ from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url, res
 
 router = APIRouter()
 
+ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
+ALLOWED_AUDIO_EXT = {".mp3", ".wav", ".ogg", ".m4a"}
+
+ALLOWED_IMAGE_MIME = {"image/png", "image/jpeg", "image/webp"}
+ALLOWED_VIDEO_MIME = {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v", "video/x-matroska"}
+ALLOWED_AUDIO_MIME = {"audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/m4a", "audio/x-m4a"}
+
+EXTENSION_TO_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".m4v": "video/x-m4v",
+    ".mkv": "video/x-matroska",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+}
+
+
 def _ensure_assets_dir():
     try:
         ensure_static_dirs()
     except Exception:
         pass
 
+
+def _normalize_ext(ext: str | None) -> str:
+    ext = str(ext or "").strip().lower()
+    if not ext:
+        return ""
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    if ext == ".jpe":
+        return ".jpg"
+    return ext
+
+
 def _guess_ext_from_content_type(ct: str | None) -> str:
-    ct = (ct or "").split(";")[0].strip().lower()
+    ct = (ct or "").split(";", 1)[0].strip().lower()
     if not ct:
         return ""
-    # manual fixes for common audio types (mimetypes varies by OS)
+    # manual fixes for media types where mimetypes can vary by OS
     if ct in ("audio/mpeg", "audio/mp3"):
         return ".mp3"
     if ct in ("audio/wav", "audio/x-wav"):
@@ -35,10 +72,50 @@ def _guess_ext_from_content_type(ct: str | None) -> str:
         return ".ogg"
     if ct in ("audio/mp4", "audio/m4a", "audio/x-m4a"):
         return ".m4a"
+    if ct in ("video/quicktime",):
+        return ".mov"
+    if ct in ("video/x-m4v",):
+        return ".m4v"
+    if ct in ("video/x-matroska",):
+        return ".mkv"
     ext = mimetypes.guess_extension(ct) or ""
-    if ext == ".jpe":
-        ext = ".jpg"
-    return ext
+    return _normalize_ext(ext)
+
+
+def _classify_media(ext: str) -> str | None:
+    if ext in ALLOWED_IMAGE_EXT:
+        return "image"
+    if ext in ALLOWED_VIDEO_EXT:
+        return "video"
+    if ext in ALLOWED_AUDIO_EXT:
+        return "audio"
+    return None
+
+
+def _expected_mimes_for_ext(ext: str) -> set[str]:
+    kind = _classify_media(ext)
+    if kind == "image":
+        return ALLOWED_IMAGE_MIME
+    if kind == "video":
+        return ALLOWED_VIDEO_MIME
+    if kind == "audio":
+        return ALLOWED_AUDIO_MIME
+    return set()
+
+
+def _validate_upload_media(*, ext: str, content_type: str) -> tuple[str, str]:
+    normalized_ext = _normalize_ext(ext)
+    kind = _classify_media(normalized_ext)
+    if not kind:
+        raise HTTPException(status_code=400, detail=f"unsupported_ext:{normalized_ext or 'none'}")
+
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if ct:
+        allowed_mimes = _expected_mimes_for_ext(normalized_ext)
+        if ct not in allowed_mimes:
+            raise HTTPException(status_code=400, detail=f"invalid_mime:{ct}")
+
+    return normalized_ext, kind
 
 def _probe_audio_duration_sec(raw: bytes, ext: str) -> float | None:
     """Return audio duration in seconds using ffprobe. Returns None if unavailable."""
@@ -76,17 +153,16 @@ def _probe_audio_duration_sec(raw: bytes, ext: str) -> float | None:
 
 @router.post("/assets/upload")
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    """Generic upload endpoint for small user-provided files (audio/images).
+    """Generic upload endpoint for small user-provided files (images/video/audio).
 
-    Frontend uses it for storyboard AUDIO node.
-    Returns absolute /static/assets URL.
+    Returns a stable /static/assets URL without applying image transforms to video/audio uploads.
     """
     _ensure_assets_dir()
 
     if file is None:
         raise HTTPException(status_code=400, detail="no_file")
 
-    ct = (file.content_type or "").split(";")[0].strip().lower()
+    ct = (file.content_type or "").split(";", 1)[0].strip().lower()
     try:
         raw = await file.read()
     except Exception:
@@ -97,26 +173,20 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
     # soft limits to avoid abuse in local dev
     if len(raw) > 60 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="too_large")
+        raise HTTPException(status_code=413, detail="file_too_large")
 
-    ext = _guess_ext_from_content_type(ct)
+    filename_ext = ""
+    try:
+        filename_ext = _normalize_ext(os.path.splitext(file.filename or "")[1])
+    except Exception:
+        filename_ext = ""
+
+    guessed_ext = _guess_ext_from_content_type(ct)
+    ext = filename_ext or guessed_ext
     if not ext:
-        # fallback from original filename
-        try:
-            ext = os.path.splitext(file.filename or "")[1].lower()
-        except Exception:
-            ext = ""
+        raise HTTPException(status_code=400, detail="unsupported_ext:none")
 
-    # allowlist
-    allowed = {".png", ".jpg", ".jpeg", ".webp", ".mp3", ".wav", ".ogg", ".m4a"}
-    if ext == ".jpeg":
-        ext = ".jpg"
-    if ext not in allowed:
-        raise HTTPException(status_code=400, detail=f"unsupported_ext:{ext or 'none'}")
-
-    audio_ext = {".mp3", ".wav", ".ogg", ".m4a"}
-    if ct.startswith("audio/") or ext in audio_ext:
-        ext = ".mp3"
+    ext, media_kind = _validate_upload_media(ext=ext, content_type=ct)
 
     hid = _hash_bytes(raw)
     fn = f"{hid}{ext}"
@@ -132,21 +202,23 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
     print("saved asset =", str(out_path), os.path.exists(out_path))
 
-    
     duration_sec = None
-    if ct.startswith("audio/"):
+    if media_kind == "audio":
         try:
-            duration_sec = _probe_audio_duration_sec(raw, ".mp3")
+            duration_sec = _probe_audio_duration_sec(raw, ext)
         except Exception:
             duration_sec = None
 
+    response_mime = ct or EXTENSION_TO_MIME.get(ext, "application/octet-stream")
     url = asset_url(fn)
     return {
         "url": url,
-        "mime": ct,
+        "assetUrl": url,
+        "mime": response_mime,
         "bytes": len(raw),
         "durationSec": duration_sec,
         "name": file.filename or fn,
+        "kind": media_kind,
     }
 
 def _hash_bytes(data: bytes) -> str:
