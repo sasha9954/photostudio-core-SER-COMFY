@@ -55,6 +55,12 @@
   --family-music-glow: rgba(139, 92, 246, 0.18);
   --family-music-active: rgba(167, 129, 250, 0.58);
 
+  --family-tester: #ffbf2f;
+  --family-tester-soft: rgba(255, 191, 47, 0.18);
+  --family-tester-header: rgba(255, 191, 47, 0.26);
+  --family-tester-glow: rgba(255, 191, 47, 0.32);
+  --family-tester-active: rgba(255, 214, 87, 0.72);
+
   --family-generation: #28d7c5;
   --family-generation-soft: rgba(40, 215, 197, 0.16);
   --family-generation-header: rgba(40, 215, 197, 0.2);
@@ -2960,6 +2966,213 @@ body.ps_clip_fullscreen .mainCol {
   --node-accent-active: var(--family-narrative-active);
   width: 760px;
   max-width: min(760px, calc(100vw - 72px));
+}
+
+.clipSB_nodeTester {
+  --node-accent: var(--family-tester);
+  --node-accent-soft: var(--family-tester-soft);
+  --node-accent-header: var(--family-tester-header);
+  --node-accent-glow: var(--family-tester-glow);
+  --node-accent-active: var(--family-tester-active);
+  width: 380px;
+  max-width: min(380px, calc(100vw - 72px));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--family-tester) 58%, var(--border-node)), 0 18px 40px rgba(0, 0, 0, 0.28), 0 0 34px var(--family-tester-glow);
+}
+
+.clipSB_nodeTester::before {
+  height: 4px;
+  background: linear-gradient(90deg, rgba(255, 153, 0, 0.18), var(--family-tester), rgba(255, 234, 92, 0.92));
+}
+
+.clipSB_nodeTester .clipSB_nodeTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-shadow: 0 0 16px rgba(255, 191, 47, 0.18);
+}
+
+.clipSB_nodeTester .clipSB_nodeIcon {
+  background: linear-gradient(135deg, rgba(255, 191, 47, 0.24), rgba(255, 132, 0, 0.22));
+}
+
+.clipSB_testerSubtitle {
+  margin: -2px 0 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 235, 186, 0.82);
+}
+
+.clipSB_testerMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.clipSB_testerStatusBadge,
+.clipSB_testerMetric,
+.clipSB_testerWaitingBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+}
+
+.clipSB_testerStatusBadge {
+  color: rgba(255, 244, 210, 0.92);
+  background: rgba(255, 191, 47, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 191, 47, 0.28);
+}
+
+.clipSB_testerStatusBadge.isConnected {
+  color: rgba(255, 249, 231, 0.96);
+  background: linear-gradient(135deg, rgba(255, 191, 47, 0.18), rgba(255, 140, 0, 0.16));
+  box-shadow: inset 0 0 0 1px rgba(255, 210, 96, 0.34), 0 0 18px rgba(255, 191, 47, 0.14);
+}
+
+.clipSB_testerStatusBadge.isReady {
+  color: #fff8de;
+  background: linear-gradient(135deg, rgba(255, 214, 87, 0.22), rgba(255, 132, 0, 0.22));
+  box-shadow: inset 0 0 0 1px rgba(255, 220, 110, 0.42), 0 0 22px rgba(255, 191, 47, 0.18);
+}
+
+.clipSB_testerMetric,
+.clipSB_testerWaitingBadge {
+  color: rgba(255,255,255,0.76);
+  background: rgba(255,255,255,0.05);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+.clipSB_testerEmpty {
+  margin-top: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 191, 47, 0.08), rgba(255, 125, 0, 0.06));
+  box-shadow: inset 0 0 0 1px rgba(255, 191, 47, 0.2), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.clipSB_testerEmpty.isConnected {
+  background: linear-gradient(180deg, rgba(255, 191, 47, 0.12), rgba(255, 125, 0, 0.08));
+}
+
+.clipSB_testerEmptyTitle {
+  font-size: 14px;
+  font-weight: 800;
+  color: rgba(255, 248, 226, 0.96);
+}
+
+.clipSB_testerEmptyHint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.78);
+}
+
+.clipSB_testerWaitingBadge {
+  margin-top: 12px;
+}
+
+.clipSB_testerPayload {
+  margin-top: 12px;
+  max-height: 280px;
+  min-height: 168px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(10, 10, 8, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(255, 226, 136, 0.14), 0 0 0 1px rgba(255,255,255,0.02);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--family-tester) 80%, rgba(255,255,255,0.24)) rgba(255,255,255,0.06);
+}
+
+.clipSB_testerPayload pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: inherit;
+  line-height: 1.5;
+  color: rgba(255, 247, 226, 0.92);
+}
+
+.clipSB_testerPayload::-webkit-scrollbar {
+  width: 10px;
+}
+
+.clipSB_testerPayload::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+}
+
+.clipSB_testerPayload::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--family-tester) 82%, rgba(255,255,255,0.24));
+  border: 2px solid rgba(0,0,0,0.16);
+}
+
+.clipSB_testerPayload::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--family-tester) 92%, rgba(255,255,255,0.32));
+}
+
+.clipSB_testerKvGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.clipSB_testerKvItem {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+}
+
+.clipSB_testerKvItem span {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(255, 222, 150, 0.72);
+}
+
+.clipSB_testerKvItem strong {
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255,255,255,0.9);
+  font-weight: 600;
+}
+
+.clipSB_testerRawJson {
+  margin-top: 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+}
+
+.clipSB_testerRawJson summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 232, 176, 0.88);
+}
+
+.clipSB_testerRawJson summary::-webkit-details-marker {
+  display: none;
+}
+
+.clipSB_testerRawJson pre {
+  padding: 0 12px 12px;
+  font-size: 12px;
 }
 
 .clipSB_narrativeSubtitle {

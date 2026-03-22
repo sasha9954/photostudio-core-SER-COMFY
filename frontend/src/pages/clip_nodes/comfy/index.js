@@ -7,3 +7,5 @@ export { default as RefCharacter3Node } from "./RefCharacter3Node";
 export { default as RefAnimalNode } from "./RefAnimalNode";
 export { default as RefGroupNode } from "./RefGroupNode";
 export { default as RefLiteNode } from "./RefLiteNode";
+
+export { ScenarioOutputTesterNode, VoiceOutputTesterNode, BrainPackageTesterNode, MusicPromptTesterNode } from "./NarrativeOutputTesterNode";

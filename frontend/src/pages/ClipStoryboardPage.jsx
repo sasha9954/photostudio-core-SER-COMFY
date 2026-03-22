@@ -17,14 +17,18 @@ import { API_BASE, fetchJson } from "../services/api";
 import { useAuth } from "../app/AuthContext";
 import { useNavigate } from "react-router-dom";
 import {
+  BrainPackageTesterNode,
   ComfyBrainNode,
   ComfyNarrativeNode,
   ComfyStoryboardNode,
   ComfyVideoPreviewNode,
+  MusicPromptTesterNode,
+  RefAnimalNode,
   RefCharacter2Node,
   RefCharacter3Node,
-  RefAnimalNode,
   RefGroupNode,
+  ScenarioOutputTesterNode,
+  VoiceOutputTesterNode,
 } from "./clip_nodes/comfy";
 import VideoRefNode from "./clip_nodes/VideoRefNode";
 import {
@@ -286,6 +290,58 @@ function isComfyBrainInput(handleId) {
 
 function isNarrativeInput(handleId) {
   return ["text_in", "audio_in", "link_in", "video_ref_in"].includes(String(handleId || ""));
+}
+
+const NARRATIVE_TESTER_NODE_CONFIG = {
+  scenarioOutputTesterNode: {
+    title: "ТЕСТЕР СЦЕНАРИЯ",
+    acceptHandle: "scenario_out",
+    payloadKey: "scenario",
+  },
+  voiceOutputTesterNode: {
+    title: "ТЕСТЕР ОЗВУЧКИ",
+    acceptHandle: "voice_script_out",
+    payloadKey: "voiceScript",
+  },
+  brainPackageTesterNode: {
+    title: "ТЕСТЕР МОЗГА",
+    acceptHandle: "brain_package_out",
+    payloadKey: "brainPackage",
+  },
+  musicPromptTesterNode: {
+    title: "ТЕСТЕР МУЗЫКИ",
+    acceptHandle: "bg_music_prompt_out",
+    payloadKey: "bgMusicPrompt",
+  },
+};
+
+function getNarrativeTesterConfig(type = "") {
+  return NARRATIVE_TESTER_NODE_CONFIG[String(type || "")] || null;
+}
+
+function isNarrativeTesterNodeType(type = "") {
+  return !!getNarrativeTesterConfig(type);
+}
+
+function getNarrativeTesterIncomingEdge({ nodeId = "", acceptHandle = "", edges = [] } = {}) {
+  if (!nodeId || !acceptHandle) return null;
+  return [...(Array.isArray(edges) ? edges : [])]
+    .reverse()
+    .find((edge) => edge?.target === nodeId && String(edge?.targetHandle || "") === acceptHandle)
+    || null;
+}
+
+function extractNarrativeTesterPayload({ testerType = "", sourceNode = null, sourceHandle = "" } = {}) {
+  const config = getNarrativeTesterConfig(testerType);
+  if (!config || !sourceNode || sourceNode.type !== "comfyNarrative") return null;
+  if (String(sourceHandle || "") !== config.acceptHandle) return null;
+  const outputs = sourceNode?.data?.outputs && typeof sourceNode.data.outputs === "object" ? sourceNode.data.outputs : {};
+  const payload = outputs?.[config.payloadKey];
+  if (config.payloadKey === "brainPackage") {
+    return payload && typeof payload === "object" ? payload : null;
+  }
+  const normalized = String(payload || "").trim();
+  return normalized || null;
 }
 
 function getAssetFileName(value = "") {
@@ -8849,6 +8905,34 @@ onClipSec: (nodeId, value) => {
           };
         }
 
+        if (isNarrativeTesterNodeType(n.type)) {
+          const testerConfig = getNarrativeTesterConfig(n.type);
+          const nodesById = new Map((Array.isArray(effectiveNodes) ? effectiveNodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
+          const incomingEdge = getNarrativeTesterIncomingEdge({
+            nodeId: n.id,
+            acceptHandle: testerConfig?.acceptHandle || "",
+            edges: effectiveEdges,
+          });
+          const sourceNode = incomingEdge ? (nodesById.get(incomingEdge.source) || null) : null;
+          const payload = extractNarrativeTesterPayload({
+            testerType: n.type,
+            sourceNode,
+            sourceHandle: String(incomingEdge?.sourceHandle || ""),
+          });
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              testerType: n.type,
+              testerConfig,
+              acceptedHandle: testerConfig?.acceptHandle || "",
+              isConnected: !!incomingEdge && sourceNode?.type === "comfyNarrative" && String(incomingEdge?.sourceHandle || "") === String(testerConfig?.acceptHandle || ""),
+              hasPayload: payload != null && (!(typeof payload === "string") || !!String(payload || "").trim()),
+              payload,
+            },
+          };
+        }
+
         if (n.type === "comfyBrain") {
           const buildComfyBrainPresentation = (derived) => {
             const pushUnique = (target, message) => {
@@ -10409,6 +10493,14 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "comfyNarrative") {
       node = { id, type: "comfyNarrative", position: { x: centerX + jitterX, y: centerY + jitterY }, data: getDefaultNarrativeNodeData() };
+    } else if (type === "scenarioOutputTester") {
+      node = { id, type: "scenarioOutputTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "scenarioOutputTesterNode" } };
+    } else if (type === "voiceOutputTester") {
+      node = { id, type: "voiceOutputTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "voiceOutputTesterNode" } };
+    } else if (type === "brainPackageTester") {
+      node = { id, type: "brainPackageTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "brainPackageTesterNode" } };
+    } else if (type === "musicPromptTester") {
+      node = { id, type: "musicPromptTesterNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { testerType: "musicPromptTesterNode" } };
     } else if (type === "comfyBrain") {
       node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', format: DEFAULT_SCENE_IMAGE_FORMAT, genre: '', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
@@ -10708,6 +10800,10 @@ const hydrate = useCallback((source = "unknown") => {
       introFrame: IntroFrameNode,
       assemblyNode: AssemblyNode,
       comfyNarrative: ComfyNarrativeNode,
+      scenarioOutputTesterNode: ScenarioOutputTesterNode,
+      voiceOutputTesterNode: VoiceOutputTesterNode,
+      brainPackageTesterNode: BrainPackageTesterNode,
+      musicPromptTesterNode: MusicPromptTesterNode,
       comfyBrain: ComfyBrainNode,
       comfyStoryboard: ComfyStoryboardNode,
       comfyVideoPreview: ComfyVideoPreviewNode,
@@ -10775,6 +10871,21 @@ const hydrate = useCallback((source = "unknown") => {
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative");
+          return nextEdges;
+        }
+
+        if (isNarrativeTesterNodeType(dst.type)) {
+          const targetHandle = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
+          const testerConfig = getNarrativeTesterConfig(dst.type);
+          const ok = src.type === "comfyNarrative"
+            && sourceHandle === String(testerConfig?.acceptHandle || "")
+            && targetHandle === String(testerConfig?.acceptHandle || "");
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && String(e.targetHandle || "") === targetHandle));
+          const presentation = getEdgePresentation({ sourceHandle, targetHandle, sourceType: src.type, targetType: dst.type });
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative-tester");
           return nextEdges;
         }
 
@@ -11953,6 +12064,12 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerGroupTitle">COMFY FLOW</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyBrain")}>🧠 COMFY BRAIN</button>
+              <div className="clipSB_drawerSep" />
+              <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioOutputTester")}>🧪 ТЕСТЕР СЦЕНАРИЯ</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("voiceOutputTester")}>📡 ТЕСТЕР ОЗВУЧКИ</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("brainPackageTester")}>🔬 ТЕСТЕР МОЗГА</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("musicPromptTester")}>⚡ ТЕСТЕР МУЗЫКИ</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyStoryboard")}>🧩 COMFY STORYBOARD</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyVideoPreview")}>🎬 COMFY VIDEO PREVIEW</button>
               <div className="clipSB_drawerSep" />
