@@ -17,6 +17,7 @@ import { useAuth } from "../app/AuthContext";
 import { useNavigate } from "react-router-dom";
 import {
   ComfyBrainNode,
+  ComfyNarrativeNode,
   ComfyStoryboardNode,
   ComfyVideoPreviewNode,
   RefCharacter2Node,
@@ -40,6 +41,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
+import { buildNarrativeOutputs, getDefaultNarrativeNodeData } from "./clip_nodes/comfy/comfyNarrativeDomain";
 
 
 // -------------------------
@@ -48,6 +50,10 @@ import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 const PORT_COLORS = {
   audio: "var(--family-audio)",
   text: "var(--family-text)",
+  scenario_out: "var(--family-narrative)",
+  voice_script_out: "var(--family-narrative)",
+  brain_package_out: "var(--family-brain)",
+  bg_music_prompt_out: "var(--family-music)",
   ref_character: "var(--family-ref-character)",
   ref_character_1: "var(--family-ref-character)",
   ref_character_2: "var(--family-ref-character)",
@@ -157,6 +163,10 @@ function isComfyBrainInput(handleId) {
 const EDGE_STYLE_BY_KIND = {
   audio: { color: PORT_COLORS.audio, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   text: { color: PORT_COLORS.text, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  scenario_out: { color: PORT_COLORS.scenario_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  voice_script_out: { color: PORT_COLORS.voice_script_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  brain_package_out: { color: PORT_COLORS.brain_package_out, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  bg_music_prompt_out: { color: PORT_COLORS.bg_music_prompt_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   ref_character: { color: PORT_COLORS.ref_character, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   ref_character_1: { color: PORT_COLORS.ref_character_1, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   ref_location: { color: PORT_COLORS.ref_location, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -8047,6 +8057,31 @@ onClipSec: (nodeId, value) => {
           };
         }
 
+        if (n.type === "comfyNarrative") {
+          return {
+            ...base,
+            data: {
+              ...getDefaultNarrativeNodeData(),
+              ...base.data,
+              onFieldChange: (nodeId, patch) => {
+                setNodes((prev) => prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, ...(patch || {}) } } : x)));
+              },
+              onGenerate: (nodeId) => {
+                setNodes((prev) => prev.map((x) => {
+                  if (x.id !== nodeId) return x;
+                  const outputs = buildNarrativeOutputs(x.data || {});
+                  return {
+                    ...x,
+                    data: {
+                      ...x.data,
+                      outputs,
+                    },
+                  };
+                }));
+              },
+            },
+          };
+        }
 
         if (n.type === "comfyBrain") {
           const buildComfyBrainPresentation = (derived) => {
@@ -9511,6 +9546,8 @@ const hydrate = useCallback((source = "unknown") => {
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
+    } else if (type === "comfyNarrative") {
+      node = { id, type: "comfyNarrative", position: { x: centerX + jitterX, y: centerY + jitterY }, data: getDefaultNarrativeNodeData() };
     } else if (type === "comfyBrain") {
       node = { id, type: "comfyBrain", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'clip', plannerMode: 'legacy', output: 'comfy image', format: DEFAULT_SCENE_IMAGE_FORMAT, genre: '', audioStoryMode: 'lyrics_music', styleKey: 'realism', freezeStyle: false, parseStatus: 'idle' } };
     } else if (type === "comfyStoryboard") {
@@ -9807,6 +9844,7 @@ const hydrate = useCallback((source = "unknown") => {
       storyboardNode: StoryboardPlanNode,
       introFrame: IntroFrameNode,
       assemblyNode: AssemblyNode,
+      comfyNarrative: ComfyNarrativeNode,
       comfyBrain: ComfyBrainNode,
       comfyStoryboard: ComfyStoryboardNode,
       comfyVideoPreview: ComfyVideoPreviewNode,
@@ -10997,6 +11035,7 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("ref_items")}>📦 REF — Предметы</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">COMFY FLOW</div>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyBrain")}>🧠 COMFY BRAIN</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyStoryboard")}>🧩 COMFY STORYBOARD</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyVideoPreview")}>🎬 COMFY VIDEO PREVIEW</button>
