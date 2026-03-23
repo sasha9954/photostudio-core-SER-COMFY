@@ -419,9 +419,11 @@ function normalizeStoryboardOutScene(scene, index) {
   const t0 = toStoryboardTimeSec(source.time_start, index * 5);
   const duration = Math.max(0, toStoryboardTimeSec(source.duration, 5));
   const t1 = Math.max(t0, toStoryboardTimeSec(source.time_end, t0 + duration));
+  const ltxMode = String(source.ltx_mode || "").trim();
+  const sceneId = String(source.scene_id || `S${index + 1}`);
   return {
     id: `storyboard-scene-${index + 1}`,
-    sceneId: String(source.scene_id || `S${index + 1}`),
+    sceneId,
     t0,
     t1,
     start: t0,
@@ -437,7 +439,7 @@ function normalizeStoryboardOutScene(scene, index) {
     videoPrompt: String(source.video_prompt || "").trim(),
     actionInFrame: String(source.action_in_frame || "").trim(),
     cameraIdea: String(source.camera || "").trim(),
-    ltxMode: String(source.ltx_mode || "").trim(),
+    ltxMode,
     ltxReason: String(source.ltx_reason || "").trim(),
     startFrameSource: String(source.start_frame_source || "new").trim(),
     needsTwoFrames: !!source.needs_two_frames,
@@ -445,9 +447,41 @@ function normalizeStoryboardOutScene(scene, index) {
     narrationMode: String(source.narration_mode || "").trim(),
     localPhrase: source.local_phrase == null ? null : String(source.local_phrase),
     sfx: String(source.sfx || "").trim(),
-    musicMixHint: String(source.music_mix_hint || "").trim(),
+    musicMixHint: String(source.music_mix_hint || "medium").trim() || "medium",
     actors: Array.isArray(source.actors) ? source.actors : [],
+    executorModel: ltxMode || "i2v",
+    sceneGenerationStatus: "not_generated",
+    generatedAssetUrl: "",
+    generatedAudioUrl: "",
+    montageReady: false,
   };
+}
+
+function normalizeStoryboardGenerationStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["not_generated", "generating", "done", "error"].includes(normalized)) return normalized;
+  return "not_generated";
+}
+
+function buildStoryboardSceneGenerationMap(scenes = [], previousMap = {}) {
+  const prev = previousMap && typeof previousMap === "object" ? previousMap : {};
+  return (Array.isArray(scenes) ? scenes : []).reduce((acc, scene) => {
+    const sceneKey = String(scene?.sceneId || scene?.id || "");
+    if (!sceneKey) return acc;
+    const prevValue = prev[sceneKey] && typeof prev[sceneKey] === "object" ? prev[sceneKey] : {};
+    acc[sceneKey] = {
+      status: normalizeStoryboardGenerationStatus(prevValue.status),
+      updatedAt: String(prevValue.updatedAt || ""),
+      error: String(prevValue.error || ""),
+      model: String(prevValue.model || scene?.executorModel || scene?.ltxMode || "i2v"),
+      imagePrompt: String(prevValue.imagePrompt || scene?.imagePrompt || ""),
+      videoPrompt: String(prevValue.videoPrompt || scene?.videoPrompt || ""),
+      generatedAssetUrl: String(prevValue.generatedAssetUrl || ""),
+      generatedAudioUrl: String(prevValue.generatedAudioUrl || ""),
+      montageReady: prevValue.montageReady === true,
+    };
+    return acc;
+  }, {});
 }
 
 function getAssetFileName(value = "") {
@@ -4357,6 +4391,30 @@ function StoryboardPlanNode({ id, data }) {
   const voiceScript = String(storyboardOut?.voice_script || "").trim();
   const musicPrompt = String(storyboardOut?.music_prompt || "").trim();
   const storySummary = String(storyboardOut?.story_summary || "").trim();
+  const directorSummary = String(storyboardOut?.director_summary || "").trim();
+  const sceneGeneration = data?.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
+  const enrichedScenes = scenes.map((scene) => {
+    const runtime = sceneGeneration[String(scene?.sceneId || scene?.id || "")] || {};
+    return {
+      ...scene,
+      executorModel: String(runtime.model || scene.executorModel || scene.ltxMode || "i2v"),
+      imagePrompt: String(runtime.imagePrompt || scene.imagePrompt || ""),
+      videoPrompt: String(runtime.videoPrompt || scene.videoPrompt || ""),
+      sceneGenerationStatus: normalizeStoryboardGenerationStatus(runtime.status || scene.sceneGenerationStatus),
+      sceneGenerationError: String(runtime.error || ""),
+      generatedAssetUrl: String(runtime.generatedAssetUrl || scene.generatedAssetUrl || ""),
+      generatedAudioUrl: String(runtime.generatedAudioUrl || scene.generatedAudioUrl || ""),
+      montageReady: runtime.montageReady === true || scene.montageReady === true,
+    };
+  });
+
+  const generationStatusLabels = {
+    not_generated: "not_generated",
+    generating: "generating",
+    done: "done",
+    error: "error",
+  };
+
   return (
     <>
       <Handle type="target" position={Position.Left} id="plan_in" className="clipSB_handle" style={handleStyle("plan")} />
@@ -4368,7 +4426,7 @@ function StoryboardPlanNode({ id, data }) {
         className="clipSB_nodeStoryboard"
       >
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenScenario?.(id)} disabled={scenes.length === 0}>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => data?.onOpenScenario?.(id)} disabled={enrichedScenes.length === 0}>
             Сценарий
           </button>
           {isStale ? (
@@ -4376,24 +4434,129 @@ function StoryboardPlanNode({ id, data }) {
           ) : null}
         </div>
 
-        {scenes.length === 0 ? (
-          <div className="clipSB_small">Пусто. Нажми «Разобрать» в BRAIN (бесплатно).</div>
+        {enrichedScenes.length === 0 ? (
+          <div className="clipSB_small">Пусто. Подключи storyboard_out из Scenario Director.</div>
         ) : (
           <>
-            {storySummary ? <div className="clipSB_small" style={{ marginBottom: 10 }}>{storySummary}</div> : null}
-            {voiceScript ? <div className="clipSB_hint" style={{ marginBottom: 8 }}>Voice script: {voiceScript.slice(0, 160)}{voiceScript.length > 160 ? "…" : ""}</div> : null}
-            {musicPrompt ? <div className="clipSB_hint" style={{ marginBottom: 10 }}>Music prompt: {musicPrompt.slice(0, 140)}{musicPrompt.length > 140 ? "…" : ""}</div> : null}
-            <div className="clipSB_planList">
-              {scenes.map((s, idx) => (
-                <div key={getScenarioSceneStableKey(s, idx)} className="clipSB_planRow">
-                  <div className="clipSB_planTime">{s.t0}s → {s.t1}s</div>
-                  <div className="clipSB_planText">
-                    <div>{getSceneUiDescription(s)}</div>
-                    <div className="clipSB_small" style={{ marginTop: 4 }}>
-                      {(s.ltxMode || s.musicMixHint || s.narrationMode) ? `LTX: ${s.ltxMode || "—"} • mix: ${s.musicMixHint || "—"} • narration: ${s.narrationMode || "—"}` : ""}
-                    </div>
-                  </div>
+            <div className="clipSB_storyboardOverview">
+              {storySummary ? (
+                <div className="clipSB_storyboardSummaryCard">
+                  <div className="clipSB_storyboardBlockTitle">Story summary</div>
+                  <div className="clipSB_small">{storySummary}</div>
                 </div>
+              ) : null}
+              {directorSummary ? (
+                <div className="clipSB_storyboardSummaryCard">
+                  <div className="clipSB_storyboardBlockTitle">Director summary</div>
+                  <div className="clipSB_small">{directorSummary}</div>
+                </div>
+              ) : null}
+              {voiceScript ? (
+                <div className="clipSB_storyboardSummaryCard">
+                  <div className="clipSB_storyboardBlockTitle">Voice script</div>
+                  <div className="clipSB_hint">{voiceScript}</div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="clipSB_storyboardMusicCard">
+              <div className="clipSB_storyboardMusicHeader">
+                <div>
+                  <div className="clipSB_storyboardBlockTitle">Music</div>
+                  <div className="clipSB_small">Global music prompt для фоновой музыки и дальнейшего монтажа.</div>
+                </div>
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled>
+                  Сгенерировать музыку
+                </button>
+              </div>
+              <div className="clipSB_storyboardPromptBox">{musicPrompt || "Music prompt появится после получения storyboard_out."}</div>
+            </div>
+
+            <div className="clipSB_storyboardSceneList">
+              {enrichedScenes.map((s, idx) => (
+                <article key={getScenarioSceneStableKey(s, idx)} className="clipSB_storyboardSceneCard">
+                  <div className="clipSB_storyboardSceneHeader">
+                    <div>
+                      <div className="clipSB_storyboardSceneId">{s.sceneId || `S${idx + 1}`}</div>
+                      <div className="clipSB_storyboardSceneTime">
+                        {s.t0}s → {s.t1}s • {Number(s.durationSec || Math.max(0, (s.t1 || 0) - (s.t0 || 0))).toFixed(1)}s
+                      </div>
+                    </div>
+                    <span className={`clipSB_storyboardSceneStatus clipSB_storyboardSceneStatus--${s.sceneGenerationStatus}`.trim()}>
+                      {generationStatusLabels[s.sceneGenerationStatus] || "not_generated"}
+                    </span>
+                  </div>
+
+                  <div className="clipSB_storyboardSceneGrid">
+                    <div className="clipSB_storyboardKv"><span>actors</span><strong>{Array.isArray(s.actors) && s.actors.length ? s.actors.join(", ") : "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>location</span><strong>{s.location || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>props</span><strong>{Array.isArray(s.props) && s.props.length ? s.props.join(", ") : "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>emotion</span><strong>{s.emotion || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>scene_goal</span><strong>{s.sceneText || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>frame_description</span><strong>{s.visualDescription || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>action_in_frame</span><strong>{s.actionInFrame || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>camera</span><strong>{s.cameraIdea || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>ltx_mode</span><strong>{s.ltxMode || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>ltx_reason</span><strong>{s.ltxReason || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>start_frame_source</span><strong>{s.startFrameSource || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>needs_two_frames</span><strong>{s.needsTwoFrames ? "true" : "false"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>continuation_from_previous</span><strong>{s.continuationFromPrevious ? "true" : "false"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>narration_mode</span><strong>{s.narrationMode || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>local_phrase</span><strong>{s.localPhrase || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>sfx</span><strong>{s.sfx || "—"}</strong></div>
+                    <div className="clipSB_storyboardKv"><span>music_mix_hint</span><strong>{s.musicMixHint || "medium"}</strong></div>
+                  </div>
+
+                  <div className="clipSB_storyboardExecutor">
+                    <div className="clipSB_storyboardExecutorRow">
+                      <label className="clipSB_narrativeField">
+                        <div className="clipSB_brainLabel">Model / ltx_mode</div>
+                        <select
+                          className="clipSB_select clipSB_storyboardSelect"
+                          value={s.executorModel}
+                          onChange={(event) => data?.onStoryboardSceneGenerationUpdate?.(id, s.sceneId, { model: event.target.value })}
+                        >
+                          {["i2v", "i2v_as", "f_l", "f_l_as", "continuation"].map((option) => (
+                            <option key={option} value={option}>{option}</option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <div className="clipSB_storyboardExecutorActions">
+                        <button
+                          className="clipSB_btn"
+                          type="button"
+                          onClick={() => data?.onStoryboardSceneGenerate?.(id, s.sceneId)}
+                          disabled={s.sceneGenerationStatus === "generating"}
+                        >
+                          {s.sceneGenerationStatus === "generating" ? "Генерация…" : "Сгенерировать сцену"}
+                        </button>
+                        <button
+                          className="clipSB_btn clipSB_btnSecondary"
+                          type="button"
+                          onClick={() => data?.onStoryboardSceneGenerationUpdate?.(id, s.sceneId, { montageReady: !s.montageReady })}
+                        >
+                          {s.montageReady ? "Готово к монтажу" : "Подготовить к монтажу"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="clipSB_storyboardPromptGrid">
+                      <div className="clipSB_storyboardPromptCard">
+                        <div className="clipSB_storyboardBlockTitle">Image prompt preview</div>
+                        <div className="clipSB_storyboardPromptBox">{s.imagePrompt || "—"}</div>
+                      </div>
+                      <div className="clipSB_storyboardPromptCard">
+                        <div className="clipSB_storyboardBlockTitle">Video prompt preview</div>
+                        <div className="clipSB_storyboardPromptBox">{s.videoPrompt || "—"}</div>
+                      </div>
+                    </div>
+
+                    {s.sceneGenerationError ? (
+                      <div className="clipSB_storyboardError">Ошибка генерации: {s.sceneGenerationError}</div>
+                    ) : null}
+                  </div>
+                </article>
               ))}
             </div>
           </>
@@ -9081,16 +9244,92 @@ onClipSec: (nodeId, value) => {
           const storyboardScenes = Array.isArray(storyboardOut?.scenes)
             ? storyboardOut.scenes.map((scene, idx) => normalizeStoryboardOutScene(scene, idx))
             : null;
+          const normalizedScenes = storyboardScenes || base.data?.scenes || [];
+          const sceneGeneration = buildStoryboardSceneGenerationMap(normalizedScenes, base.data?.sceneGeneration);
           return {
             ...base,
             data: {
               ...base.data,
               storyboardOut: storyboardOutValue,
-              scenes: storyboardScenes || base.data?.scenes || [],
+              scenes: normalizedScenes,
+              sceneGeneration,
               onOpenScenario: (nodeId) => {
                 try {
                   window.dispatchEvent(new CustomEvent("ps:clipOpenScenario", { detail: { nodeId } }));
                 } catch (e) {}
+              },
+              onStoryboardSceneGenerationUpdate: (nodeId, sceneId, patch = {}) => {
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                  if (nodeItem.id !== nodeId || nodeItem.type !== "storyboardNode") return nodeItem;
+                  const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object"
+                    ? nodeItem.data.sceneGeneration
+                    : {};
+                  const current = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      sceneGeneration: {
+                        ...currentMap,
+                        [sceneId]: {
+                          ...current,
+                          ...patch,
+                          status: patch.status ? normalizeStoryboardGenerationStatus(patch.status) : normalizeStoryboardGenerationStatus(current.status),
+                          updatedAt: new Date().toISOString(),
+                        },
+                      },
+                    },
+                  };
+                })));
+              },
+              onStoryboardSceneGenerate: (nodeId, sceneId) => {
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                  if (nodeItem.id !== nodeId || nodeItem.type !== "storyboardNode") return nodeItem;
+                  const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object"
+                    ? nodeItem.data.sceneGeneration
+                    : {};
+                  const current = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      sceneGeneration: {
+                        ...currentMap,
+                        [sceneId]: {
+                          ...current,
+                          status: "generating",
+                          error: "",
+                          updatedAt: new Date().toISOString(),
+                        },
+                      },
+                    },
+                  };
+                })));
+
+                window.setTimeout(() => {
+                  setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                    if (nodeItem.id !== nodeId || nodeItem.type !== "storyboardNode") return nodeItem;
+                    const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object"
+                      ? nodeItem.data.sceneGeneration
+                      : {};
+                    const current = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        sceneGeneration: {
+                          ...currentMap,
+                          [sceneId]: {
+                            ...current,
+                            status: "done",
+                            montageReady: current.montageReady === true,
+                            updatedAt: new Date().toISOString(),
+                          },
+                        },
+                      },
+                    };
+                  })));
+                }, 1200);
               },
             },
           };
@@ -10963,7 +11202,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "ref_items") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПРЕДМЕТЫ", icon: "📦", kind: "ref_items", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "storyboard") {
-      node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [] } };
+      node = { id, type: "storyboardNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [], sceneGeneration: {} } };
     } else if (type === "introFrame") {
       node = {
         id,

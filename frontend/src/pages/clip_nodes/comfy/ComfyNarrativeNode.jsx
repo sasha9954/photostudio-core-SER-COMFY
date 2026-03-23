@@ -17,10 +17,6 @@ const NARRATIVE_HANDLE_STEP = 24;
 
 const OUTPUT_HANDLES = [
   { id: "storyboard_out", labelRu: "Storyboard" },
-  { id: "scenario_out", labelRu: "Сценарий" },
-  { id: "voice_script_out", labelRu: "Озвучка" },
-  { id: "brain_package_out", labelRu: "Legacy planner" },
-  { id: "bg_music_prompt_out", labelRu: "Музыка" },
 ];
 
 function renderKvRows(rows = []) {
@@ -276,21 +272,21 @@ export default function ComfyNarrativeNode({ id, data }) {
             <div className="clipSB_narrativeGrid">
               <label className="clipSB_narrativeField">
                 <div className="clipSB_brainLabel">Тип видео</div>
-                <select className="clipSB_select" value={data?.contentType || "story"} onChange={(e) => data?.onFieldChange?.(id, { contentType: e.target.value })}>
+                <select className="clipSB_select clipSB_narrativeSelect" value={data?.contentType || "story"} onChange={(e) => data?.onFieldChange?.(id, { contentType: e.target.value })}>
                   {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>
 
               <label className="clipSB_narrativeField">
                 <div className="clipSB_brainLabel">Как обработать</div>
-                <select className="clipSB_select" value={data?.narrativeMode || "cinematic_expand"} onChange={(e) => data?.onFieldChange?.(id, { narrativeMode: e.target.value })}>
+                <select className="clipSB_select clipSB_narrativeSelect" value={data?.narrativeMode || "cinematic_expand"} onChange={(e) => data?.onFieldChange?.(id, { narrativeMode: e.target.value })}>
                   {NARRATIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>
 
               <label className="clipSB_narrativeField">
                 <div className="clipSB_brainLabel">Стиль обработки</div>
-                <select className="clipSB_select" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
+                <select className="clipSB_select clipSB_narrativeSelect" value={data?.styleProfile || "realistic"} onChange={(e) => data?.onFieldChange?.(id, { styleProfile: e.target.value })}>
                   {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>

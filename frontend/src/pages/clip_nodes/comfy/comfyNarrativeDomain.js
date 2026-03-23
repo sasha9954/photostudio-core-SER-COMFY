@@ -100,6 +100,14 @@ function participantsToActors(participants = []) {
     });
 }
 
+function needsTwoFramesForMode(ltxMode = "") {
+  return ["f_l", "f_l_as"].includes(String(ltxMode || "").trim());
+}
+
+function isContinuationMode(ltxMode = "") {
+  return String(ltxMode || "").trim() === "continuation";
+}
+
 function getConnectedInputCount(input) {
   const safeCount = Number(input?.count || input?.meta?.count || 0);
   if (Number.isFinite(safeCount) && safeCount > 0) return safeCount;
@@ -514,8 +522,8 @@ export function buildNarrativeOutputs(state = {}) {
       ltxMode: sceneBlueprint.ltxMode,
       whyThisMode: sceneBlueprint.whyThisMode,
       startFrameSource,
-      needsTwoFrames: index > 0,
-      continuation: sceneBlueprint.ltxMode === "continuation" || index > 0,
+      needsTwoFrames: needsTwoFramesForMode(sceneBlueprint.ltxMode),
+      continuation: isContinuationMode(sceneBlueprint.ltxMode),
       narrationMode: sceneBlueprint.narrationMode,
       localPhrase: sceneBlueprint.localPhrase,
       sfx: sceneBlueprint.sfx,
