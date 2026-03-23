@@ -16,6 +16,7 @@ const NARRATIVE_HANDLE_TOP = 104;
 const NARRATIVE_HANDLE_STEP = 24;
 
 const OUTPUT_HANDLES = [
+  { id: "storyboard_out", labelRu: "Storyboard" },
   { id: "scenario_out", labelRu: "Сценарий" },
   { id: "voice_script_out", labelRu: "Озвучка" },
   { id: "brain_package_out", labelRu: "Для мозга" },
@@ -116,9 +117,9 @@ function renderScenesTab(directorOutput) {
             <div className="clipSB_narrativeCardMeta">{scene.duration}</div>
           </div>
           {renderKvRows([
-            { label: "time_start", value: scene.timeStart },
-            { label: "time_end", value: scene.timeEnd },
-            { label: "duration", value: scene.duration },
+            { label: "time_start", value: `${scene.timeStart}s` },
+            { label: "time_end", value: `${scene.timeEnd}s` },
+            { label: "duration", value: `${scene.duration}s` },
             { label: "Кто участвует", value: (scene.participants || []).join(", ") },
             { label: "Локация", value: scene.location },
             { label: "Props", value: (scene.props || []).join(", ") },
@@ -203,6 +204,7 @@ export default function ComfyNarrativeNode({ id, data }) {
   const pendingOutputs = data?.pendingOutputs || null;
   const resultOutputs = pendingOutputs || outputs;
   const directorOutput = resultOutputs?.directorOutput || null;
+  const storyboardOut = resultOutputs?.storyboardOut || null;
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
   const activeSourceMode = resolvedSource?.mode || null;
@@ -247,7 +249,7 @@ export default function ComfyNarrativeNode({ id, data }) {
   if (activeResultTab === "sound") resultBody = renderSoundTab(directorOutput);
   if (activeResultTab === "brain") resultBody = renderBrainPackage(resultOutputs?.brainPackage);
   if (activeResultTab === "music") resultBody = renderMusicTab(directorOutput);
-  if (activeResultTab === "json") resultBody = renderJsonTab(directorOutput);
+  if (activeResultTab === "json") resultBody = renderJsonTab({ ...(directorOutput || {}), storyboardJson: storyboardOut || directorOutput?.storyboardJson || null });
 
   return (
     <>

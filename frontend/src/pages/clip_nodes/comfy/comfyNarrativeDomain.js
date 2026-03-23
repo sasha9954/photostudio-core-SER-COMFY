@@ -78,6 +78,29 @@ function getConnectedInputSignal(input) {
   return normalizeText(getConnectedInputRawSignal(input));
 }
 
+function toStoryboardNumericSec(value, fallback = 0) {
+  const direct = Number(value);
+  if (Number.isFinite(direct)) return direct;
+  const match = String(value || "").match(/-?\d+(?:\.\d+)?/);
+  if (match) {
+    const parsed = Number(match[0]);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function participantsToActors(participants = []) {
+  return (Array.isArray(participants) ? participants : [])
+    .map((item) => normalizeText(item))
+    .filter(Boolean)
+    .map((item, index) => {
+      if (index === 0) return "character_1";
+      if (index === 1) return "character_2";
+      if (index === 2) return "character_3";
+      return item;
+    });
+}
+
 function getConnectedInputCount(input) {
   const safeCount = Number(input?.count || input?.meta?.count || 0);
   if (Number.isFinite(safeCount) && safeCount > 0) return safeCount;
@@ -162,6 +185,7 @@ export function getDefaultNarrativeNodeData() {
     pendingGeneratedAt: "",
     confirmedAt: "",
     outputs: {
+      storyboardOut: null,
       scenario: "",
       voiceScript: "",
       brainPackage: null,
@@ -219,6 +243,7 @@ export function buildNarrativeOutputs(state = {}) {
 
   if (!sourcePayload) {
     return {
+      storyboardOut: null,
       scenario: "",
       voiceScript: "",
       brainPackage: null,
@@ -392,9 +417,9 @@ export function buildNarrativeOutputs(state = {}) {
     const timing = buildSceneWindow(index, baseSceneBlueprints.length);
     const participants = characterRoles.slice(0, Math.max(1, Math.min(characterRoles.length, index + 1))).map((item) => item.name);
     const props = connectedContext.hasProps ? ["Подключённые props/ref-объекты"] : ["Ключевой объект сцены"];
-    const startFrameSource = index === 0
-      ? `source-of-truth: ${resolvedSource.sourceLabel}`
-      : `continuation_from_scene_${index}`;
+    const timeStartSec = toStoryboardNumericSec(timing.timeStart, index * 5);
+    const timeEndSec = toStoryboardNumericSec(timing.timeEnd, timeStartSec + timing.durationSec);
+    const startFrameSource = index === 0 ? "new" : "previous_end";
     const imagePrompt = [
       `${contentTypeLabel}, ${styleLabel.toLowerCase()} style.`,
       `Scene ${index + 1}: ${sceneBlueprint.title}.`,
@@ -411,11 +436,11 @@ export function buildNarrativeOutputs(state = {}) {
     ].join(" ");
 
     return {
-      sceneId: `director_scene_${index + 1}`,
+      sceneId: `S${index + 1}`,
       title: sceneBlueprint.title,
-      timeStart: timing.timeStartLabel,
-      timeEnd: timing.timeEndLabel,
-      duration: timing.durationLabel,
+      timeStart: timeStartSec,
+      timeEnd: timeEndSec,
+      duration: timing.durationSec,
       participants,
       location: sceneBlueprint.location,
       props,
@@ -431,14 +456,48 @@ export function buildNarrativeOutputs(state = {}) {
       whyThisMode: sceneBlueprint.whyThisMode,
       startFrameSource,
       needsTwoFrames: index > 0,
-      continuation: index < baseSceneBlueprints.length - 1 ? `Продолжить в director_scene_${index + 2}` : "Финальная точка",
+      continuation: index > 0,
       narrationMode: sceneBlueprint.narrationMode,
       localPhrase: sceneBlueprint.localPhrase,
       sfx: sceneBlueprint.sfx,
       soundNotes: sceneBlueprint.soundNotes,
       pauseDuckSilenceNotes: sceneBlueprint.pauseNotes,
+      musicMixHint: index === 2 ? "medium" : index === 3 ? "low" : "off",
     };
   });
+
+  const storyboardOut = {
+    story_summary: shortDescription,
+    full_scenario: fullScenario,
+    voice_script: voiceScript,
+    music_prompt: bgMusicPrompt,
+    director_summary: adaptationSummary,
+    scenes: scenes.map((scene) => ({
+      scene_id: scene.sceneId,
+      time_start: scene.timeStart,
+      time_end: scene.timeEnd,
+      duration: scene.duration,
+      actors: participantsToActors(scene.participants),
+      location: scene.location,
+      props: scene.props,
+      emotion: scene.emotion,
+      scene_goal: scene.sceneGoal,
+      frame_description: scene.frameDescription,
+      action_in_frame: scene.actionInFrame,
+      camera: scene.cameraIdea,
+      image_prompt: scene.imagePrompt,
+      video_prompt: scene.videoPrompt,
+      ltx_mode: scene.ltxMode,
+      ltx_reason: scene.whyThisMode,
+      start_frame_source: scene.startFrameSource,
+      needs_two_frames: scene.needsTwoFrames,
+      continuation_from_previous: scene.continuation,
+      narration_mode: scene.narrationMode,
+      local_phrase: scene.localPhrase || null,
+      sfx: scene.sfx,
+      music_mix_hint: scene.musicMixHint,
+    })),
+  };
 
   const directorOutput = {
     history: {
@@ -476,75 +535,11 @@ export function buildNarrativeOutputs(state = {}) {
       style: `${contentTypeLabel} / ${styleLabel}`,
       pacingHints: "Start restrained, grow through the middle scenes, peak at the climax, and resolve with a clean outro.",
     },
-    storyboardJson: {
-      type: "scenario_director_output",
-      version: "v1",
-      status: "ready_for_confirm",
-      source: {
-        mode: sourceMode,
-        label: sourceLabel,
-        preview: normalizeText(resolvedSource.preview) || sourcePayload,
-        origin: resolvedSource.origin,
-      },
-      meta: {
-        contentType,
-        contentTypeLabel,
-        narrativeMode,
-        narrativeModeLabel,
-        styleProfile,
-        styleLabel,
-        directorNote,
-        connectedContext,
-      },
-      history: {
-        summary: shortDescription,
-        fullScenario,
-        characterRoles,
-        toneStyleDirection,
-        directorSummary: adaptationSummary,
-      },
-      scenes: scenes.map((scene) => ({
-        scene_id: scene.sceneId,
-        title: scene.title,
-        time_start: scene.timeStart,
-        time_end: scene.timeEnd,
-        duration: scene.duration,
-        participants: scene.participants,
-        location: scene.location,
-        props: scene.props,
-        what_happens: scene.action,
-        emotion: scene.emotion,
-        scene_goal: scene.sceneGoal,
-        video: {
-          frame_description: scene.frameDescription,
-          action_in_frame: scene.actionInFrame,
-          camera_idea: scene.cameraIdea,
-          image_prompt: scene.imagePrompt,
-          video_prompt: scene.videoPrompt,
-          ltx_mode: scene.ltxMode,
-          why_this_mode: scene.whyThisMode,
-          start_frame_source: scene.startFrameSource,
-          needs_two_frames: scene.needsTwoFrames,
-          continuation: scene.continuation,
-        },
-        sound: {
-          narration_mode: scene.narrationMode,
-          local_phrase: scene.localPhrase,
-          sfx: scene.sfx,
-          sound_notes: scene.soundNotes,
-          pause_duck_silence_notes: scene.pauseDuckSilenceNotes,
-        },
-      })),
-      music: {
-        global_music_prompt: bgMusicPrompt,
-        mood: styleLabel,
-        style: `${contentTypeLabel} / ${styleLabel}`,
-        pacing_hints: "Start restrained, grow through the middle scenes, peak at the climax, and resolve with a clean outro.",
-      },
-    },
+    storyboardJson: storyboardOut,
   };
 
   return {
+    storyboardOut,
     scenario,
     voiceScript,
     brainPackage,
