@@ -2122,6 +2122,163 @@ def _validate_role_distribution(
     }
 
 
+LOCKED_ROLE_REFINEMENT_WARNING_TRIGGERS = {
+    "locked_hero_not_in_majority",
+    "locked_antagonist_missing_from_tension_scenes",
+    "locked_support_unused",
+}
+
+
+def _shorten_debug_preview(value: Any, limit: int = 280) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(0, limit - 3)].rstrip()}..."
+
+
+def _count_storyboard_scenes(storyboard: Any) -> int:
+    if isinstance(storyboard, dict):
+        scenes = storyboard.get("scenes")
+        if isinstance(scenes, list):
+            return len(scenes)
+    if isinstance(storyboard, list):
+        return len(storyboard)
+    return 0
+
+
+def _decide_locked_role_refinement(
+    *,
+    role_mode: str,
+    role_validation_status: str,
+    role_validation_warnings: list[str] | None,
+    storyboard: dict[str, Any] | list[dict[str, Any]] | Any,
+    role_type_by_role: dict[str, str] | None = None,
+) -> tuple[bool, str]:
+    normalized_role_mode = str(role_mode or "").strip().lower() or "auto"
+    warnings = [str(item).strip() for item in (role_validation_warnings or []) if str(item).strip()]
+    scene_count = _count_storyboard_scenes(storyboard)
+    role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    locked_roles_present = any(
+        str(role_type or "").strip().lower() in {"hero", "support", "antagonist"}
+        for role_type in role_types.values()
+    )
+
+    if normalized_role_mode != "locked":
+        return False, "skipped_auto_mode"
+    if scene_count == 0:
+        return False, "skipped_empty_storyboard"
+    if not locked_roles_present:
+        return False, "skipped_no_locked_roles"
+    if not warnings:
+        return False, "not_needed"
+    if str(role_validation_status or "").strip().lower() == "ok":
+        return False, "not_needed"
+
+    trigger_warnings = [item for item in warnings if item in LOCKED_ROLE_REFINEMENT_WARNING_TRIGGERS]
+    if not trigger_warnings:
+        return False, "skipped_non_trigger_warnings"
+    if scene_count < 2:
+        return False, "skipped_trivial_storyboard"
+
+    if scene_count < 3 and trigger_warnings == ["locked_support_unused"]:
+        return False, "skipped_trivial_storyboard"
+
+    return True, "locked_warnings_present"
+
+
+def _should_run_locked_role_refinement(
+    role_mode: str,
+    role_validation_status: str,
+    role_validation_warnings: list[str],
+    storyboard: dict[str, Any] | Any,
+) -> bool:
+    should_run, _ = _decide_locked_role_refinement(
+        role_mode=role_mode,
+        role_validation_status=role_validation_status,
+        role_validation_warnings=role_validation_warnings,
+        storyboard=storyboard,
+    )
+    return should_run
+
+
+def _build_locked_role_refinement_prompt(
+    original_input_payload: dict[str, Any],
+    storyboard_v1: dict[str, Any] | list[dict[str, Any]],
+    role_type_by_role: dict[str, str] | None,
+    role_selection_source_by_role: dict[str, str] | None,
+    role_validation_warnings: list[str] | None,
+) -> str:
+    prompt_payload = {
+        "mode": original_input_payload.get("mode"),
+        "plannerMode": original_input_payload.get("plannerMode"),
+        "genre": original_input_payload.get("genre"),
+        "storyMissionSummary": original_input_payload.get("storyMissionSummary"),
+        "storyControlMode": original_input_payload.get("storyControlMode"),
+        "roleMode": "locked",
+        "roleTypeByRole": role_type_by_role if isinstance(role_type_by_role, dict) else {},
+        "roleSelectionSourceByRole": role_selection_source_by_role if isinstance(role_selection_source_by_role, dict) else {},
+        "roleValidationWarnings": [str(item).strip() for item in (role_validation_warnings or []) if str(item).strip()],
+        "storyboardV1": storyboard_v1,
+    }
+    return (
+        "LOCKED ROLE REPAIR PASS.\n"
+        "This is a repair pass, not a fresh generation.\n"
+        "Return JSON only. Preserve the existing backend contract exactly.\n"
+        "Repair only locked role distribution problems in the current storyboard.\n"
+        "Preserve scene count if possible.\n"
+        "Preserve scene order, timing, story progression, tone, genre, mood, pacing, and dramatic arc where possible.\n"
+        "Preserve good scenes and use minimal structural changes.\n"
+        "Do not rewrite everything if only role usage needs fixing.\n"
+        "Do not swap role identities.\n"
+        "Do not replace hero with antagonist.\n"
+        "Hero must remain the main narrative subject.\n"
+        "Hero should appear in the majority of scenes unless there is a strong narrative reason not to.\n"
+        "If an antagonist exists, include the antagonist in at least one tension, conflict, opposition, pressure, threat, pursuit, or confrontation scene.\n"
+        "If support exists, use support meaningfully when present and relevant.\n"
+        "Repair role distribution with minimal structural changes.\n"
+        "Original locked-role setup, current storyboard, and warnings:\n"
+        f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _score_role_validation_status(status: str) -> int:
+    normalized = str(status or "").strip().lower()
+    if normalized == "ok":
+        return 0
+    if normalized == "warning":
+        return 1
+    return 2
+
+
+def _is_refined_storyboard_better(
+    *,
+    status_before: str,
+    warnings_before: list[str] | None,
+    status_after: str,
+    warnings_after: list[str] | None,
+    scenes_before: list[dict[str, Any]] | None = None,
+    scenes_after: list[dict[str, Any]] | None = None,
+) -> bool:
+    before = [str(item).strip() for item in (warnings_before or []) if str(item).strip()]
+    after = [str(item).strip() for item in (warnings_after or []) if str(item).strip()]
+    before_score = _score_role_validation_status(status_before)
+    after_score = _score_role_validation_status(status_after)
+    if after_score > before_score:
+        return False
+    if len(after) < len(before):
+        return True
+    if len(after) > len(before):
+        return False
+    if after_score < before_score:
+        return True
+
+    before_scene_count = len(scenes_before or [])
+    after_scene_count = len(scenes_after or [])
+    if before_scene_count > 0 and after_scene_count <= 0:
+        return False
+    return True
+
+
 def validate_gemini_planner_response(parsed: dict[str, Any], request_input: dict[str, Any]) -> tuple[list[str], list[str]]:
     warnings: list[str] = []
     errors: list[str] = []
@@ -3011,6 +3168,8 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         warnings=warnings,
     )
 
+    role_type_by_role = normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {}
+    role_selection_source_by_role = normalized.get("roleSelectionSourceByRole") if isinstance(normalized.get("roleSelectionSourceByRole"), dict) else {}
     contract_result = map_gemini_plan_to_canonical_audio_first_output(
         planner_input,
         parse_result.parsed,
@@ -3021,7 +3180,6 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     )
     canonical_dump = contract_result.canonical_output.model_dump(mode="json")
     scenes = contract_result.compatibility_scenes
-    role_type_by_role = normalized.get("roleTypeByRole") if isinstance(normalized.get("roleTypeByRole"), dict) else {}
     role_validation = _validate_role_distribution(
         scenes,
         role_mode=normalized.get("roleMode") or "auto",
@@ -3030,6 +3188,144 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
     role_usage_by_scene = role_validation.get("roleUsageByScene") if isinstance(role_validation.get("roleUsageByScene"), list) else []
     role_validation_warnings = role_validation.get("roleValidationWarnings") if isinstance(role_validation.get("roleValidationWarnings"), list) else []
     role_validation_status = str(role_validation.get("roleValidationStatus") or "ok")
+    role_refinement_attempted = False
+    role_refinement_succeeded = False
+    role_refinement_decision, role_refinement_note = "not_needed", "Locked-role refinement was not needed."
+    role_refinement_status_before = role_validation_status
+    role_refinement_warnings_before = list(role_validation_warnings)
+    role_refinement_status_after = role_validation_status
+    role_refinement_warnings_after = list(role_validation_warnings)
+    role_refinement_model_used = ""
+    role_refinement_raw_preview = ""
+    refined_role_warnings: list[str] = []
+    should_refine_roles, role_refinement_decision = _decide_locked_role_refinement(
+        role_mode=normalized.get("roleMode") or "auto",
+        role_validation_status=role_validation_status,
+        role_validation_warnings=role_validation_warnings,
+        storyboard={"scenes": scenes},
+        role_type_by_role=role_type_by_role,
+    )
+    if should_refine_roles and len(validation_report.errors) == 0 and (parse_result.parsed.planning_status == GeminiPlanningStatus.ok if parse_result.parsed else False):
+        role_refinement_attempted = True
+        role_refinement_prompt = _build_locked_role_refinement_prompt(
+            normalized,
+            {"scenes": scenes},
+            role_type_by_role,
+            role_selection_source_by_role,
+            role_validation_warnings,
+        )
+        refinement_parts = [
+            {"text": "=== LOCKED ROLE REFINEMENT REQUEST ===\n" + role_refinement_prompt},
+            *multimodal_parts,
+        ]
+        refinement_body = {
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+            "systemInstruction": {"parts": [{"text": planner_system_instruction}]},
+            "contents": [{"role": "user", "parts": refinement_parts}],
+        }
+        refined_parsed_raw, refined_diagnostics = _call_gemini_plan_with_model_fallback(api_key, requested_model, refinement_body)
+        refined_system_instruction_used = True
+        if _supports_system_instruction_error(refined_diagnostics):
+            refinement_fallback_body = {
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": f"{planner_system_instruction}\n\n=== LOCKED ROLE REFINEMENT REQUEST ===\n{role_refinement_prompt}\n\n=== GEMINI PLANNER RUNTIME PAYLOAD ===\n{planner_runtime_payload}"}, *multimodal_parts[1:]],
+                    }
+                ],
+            }
+            refined_parsed_raw, refined_diagnostics = _call_gemini_plan_with_model_fallback(api_key, requested_model, refinement_fallback_body)
+            refined_system_instruction_used = False
+        role_refinement_model_used = str(refined_diagnostics.get("effectiveModel") or refined_diagnostics.get("requestedModel") or requested_model)
+        role_refinement_raw_preview = _shorten_debug_preview(refined_diagnostics.get("rawPreview") or "")
+        if not refined_system_instruction_used:
+            refined_role_warnings.append("locked_role_refinement_system_instruction_fallback_to_inline_prompt")
+        if refined_diagnostics.get("fallbackFrom") and refined_diagnostics.get("fallbackTo"):
+            refined_role_warnings.append(f"locked_role_refinement_model_fallback:{refined_diagnostics['fallbackFrom']}->{refined_diagnostics['fallbackTo']}")
+        refined_parse_result = parse_gemini_planner_output(refined_parsed_raw if isinstance(refined_parsed_raw, dict) else {})
+        refined_role_warnings.extend(refined_parse_result.warnings)
+        refined_role_errors = list(refined_parse_result.errors)
+        refined_validation_report = validate_audio_first_gemini_planner_output(planner_input, refined_parse_result.parsed)
+        refined_role_warnings.extend(refined_validation_report.warnings)
+        refined_role_errors.extend(refined_validation_report.errors)
+        refined_role_warnings = list(dict.fromkeys([str(item).strip() for item in refined_role_warnings if str(item).strip()]))
+        refined_role_errors = list(dict.fromkeys([str(item).strip() for item in refined_role_errors if str(item).strip()]))
+        if refined_role_errors:
+            role_refinement_note = "Locked-role refinement failed validation; original storyboard_v1 was kept."
+            warnings.extend([f"locked_role_refinement_failed:{item}" for item in refined_role_errors])
+        else:
+            refined_validation_report = GeminiPlannerValidationReport(
+                valid=refined_validation_report.valid,
+                blocked=refined_validation_report.blocked,
+                errors=refined_role_errors,
+                warnings=refined_role_warnings,
+            )
+            refined_contract_result = map_gemini_plan_to_canonical_audio_first_output(
+                planner_input,
+                refined_parse_result.parsed,
+                refined_validation_report,
+                raw_payload=refined_parse_result.raw_payload or (refined_parsed_raw if isinstance(refined_parsed_raw, dict) else {}),
+                raw_debug_summary=(refined_parse_result.parsed.debug_summary if refined_parse_result.parsed else None),
+                parse_result=refined_parse_result,
+            )
+            refined_scenes = refined_contract_result.compatibility_scenes
+            refined_role_validation = _validate_role_distribution(
+                refined_scenes,
+                role_mode=normalized.get("roleMode") or "auto",
+                role_type_by_role=role_type_by_role,
+            )
+            refined_role_validation_warnings = (
+                refined_role_validation.get("roleValidationWarnings")
+                if isinstance(refined_role_validation.get("roleValidationWarnings"), list)
+                else []
+            )
+            refined_role_validation_status = str(refined_role_validation.get("roleValidationStatus") or "ok")
+            role_refinement_status_after = refined_role_validation_status
+            role_refinement_warnings_after = list(refined_role_validation_warnings)
+            if _is_refined_storyboard_better(
+                status_before=role_refinement_status_before,
+                warnings_before=role_refinement_warnings_before,
+                status_after=refined_role_validation_status,
+                warnings_after=refined_role_validation_warnings,
+                scenes_before=scenes,
+                scenes_after=refined_scenes,
+            ):
+                role_refinement_succeeded = True
+                parsed = refined_parsed_raw if isinstance(refined_parsed_raw, dict) else parsed
+                diagnostics = {
+                    **diagnostics,
+                    "roleRefinement": {
+                        "httpStatus": refined_diagnostics.get("httpStatus"),
+                        "rawPreview": refined_diagnostics.get("rawPreview") or "",
+                        "warnings": refined_role_warnings,
+                    },
+                }
+                parse_result = refined_parse_result
+                validation_report = refined_validation_report
+                contract_result = refined_contract_result
+                canonical_dump = contract_result.canonical_output.model_dump(mode="json")
+                scenes = refined_scenes
+                role_usage_by_scene = (
+                    refined_role_validation.get("roleUsageByScene")
+                    if isinstance(refined_role_validation.get("roleUsageByScene"), list)
+                    else []
+                )
+                role_validation_warnings = list(refined_role_validation_warnings)
+                role_validation_status = refined_role_validation_status
+                role_refinement_note = "Locked-role refinement was applied and improved or preserved validation without making it worse."
+            else:
+                role_refinement_note = "Locked-role refinement returned a weaker or non-improving storyboard; original storyboard_v1 was kept."
+                role_refinement_warnings_after = list(refined_role_validation_warnings)
+                role_refinement_status_after = refined_role_validation_status
+    elif role_refinement_decision == "skipped_auto_mode":
+        role_refinement_note = "Locked-role refinement is disabled in auto role mode."
+    elif role_refinement_decision == "skipped_trivial_storyboard":
+        role_refinement_note = "Locked-role refinement was skipped because the storyboard is too small for a meaningful second pass."
+    elif role_refinement_decision == "skipped_no_locked_roles":
+        role_refinement_note = "Locked-role refinement was skipped because no locked hero/support/antagonist roles were present."
+    elif role_refinement_decision == "not_needed":
+        role_refinement_note = "Locked-role refinement was not needed because locked-role warnings were absent."
     timing_debug = {
         "sceneCount": len(scenes),
         "sceneCountAfterSpeechSplit": len(scenes),
@@ -3090,6 +3386,16 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
         "validationErrors": validation_report.errors,
         "roleValidationWarnings": role_validation_warnings,
         "roleValidationStatus": role_validation_status,
+        "roleRefinementAttempted": role_refinement_attempted,
+        "roleRefinementSucceeded": role_refinement_succeeded,
+        "roleRefinementDecision": role_refinement_decision,
+        "roleRefinementWarningsBefore": role_refinement_warnings_before,
+        "roleRefinementWarningsAfter": role_refinement_warnings_after,
+        "roleRefinementStatusBefore": role_refinement_status_before,
+        "roleRefinementStatusAfter": role_refinement_status_after,
+        "roleRefinementModelUsed": role_refinement_model_used,
+        "roleRefinementRawPreview": role_refinement_raw_preview,
+        "roleRefinementNote": role_refinement_note,
         "summary": {
             "sceneCount": len(scenes),
             "cameraContinuityScore": director_debug.get("cameraContinuityScore"),
@@ -3175,6 +3481,16 @@ def _run_comfy_plan_gemini_only(normalized: dict[str, Any]) -> dict[str, Any]:
             "roleUsageByScene": role_usage_by_scene,
             "roleValidationWarnings": role_validation_warnings,
             "roleValidationStatus": role_validation_status,
+            "roleRefinementAttempted": role_refinement_attempted,
+            "roleRefinementSucceeded": role_refinement_succeeded,
+            "roleRefinementDecision": role_refinement_decision,
+            "roleRefinementWarningsBefore": role_refinement_warnings_before,
+            "roleRefinementWarningsAfter": role_refinement_warnings_after,
+            "roleRefinementStatusBefore": role_refinement_status_before,
+            "roleRefinementStatusAfter": role_refinement_status_after,
+            "roleRefinementModelUsed": role_refinement_model_used,
+            "roleRefinementRawPreview": role_refinement_raw_preview,
+            "roleRefinementNote": role_refinement_note,
             "referenceProfilesSummary": summarize_profiles(reference_profiles),
             "activeRolesByScene": {str(scene.get("sceneId") or ""): list(scene.get("activeRefs") or []) for scene in scenes},
             **media_debug,
