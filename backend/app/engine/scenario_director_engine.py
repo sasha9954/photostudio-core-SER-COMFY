@@ -1,5 +1,8 @@
+import ast
 import json
+import logging
 import os
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -11,6 +14,17 @@ ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
 ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+LEGACY_START_FRAME_ALIASES = {
+    "previous_last_frame": "previous_frame",
+    "prev_last": "previous_frame",
+    "last_frame": "previous_frame",
+}
+JSON_ONLY_RETRY_SUFFIX = (
+    "\n\nRETRY OVERRIDE: Output ONLY one JSON object. No markdown. No commentary. No comments. "
+    "No alternative versions. Keep the same backend contract and return flat scene fields."
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ScenarioDirectorError(RuntimeError):
@@ -72,16 +86,18 @@ class ScenarioDirectorScene(BaseModel):
         self.camera = str(self.camera or "").strip()
         self.image_prompt = str(self.image_prompt or "").strip()
         self.video_prompt = str(self.video_prompt or "").strip()
+        self.narration_mode = str(self.narration_mode or "full").strip() or "full"
+        self.start_frame_source = _normalize_start_frame_source(self.start_frame_source, continuation=self.continuation_from_previous)
+        self.needs_two_frames = _coerce_bool(self.needs_two_frames, False)
+        self.continuation_from_previous = _coerce_bool(self.continuation_from_previous, False)
         self.ltx_mode = _normalize_ltx_mode(
             self.ltx_mode,
             continuation=self.continuation_from_previous,
             needs_two_frames=self.needs_two_frames,
             narration_mode=self.narration_mode,
         )
-        self.start_frame_source = str(self.start_frame_source or "new").strip() or "new"
-        self.narration_mode = str(self.narration_mode or "full").strip() or "full"
         self.local_phrase = str(self.local_phrase).strip() if self.local_phrase is not None and str(self.local_phrase).strip() else None
-        self.sfx = str(self.sfx or "").strip()
+        self.sfx = _stringify_sfx(self.sfx)
         self.music_mix_hint = str(self.music_mix_hint or "off").strip() or "off"
         self.ltx_reason = _normalize_ltx_reason(
             str(self.ltx_reason or "").strip(),
@@ -119,6 +135,41 @@ def _safe_float(value: Any, fallback: float) -> float:
     if parsed != parsed or parsed in {float("inf"), float("-inf")}:
         return fallback
     return round(parsed, 3)
+
+
+def _coerce_bool(value: Any, fallback: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return fallback
+    if isinstance(value, (int, float)):
+        return bool(value)
+    clean = str(value).strip().lower()
+    if clean in {"true", "1", "yes", "y", "on"}:
+        return True
+    if clean in {"false", "0", "no", "n", "off", "null", "none", ""}:
+        return False
+    return fallback
+
+
+def _stringify_sfx(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
+
+
+def _normalize_start_frame_source(value: Any, *, continuation: bool = False) -> str:
+    clean = str(value or "").strip()
+    if not clean and continuation:
+        return "previous_frame"
+    normalized = LEGACY_START_FRAME_ALIASES.get(clean, clean)
+    if normalized in {"new", "first_frame", "previous_frame", "generated"}:
+        return normalized
+    if continuation:
+        return "previous_frame"
+    if normalized == "":
+        return "new"
+    return normalized
 
 
 def _normalize_ltx_mode(value: Any, *, continuation: bool, needs_two_frames: bool, narration_mode: str) -> str:
@@ -179,6 +230,162 @@ def _extract_json_blob(raw_text: str) -> str:
     if start >= 0 and end > start:
         return text[start:end + 1]
     return text
+
+
+def _extract_balanced_json_candidate(text: str) -> str | None:
+    in_string = False
+    escape = False
+    depth = 0
+    start_index: int | None = None
+    for index, char in enumerate(text):
+        if start_index is None:
+            if char == "{":
+                start_index = index
+                depth = 1
+            continue
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start_index:index + 1]
+    return None
+
+
+def _clean_dirty_json_blob(raw_text: str) -> str:
+    candidate = _extract_json_blob(raw_text)
+    candidate = re.sub(r"^```(?:json)?\s*", "", candidate.strip(), flags=re.IGNORECASE)
+    candidate = re.sub(r"\s*```$", "", candidate, flags=re.IGNORECASE)
+    candidate = _extract_balanced_json_candidate(candidate) or candidate
+    candidate = candidate.strip().strip("`")
+    return candidate
+
+
+def _try_parse_dirty_json(text: str) -> dict[str, Any] | None:
+    candidate = _clean_dirty_json_blob(text)
+    if not candidate.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    pythonish = re.sub(r"\btrue\b", "True", candidate, flags=re.IGNORECASE)
+    pythonish = re.sub(r"\bfalse\b", "False", pythonish, flags=re.IGNORECASE)
+    pythonish = re.sub(r"\bnull\b", "None", pythonish, flags=re.IGNORECASE)
+    try:
+        parsed = ast.literal_eval(pythonish)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
+    return _try_parse_dirty_json(raw_text)
+
+
+def _normalize_legacy_scene_shape(scene: dict) -> dict:
+    normalized = dict(scene or {})
+    visual = normalized.pop("visual", None)
+    audio = normalized.pop("audio", None)
+    ltx = normalized.pop("ltx", None)
+
+    applied = False
+    if isinstance(visual, dict):
+        normalized.setdefault("frame_description", visual.get("frame_description"))
+        normalized.setdefault("action_in_frame", visual.get("action_in_frame"))
+        normalized.setdefault("camera", visual.get("camera"))
+        applied = True
+    if isinstance(audio, dict):
+        normalized.setdefault("narration_mode", audio.get("narration"))
+        normalized.setdefault("local_phrase", audio.get("local_phrase"))
+        normalized.setdefault("sfx", audio.get("sfx"))
+        applied = True
+    if isinstance(ltx, dict):
+        normalized.setdefault("ltx_mode", ltx.get("mode"))
+        normalized.setdefault("ltx_reason", ltx.get("reason"))
+        normalized.setdefault("start_frame_source", ltx.get("start_frame_source"))
+        normalized.setdefault("needs_two_frames", ltx.get("needs_two_frames"))
+        applied = True
+
+    normalized["start_frame_source"] = _normalize_start_frame_source(
+        normalized.get("start_frame_source"),
+        continuation=_coerce_bool(normalized.get("continuation_from_previous"), False),
+    )
+    normalized["needs_two_frames"] = _coerce_bool(normalized.get("needs_two_frames"), False)
+    normalized["continuation_from_previous"] = _coerce_bool(
+        normalized.get("continuation_from_previous") or normalized.get("start_frame_source") == "previous_frame",
+        False,
+    )
+    if normalized["start_frame_source"] == "previous_frame":
+        normalized["continuation_from_previous"] = True
+    normalized["sfx"] = _stringify_sfx(normalized.get("sfx"))
+
+    if applied:
+        logger.debug(
+            "[SCENARIO_DIRECTOR] legacy scene normalized scene_id=%s ltx_mode=%s start_frame=%s",
+            str(normalized.get("scene_id") or "").strip() or "unknown",
+            str(normalized.get("ltx_mode") or "").strip() or "auto",
+            normalized.get("start_frame_source") or "new",
+        )
+    return normalized
+
+
+def _repair_scenario_director_payload(payload: dict) -> dict:
+    candidate = payload
+    changed = False
+    if isinstance(candidate.get("storyboard_out"), dict):
+        candidate = candidate["storyboard_out"]
+        changed = True
+    elif isinstance(candidate.get("storyboardOut"), dict):
+        candidate = candidate["storyboardOut"]
+        changed = True
+    elif isinstance(candidate.get("output"), dict) and isinstance(candidate["output"].get("scenes"), list):
+        candidate = candidate["output"]
+        changed = True
+
+    repaired = dict(candidate)
+    scenes = repaired.get("scenes")
+    if isinstance(scenes, list):
+        normalized_scenes = [_normalize_legacy_scene_shape(scene) if isinstance(scene, dict) else scene for scene in scenes]
+        if normalized_scenes != scenes:
+            changed = True
+        repaired["scenes"] = normalized_scenes
+
+    if not repaired.get("story_summary"):
+        repaired["story_summary"] = repaired.get("summary") or repaired.get("storySummary") or ""
+        changed = changed or bool(repaired["story_summary"])
+    if not repaired.get("full_scenario"):
+        repaired["full_scenario"] = repaired.get("scenario") or repaired.get("fullScenario") or repaired.get("story") or ""
+        changed = changed or bool(repaired["full_scenario"])
+    if not repaired.get("voice_script"):
+        repaired["voice_script"] = repaired.get("voiceScript") or repaired.get("narration_script") or ""
+        changed = changed or bool(repaired["voice_script"])
+    if not repaired.get("music_prompt"):
+        repaired["music_prompt"] = repaired.get("musicPrompt") or repaired.get("music_direction") or ""
+        changed = changed or bool(repaired["music_prompt"])
+    if not repaired.get("director_summary"):
+        repaired["director_summary"] = repaired.get("directorSummary") or repaired.get("direction_summary") or ""
+        changed = changed or bool(repaired["director_summary"])
+
+    if changed:
+        logger.debug(
+            "[SCENARIO_DIRECTOR] repair applied scenes=%s story_summary=%s",
+            len(repaired.get("scenes") or []),
+            bool(str(repaired.get("story_summary") or "").strip()),
+        )
+    return repaired
 
 
 def _build_reference_role_map(payload: dict[str, Any]) -> dict[str, str]:
@@ -367,24 +574,63 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut) -> Sce
     return storyboard_out
 
 
-def _build_request_text(payload: dict[str, Any]) -> str:
+def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = False) -> str:
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
     director_controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
-    return (
-        "You are Scenario Director for PhotoStudio COMFY. \n"
+    connected_context_summary = payload.get("connected_context_summary", {})
+    metadata = payload.get("metadata", {})
+    request_text = (
+        "You are Scenario Director for PhotoStudio COMFY.\n"
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
         "Return a single JSON object only. No markdown, no commentary.\n"
         "The storyboard_out must be production-usable for downstream Storyboard execution.\n"
+        "SOURCE PRIORITY (strict):\n"
+        "1) user source-of-truth / story brief / scenario note\n"
+        "2) connected visual references\n"
+        "3) director notes\n"
+        "4) project style profile\n"
+        "5) only then free dramatization\n"
+        "ANTI-DRIFT LOCKS:\n"
+        "- Preserve the exact count of core characters implied by the source and refs.\n"
+        "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
+        "- Do not collapse connected characters into generic operative/target/action archetypes.\n"
+        "- Preserve relationship tension, emotional roles, gender presentation, and visual identity anchors from the refs.\n"
+        "- Preserve implied genre: horror, claustrophobic tension, industrial dread, surreal unease, emotional darkness, intimacy, mystery.\n"
+        "- Do not flatten unique tone into generic espionage thriller or safe corporate cinematic filler.\n"
+        "- Preserve the environment identity from the source or refs: bunker, abyss, industrial shaft, abandoned corridor, concrete hall, strange facility, ritual room, flooded station, etc.\n"
+        "SHORT-FORM DIRECTING RULES:\n"
+        "- Think like a music video director + trailer editor + cinematic storyboard artist.\n"
+        "- The first 1-3 seconds must hook immediately with a specific image, not vague mood text.\n"
+        "- Every scene must either reveal, intensify, or transform.\n"
+        "- Prefer fewer strong scenes over many weak scenes.\n"
+        "- Build escalation: hook -> entry/destabilization -> reveal/complication -> escalation -> peak image/emotional climax -> final image that stays in memory.\n"
+        "- Use visual specificity: exact image idea, physical action, camera intent, dramatic purpose.\n"
+        "- Avoid filler like 'character walks with determination', 'camera follows the subject', 'tense cinematic moment', 'mysterious atmosphere' unless converted into concrete story-specific visuals.\n"
+        "- Use the environment as a story actor when relevant.\n"
+        "TIMING RULES:\n"
+        "- Do not force evenly sliced 5-second blocks.\n"
+        "- Typical useful scene duration is about 4-9 seconds, but hook, reveal, climax, and final hold may be shorter or longer when justified by the drama.\n"
+        "- Let timing breathe and follow emotional rhythm.\n"
+        "- For longer videos, vary rhythm like short / medium / medium / short / long / climax / final hold.\n"
+        "LTX MODE RULES:\n"
+        "- i2v: strong single-image motion.\n"
+        "- i2v_as: audio-sensitive motion, environmental pulsing, breathing tension, subtle rhythm response, but no literal speech articulation.\n"
+        "- f_l: controlled A-to-B reveal, door opening, object transformation, pose shift, environmental change, or two-state transition.\n"
+        "- f_l_as: transition or reveal that also needs audio-driven hit timing.\n"
+        "- continuation: preserve continuity from the previous scene's visual endpoint when that is the strongest choice. Do not overuse it.\n"
+        "- lip_sync: only if visible vocal articulation is truly required and the narration/audio mode supports it.\n"
+        "- Every scene must include a short concrete ltx_reason that explains the production intent.\n"
         "Hard constraints:\n"
         "- Use only real LTX modes: i2v, i2v_as, f_l, f_l_as, continuation, lip_sync.\n"
         "- Never use fake modes like intro_lock, hero_peak, motion_follow, ending_hold.\n"
         "- lip_sync is allowed only for music-driven vocal rhythm with visible articulation support.\n"
         "- Do not use lip_sync for ordinary narration or generic voice-over.\n"
         "- Scenario Director is the main planning node. Storyboard executes your storyboard_out and should not rethink the plan.\n"
-        "- Build scenes from story meaning, source-of-truth, and director controls.\n"
+        "- Build scenes from story meaning, source-of-truth, connected refs, and director controls.\n"
         "- Keep timing coherent and use floats in seconds.\n"
         "- Every scene must include concise but useful video/audio planning fields.\n"
+        "- Keep the backend-compatible flat scene fields. If you internally think in nested visual/audio/ltx blocks, flatten them before output.\n"
         "Output contract:\n"
         "{\n"
         '  "story_summary": "",\n'
@@ -420,8 +666,41 @@ def _build_request_text(payload: dict[str, Any]) -> str:
         "    }\n"
         "  ]\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': payload.get('connected_context_summary', {}), 'metadata': payload.get('metadata', {})}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata}, ensure_ascii=False, indent=2)}"
     )
+    if strict_json_retry:
+        request_text += JSON_ONLY_RETRY_SUFFIX
+    return request_text
+
+
+def _send_director_request(api_key: str, body: dict[str, Any]) -> tuple[dict[str, Any] | None, str, list[str]]:
+    attempted_models: list[str] = []
+    response: dict[str, Any] | None = None
+    model_used = DEFAULT_TEXT_MODEL
+    for candidate_model in [DEFAULT_TEXT_MODEL, FALLBACK_TEXT_MODEL]:
+        if candidate_model in attempted_models:
+            continue
+        attempted_models.append(candidate_model)
+        response = post_generate_content(api_key, candidate_model, body, timeout=120)
+        model_used = candidate_model
+        if not isinstance(response, dict) or not response.get("__http_error__"):
+            break
+    return response, model_used, attempted_models
+
+
+def _parse_storyboard_payload(raw_text: str) -> dict[str, Any]:
+    logger.debug("[SCENARIO_DIRECTOR] raw response received chars=%s", len(str(raw_text or "")))
+    extracted = _extract_json_object(raw_text)
+    if extracted is None:
+        raise ScenarioDirectorError(
+            "gemini_invalid_json",
+            "Gemini returned invalid JSON for Scenario Director: could not extract JSON object.",
+            status_code=502,
+            details={"rawPreview": str(raw_text or "")[:1000]},
+        )
+    logger.debug("[SCENARIO_DIRECTOR] json extracted keys=%s", ",".join(list(extracted.keys())[:8]))
+    repaired = _repair_scenario_director_payload(extracted)
+    return repaired
 
 
 def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
@@ -450,17 +729,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-    attempted_models: list[str] = []
-    response: dict[str, Any] | None = None
-    model_used = DEFAULT_TEXT_MODEL
-    for candidate_model in [DEFAULT_TEXT_MODEL, FALLBACK_TEXT_MODEL]:
-        if candidate_model in attempted_models:
-            continue
-        attempted_models.append(candidate_model)
-        response = post_generate_content(api_key, candidate_model, body, timeout=120)
-        model_used = candidate_model
-        if not isinstance(response, dict) or not response.get("__http_error__"):
-            break
+    response, model_used, attempted_models = _send_director_request(api_key, body)
 
     if not isinstance(response, dict):
         raise ScenarioDirectorError("gemini_request_failed", "Gemini did not return a JSON object.", status_code=502)
@@ -474,20 +743,28 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     raw_text = _extract_gemini_text(response)
-    json_blob = _extract_json_blob(raw_text)
+    retried_for_json = False
     try:
-        parsed_payload = json.loads(json_blob)
-    except Exception as exc:
-        raise ScenarioDirectorError(
-            "gemini_invalid_json",
-            f"Gemini returned invalid JSON for Scenario Director: {exc}",
-            status_code=502,
-            details={"rawPreview": raw_text[:1000]},
-        ) from exc
+        parsed_payload = _parse_storyboard_payload(raw_text)
+    except ScenarioDirectorError as first_exc:
+        retried_for_json = True
+        retry_body = {
+            **body,
+            "contents": [{"role": "user", "parts": [{"text": _build_request_text(payload, strict_json_retry=True)}]}],
+        }
+        retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
+        attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
+        if not isinstance(retry_response, dict) or retry_response.get("__http_error__"):
+            raise first_exc
+        raw_text = _extract_gemini_text(retry_response)
+        model_used = retry_model_used
+        parsed_payload = _parse_storyboard_payload(raw_text)
 
     try:
         storyboard_out = ScenarioDirectorStoryboardOut.model_validate(parsed_payload)
+        logger.debug("[SCENARIO_DIRECTOR] validation ok scenes=%s retry=%s", len(storyboard_out.scenes), retried_for_json)
     except ValidationError as exc:
+        logger.debug("[SCENARIO_DIRECTOR] validation failed errors=%s", len(exc.errors()))
         raise ScenarioDirectorError(
             "gemini_contract_invalid",
             "Gemini Scenario Director response does not match the required contract.",
@@ -510,6 +787,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "plannerSource": "gemini",
             "modelUsed": model_used,
             "attemptedModels": attempted_models,
+            "retriedForJson": retried_for_json,
             "rawGeminiTextPreview": raw_text[:2000],
         },
     }
