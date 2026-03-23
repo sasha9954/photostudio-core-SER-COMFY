@@ -26,6 +26,42 @@ JSON_ONLY_RETRY_SUFFIX = (
 
 logger = logging.getLogger(__name__)
 
+WEAK_SCENE_PATTERNS = (
+    "character walks",
+    "walks with determination",
+    "camera follows",
+    "tense cinematic moment",
+    "mysterious atmosphere",
+    "cinematic scene",
+    "dramatic shot",
+    "the subject moves",
+    "the character looks around",
+    "moody lighting",
+    "suspenseful moment",
+)
+GENERIC_SCENE_GOALS = {
+    "",
+    "scene",
+    "moment",
+    "transition",
+    "build mood",
+    "set tone",
+    "cinematic moment",
+    "dramatic moment",
+}
+SCENE_PURPOSES = (
+    "hook",
+    "entry",
+    "destabilization",
+    "reveal",
+    "escalation",
+    "confrontation",
+    "transition",
+    "peak image",
+    "emotional climax",
+    "final image / ending hold",
+)
+
 
 class ScenarioDirectorError(RuntimeError):
     def __init__(self, code: str, message: str, *, status_code: int = 400, details: dict[str, Any] | None = None):
@@ -538,6 +574,120 @@ def _apply_scene_count_limit(storyboard_out: ScenarioDirectorStoryboardOut) -> S
     return storyboard_out
 
 
+def _scene_text_bundle(scene: ScenarioDirectorScene) -> str:
+    return " | ".join(
+        part
+        for part in [
+            scene.scene_goal,
+            scene.frame_description,
+            scene.action_in_frame,
+            scene.camera,
+            scene.image_prompt,
+            scene.video_prompt,
+            scene.ltx_reason,
+        ]
+        if str(part or "").strip()
+    ).strip()
+
+
+def _scene_specificity_score(scene: ScenarioDirectorScene) -> int:
+    score = 0
+    bundle = _scene_text_bundle(scene).lower()
+    if len(bundle) >= 90:
+        score += 1
+    if len(scene.frame_description.split()) >= 7:
+        score += 1
+    if len(scene.action_in_frame.split()) >= 4:
+        score += 1
+    if len(scene.camera.split()) >= 3:
+        score += 1
+    if scene.location or scene.props:
+        score += 1
+    if any(token in bundle for token in ("close-up", "overhead", "hallway", "door", "machine", "blood", "reflection", "neon", "corridor", "stair", "hand", "face", "window", "light", "shadow")):
+        score += 1
+    return score
+
+
+def _is_scene_weak(scene: ScenarioDirectorScene) -> bool:
+    bundle = _scene_text_bundle(scene).lower()
+    if len(bundle) < 80:
+        return True
+    if any(pattern in bundle for pattern in WEAK_SCENE_PATTERNS):
+        return True
+    if len(scene.frame_description.split()) < 6:
+        return True
+    if len(scene.action_in_frame.split()) < 3:
+        return True
+    if len(scene.camera.split()) < 2:
+        return True
+    if _scene_specificity_score(scene) < 3:
+        return True
+    return False
+
+
+def _infer_scene_purpose(scene: ScenarioDirectorScene) -> str:
+    bundle = _scene_text_bundle(scene).lower()
+    if scene.continuation_from_previous:
+        return "transition"
+    if any(token in bundle for token in ("final", "last image", "aftertaste", "hold", "lingers", "lingering")):
+        return "final image / ending hold"
+    if any(token in bundle for token in ("climax", "breaks", "collapse", "scream", "impact", "erupts", "peak")):
+        return "emotional climax"
+    if any(token in bundle for token in ("reveal", "door opens", "discovers", "unveils", "transformation", "new space")):
+        return "reveal"
+    if any(token in bundle for token in ("confronts", "faces", "standoff", "conflict")):
+        return "confrontation"
+    if any(token in bundle for token in ("intrudes", "wrong", "glitch", "alarm", "destabil")):
+        return "destabilization"
+    if any(token in bundle for token in ("arrives", "enters", "descends", "steps into")):
+        return "entry"
+    if any(token in bundle for token in ("wide tableau", "iconic image", "silhouette", "burning frame")):
+        return "peak image"
+    if any(token in bundle for token in ("escalates", "rushes", "tightens", "rises", "closing in")):
+        return "escalation"
+    return "hook" if scene.time_start <= 0.1 else "transition"
+
+
+def _repair_missing_scene_goal(scene: ScenarioDirectorScene) -> ScenarioDirectorScene:
+    goal = str(scene.scene_goal or "").strip().lower()
+    if goal and goal not in GENERIC_SCENE_GOALS:
+        return scene
+    scene.scene_goal = _infer_scene_purpose(scene)
+    return scene
+
+
+def _filter_or_repair_weak_scenes(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    if not storyboard_out.scenes:
+        return storyboard_out
+    kept: list[ScenarioDirectorScene] = []
+    weak_count = 0
+    allow_repair_only = len(storyboard_out.scenes) <= 3
+    for scene in storyboard_out.scenes:
+        scene = _repair_missing_scene_goal(scene)
+        if not _is_scene_weak(scene):
+            kept.append(scene)
+            continue
+        weak_count += 1
+        logger.debug("[SCENARIO_DIRECTOR] weak scene detected scene_id=%s", scene.scene_id)
+        if allow_repair_only or len(storyboard_out.scenes) - weak_count < 1:
+            if not scene.scene_goal or scene.scene_goal.lower() in GENERIC_SCENE_GOALS:
+                scene.scene_goal = _infer_scene_purpose(scene)
+            kept.append(scene)
+            continue
+        if _scene_specificity_score(scene) >= 3:
+            kept.append(scene)
+    if not kept:
+        raise ScenarioDirectorError(
+            "scenario_director_empty_after_filter",
+            "Scenario Director filtered out all scenes after quality checks.",
+            status_code=502,
+        )
+    if weak_count:
+        logger.debug("[SCENARIO_DIRECTOR] weak scenes filtered count=%s", max(0, len(storyboard_out.scenes) - len(kept)))
+    storyboard_out.scenes = kept
+    return storyboard_out
+
+
 def _normalize_scene_timeline(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
     previous_end = 0.0
     for scene in storyboard_out.scenes:
@@ -567,10 +717,174 @@ def _limit_lip_sync_usage(storyboard_out: ScenarioDirectorStoryboardOut) -> Scen
     return storyboard_out
 
 
-def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+def _detect_expected_character_roles(payload: dict[str, Any]) -> list[str]:
+    refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    expected: list[str] = []
+    for role in ("character_1", "character_2", "character_3"):
+        item = refs.get(role)
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        connected = _coerce_bool(meta.get("connected"), False)
+        ref_count = len(item.get("refs") or [])
+        count = int(item.get("count") or 0)
+        if connected or ref_count > 0 or count > 0:
+            expected.append(role)
+    if len(expected) >= 2:
+        return expected[:2]
+    implied = connected_summary.get("entities") if isinstance(connected_summary.get("entities"), list) else []
+    for role in ("character_1", "character_2"):
+        if role in expected:
+            continue
+        if any(role in str(entity or "") for entity in implied):
+            expected.append(role)
+    return expected[:2]
+
+
+def _enforce_character_lock(payload: dict[str, Any], storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    expected_roles = _detect_expected_character_roles(payload)
+    if len(expected_roles) < 2 or not storyboard_out.scenes:
+        return storyboard_out
+    role_set = set(expected_roles)
+    present_roles = {actor for scene in storyboard_out.scenes for actor in scene.actors if actor in role_set}
+    missing_roles = [role for role in expected_roles if role not in present_roles]
+    if not missing_roles:
+        return storyboard_out
+    repaired_roles: list[str] = []
+    anchor_indexes = [0, max(0, len(storyboard_out.scenes) // 2), len(storyboard_out.scenes) - 1]
+    for role in missing_roles:
+        for index in anchor_indexes:
+            scene = storyboard_out.scenes[index]
+            if role not in scene.actors:
+                scene.actors.append(role)
+            if role == "character_2" and "character_1" in scene.actors:
+                if not scene.scene_goal or scene.scene_goal.lower() in GENERIC_SCENE_GOALS:
+                    scene.scene_goal = "confrontation"
+                if "watches" not in scene.action_in_frame.lower() and "faces" not in scene.action_in_frame.lower():
+                    base = scene.action_in_frame.rstrip('.')
+                    scene.action_in_frame = (
+                        f"{base} while {role} answers the tension in the space" if base else f"{role} enters the conflict and answers the tension in the space"
+                    )
+            repaired_roles.append(role)
+            break
+    if repaired_roles:
+        logger.debug("[SCENARIO_DIRECTOR] character lock repaired roles=%s", ",".join(sorted(set(repaired_roles))))
+    return storyboard_out
+
+
+def _has_overly_uniform_timing(storyboard_out: ScenarioDirectorStoryboardOut) -> bool:
+    if len(storyboard_out.scenes) < 3:
+        return False
+    durations = [max(0.1, _safe_float(scene.duration, scene.time_end - scene.time_start)) for scene in storyboard_out.scenes]
+    spread = max(durations) - min(durations)
+    repeated_fives = sum(1 for value in durations if abs(value - 5.0) <= 0.2)
+    hook_short = durations[0] <= 3.2
+    payoff_hold = max(durations[-2:]) >= 6.5
+    return spread <= 1.0 or repeated_fives >= max(3, len(durations) - 1) or not (hook_short and payoff_hold)
+
+
+def _apply_timing_variation(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    if not _has_overly_uniform_timing(storyboard_out):
+        return storyboard_out
+    scene_count = len(storyboard_out.scenes)
+    if scene_count < 2:
+        return storyboard_out
+    durations = [max(1.5, _safe_float(scene.duration, scene.time_end - scene.time_start)) for scene in storyboard_out.scenes]
+    original_total = round(sum(durations), 3)
+    durations[0] = max(1.8, round(durations[0] - 1.0, 3))
+    durations[-1] = round(durations[-1] + 0.8, 3)
+    if scene_count >= 4:
+        durations[-2] = round(durations[-2] + 0.4, 3)
+        durations[1] = max(2.5, round(durations[1] - 0.2, 3))
+    adjusted_total = sum(durations)
+    diff = round(original_total - adjusted_total, 3)
+    middle_index = min(max(1, scene_count // 2), scene_count - 2)
+    durations[middle_index] = max(2.0, round(durations[middle_index] + diff, 3))
+    cursor = 0.0
+    for scene, duration in zip(storyboard_out.scenes, durations):
+        scene.time_start = round(cursor, 3)
+        scene.duration = round(max(1.2, duration), 3)
+        scene.time_end = round(scene.time_start + scene.duration, 3)
+        cursor = scene.time_end
+    logger.debug("[SCENARIO_DIRECTOR] timing variation applied")
+    return storyboard_out
+
+
+def _rebalance_ltx_modes(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
+    if not storyboard_out.scenes:
+        return storyboard_out
+    continuation_count = 0
+    changed = False
+    for index, scene in enumerate(storyboard_out.scenes):
+        bundle = _scene_text_bundle(scene).lower()
+        target_mode = scene.ltx_mode
+        if target_mode == "lip_sync" and not _is_music_vocal_mode(scene.narration_mode):
+            target_mode = "i2v_as"
+        elif any(token in bundle for token in ("door opens", "reveal", "transformation", "enters", "entering", "new room", "state change")):
+            target_mode = "f_l_as" if any(token in bundle for token in ("hit", "pulse", "beat", "throb", "alarm")) else "f_l"
+        elif any(token in bundle for token in ("pulsing", "breathing", "machinery", "dread", "hum", "audio-reactive", "lights flicker")):
+            target_mode = "i2v_as"
+        elif scene.continuation_from_previous or scene.start_frame_source == "previous_frame":
+            continuation_count += 1
+            target_mode = "continuation"
+        else:
+            target_mode = "i2v"
+        if target_mode == "continuation" and continuation_count > max(1, len(storyboard_out.scenes) // 3):
+            target_mode = "i2v_as" if "pulse" in bundle or "hum" in bundle else "i2v"
+        if target_mode != scene.ltx_mode:
+            scene.ltx_mode = target_mode
+            changed = True
+        reason_by_mode = {
+            "i2v": "Single anchor frame with controlled motion to preserve the scene's main image.",
+            "i2v_as": "Audio-sensitive motion supports environmental pulse, breath, or tension without visible speech sync.",
+            "f_l": "A clear before-to-after visual change needs two frames for the reveal or state shift.",
+            "f_l_as": "A two-frame reveal is timed to an audio accent or impact beat.",
+            "continuation": "The shot inherits the previous frame endpoint to keep visual continuity intact.",
+            "lip_sync": "Visible vocal articulation is required and the narration mode supports it.",
+        }
+        scene.ltx_reason = _normalize_ltx_reason(reason_by_mode.get(scene.ltx_mode, ""), scene.ltx_mode, narration_mode=scene.narration_mode)
+        scene.needs_two_frames = scene.ltx_mode in {"f_l", "f_l_as"}
+        if scene.ltx_mode == "continuation" and index > 0:
+            scene.continuation_from_previous = True
+            scene.start_frame_source = "previous_frame"
+        elif scene.ltx_mode != "continuation":
+            scene.continuation_from_previous = False
+            if scene.start_frame_source == "previous_frame":
+                scene.start_frame_source = "new"
+    if changed:
+        logger.debug("[SCENARIO_DIRECTOR] ltx rebalance applied")
+    return storyboard_out
+
+
+def _assert_storyboard_quality(storyboard_out: ScenarioDirectorStoryboardOut) -> None:
+    scenes = storyboard_out.scenes or []
+    if not scenes:
+        logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
+        raise ScenarioDirectorError("scenario_director_empty_after_filter", "Scenario Director returned no usable scenes.", status_code=502)
+    if not any(str(scene.frame_description or "").strip() for scene in scenes):
+        logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
+        raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned scenes without frame_description.", status_code=502)
+    if not any(str(scene.action_in_frame or "").strip() for scene in scenes):
+        logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
+        raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned scenes without action_in_frame.", status_code=502)
+    if not any(str(scene.camera or "").strip() for scene in scenes):
+        logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
+        raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned scenes without camera direction.", status_code=502)
+    if all(_is_scene_weak(scene) for scene in scenes):
+        logger.debug("[SCENARIO_DIRECTOR] quality assert failed")
+        raise ScenarioDirectorError("scenario_director_low_quality", "Scenario Director returned only weak filler scenes.", status_code=502)
+
+
+def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
     storyboard_out = _apply_scene_count_limit(storyboard_out)
+    storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
+    storyboard_out = _enforce_character_lock(payload, storyboard_out)
+    storyboard_out = _apply_timing_variation(storyboard_out)
+    storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
     storyboard_out = _limit_lip_sync_usage(storyboard_out)
+    _assert_storyboard_quality(storyboard_out)
     return storyboard_out
 
 
@@ -600,14 +914,17 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "- Do not flatten unique tone into generic espionage thriller or safe corporate cinematic filler.\n"
         "- Preserve the environment identity from the source or refs: bunker, abyss, industrial shaft, abandoned corridor, concrete hall, strange facility, ritual room, flooded station, etc.\n"
         "SHORT-FORM DIRECTING RULES:\n"
-        "- Think like a music video director + trailer editor + cinematic storyboard artist.\n"
+        "- Think like a premium short-film director + trailer editor + music-video storyboard artist.\n"
         "- The first 1-3 seconds must hook immediately with a specific image, not vague mood text.\n"
-        "- Every scene must either reveal, intensify, or transform.\n"
+        "- Every scene must contain a specific image idea, a physical action, camera intent, and dramatic purpose.\n"
+        "- Every scene must either reveal, intensify, transform, or leave a memorable afterimage.\n"
         "- Prefer fewer strong scenes over many weak scenes.\n"
         "- Build escalation: hook -> entry/destabilization -> reveal/complication -> escalation -> peak image/emotional climax -> final image that stays in memory.\n"
-        "- Use visual specificity: exact image idea, physical action, camera intent, dramatic purpose.\n"
-        "- Avoid filler like 'character walks with determination', 'camera follows the subject', 'tense cinematic moment', 'mysterious atmosphere' unless converted into concrete story-specific visuals.\n"
-        "- Use the environment as a story actor when relevant.\n"
+        "- Avoid safe filler and generic thriller language; convert vague mood text into concrete story-specific visuals.\n"
+        "- Preserve horror, intimacy, dread, surreal industrial tension, or other source-implied genre DNA.\n"
+        "- Use the environment as an active dramatic force, not passive background.\n"
+        "- Do not flatten unique story DNA into generic content.\n"
+        "- If connected refs imply two key characters, build interplay, contrast, and relationship energy across the scenario.\n"
         "TIMING RULES:\n"
         "- Do not force evenly sliced 5-second blocks.\n"
         "- Typical useful scene duration is about 4-9 seconds, but hook, reveal, climax, and final hold may be shorter or longer when justified by the drama.\n"
@@ -630,7 +947,7 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "- Build scenes from story meaning, source-of-truth, connected refs, and director controls.\n"
         "- Keep timing coherent and use floats in seconds.\n"
         "- Every scene must include concise but useful video/audio planning fields.\n"
-        "- Keep the backend-compatible flat scene fields. If you internally think in nested visual/audio/ltx blocks, flatten them before output.\n"
+        "- Keep the backend-compatible flat scene fields only. Do not output nested visual/audio/ltx blocks in final JSON.\n"
         "Output contract:\n"
         "{\n"
         '  "story_summary": "",\n'
@@ -772,7 +1089,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             details={"validationErrors": exc.errors(), "rawPreview": raw_text[:1000]},
         ) from exc
 
-    storyboard_out = _harden_storyboard_out(storyboard_out)
+    storyboard_out = _harden_storyboard_out(storyboard_out, payload)
     director_output = _build_director_output(storyboard_out, payload)
     brain_package = _build_brain_package(storyboard_out, payload)
     return {
