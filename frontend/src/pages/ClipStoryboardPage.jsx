@@ -64,6 +64,7 @@ const PORT_COLORS = {
   video_link_in: "var(--family-link)",
   link_in: "var(--family-link)",
   video_ref_in: "var(--family-video-ref)",
+  storyboard_out: "var(--family-narrative)",
   scenario_out: "var(--family-narrative)",
   voice_script_out: "var(--family-audio)",
   brain_package_out: "var(--family-brain)",
@@ -395,6 +396,60 @@ function extractNarrativeBrainPackageForComfyBrain({ sourceNode = null, sourceHa
   return brainPackage && typeof brainPackage === "object" ? brainPackage : null;
 }
 
+function extractNarrativeStoryboardOut({ sourceNode = null, sourceHandle = "" } = {}) {
+  if (!sourceNode || sourceNode.type !== "comfyNarrative" || String(sourceHandle || "") !== "storyboard_out") return null;
+  const outputs = sourceNode?.data?.outputs && typeof sourceNode.data.outputs === "object" ? sourceNode.data.outputs : {};
+  const storyboardOut = outputs?.storyboardOut;
+  return storyboardOut && typeof storyboardOut === "object" && !Array.isArray(storyboardOut) ? storyboardOut : null;
+}
+
+function toStoryboardTimeSec(value, fallback = 0) {
+  const direct = Number(value);
+  if (Number.isFinite(direct)) return direct;
+  const match = String(value || "").match(/-?\d+(?:\.\d+)?/);
+  if (match) {
+    const parsed = Number(match[0]);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function normalizeStoryboardOutScene(scene, index) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const t0 = toStoryboardTimeSec(source.time_start, index * 5);
+  const duration = Math.max(0, toStoryboardTimeSec(source.duration, 5));
+  const t1 = Math.max(t0, toStoryboardTimeSec(source.time_end, t0 + duration));
+  return {
+    id: `storyboard-scene-${index + 1}`,
+    sceneId: String(source.scene_id || `S${index + 1}`),
+    t0,
+    t1,
+    start: t0,
+    end: t1,
+    durationSec: Math.max(0, Number((t1 - t0).toFixed(3))),
+    sceneText: String(source.scene_goal || source.frame_description || "").trim(),
+    visualDescription: String(source.frame_description || "").trim(),
+    location: String(source.location || "").trim(),
+    props: Array.isArray(source.props) ? source.props : [],
+    emotion: String(source.emotion || "").trim(),
+    imagePrompt: String(source.image_prompt || "").trim(),
+    framePrompt: String(source.image_prompt || "").trim(),
+    videoPrompt: String(source.video_prompt || "").trim(),
+    actionInFrame: String(source.action_in_frame || "").trim(),
+    cameraIdea: String(source.camera || "").trim(),
+    ltxMode: String(source.ltx_mode || "").trim(),
+    ltxReason: String(source.ltx_reason || "").trim(),
+    startFrameSource: String(source.start_frame_source || "new").trim(),
+    needsTwoFrames: !!source.needs_two_frames,
+    continuationFromPrevious: !!source.continuation_from_previous,
+    narrationMode: String(source.narration_mode || "").trim(),
+    localPhrase: source.local_phrase == null ? null : String(source.local_phrase),
+    sfx: String(source.sfx || "").trim(),
+    musicMixHint: String(source.music_mix_hint || "").trim(),
+    actors: Array.isArray(source.actors) ? source.actors : [],
+  };
+}
+
 function getAssetFileName(value = "") {
   const normalized = String(value || "").trim();
   if (!normalized) return "";
@@ -523,6 +578,7 @@ const EDGE_STYLE_BY_KIND = {
   link: { color: PORT_COLORS.link, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   link_in: { color: PORT_COLORS.link_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   video_ref_in: { color: PORT_COLORS.video_ref_in, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
+  storyboard_out: { color: PORT_COLORS.storyboard_out, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   scenario_out: { color: PORT_COLORS.scenario_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   voice_script_out: { color: PORT_COLORS.voice_script_out, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   brain_package_out: { color: PORT_COLORS.brain_package_out, strokeWidth: 2.5, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
@@ -577,7 +633,7 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
   if (targetType === "comfyBrain" && isComfyBrainInput(targetHandle)) return targetHandle;
   if (targetType === "comfyNarrative" && isNarrativeInput(targetHandle)) return targetHandle;
   if (sourceType === "comfyBrain" && isComfyBrainInput(sourceHandle)) return sourceHandle;
-  if (sourceType === "comfyNarrative" && ["scenario_out", "voice_script_out", "brain_package_out", "bg_music_prompt_out"].includes(String(sourceHandle || ""))) return sourceHandle;
+  if (sourceType === "comfyNarrative" && ["storyboard_out", "scenario_out", "voice_script_out", "brain_package_out", "bg_music_prompt_out"].includes(String(sourceHandle || ""))) return sourceHandle;
 
   if (targetType === "introFrame" && targetHandle === INTRO_FRAME_STORY_HANDLE) return "intro_context";
 
@@ -599,6 +655,10 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
 
   if (sourceType === "brainNode" && sourceHandle === "plan" && targetType === "storyboardNode" && targetHandle === "plan_in") {
     return "plan";
+  }
+
+  if (sourceType === "comfyNarrative" && sourceHandle === "storyboard_out" && targetType === "storyboardNode" && targetHandle === "plan_in") {
+    return "storyboard_out";
   }
 
   if (sourceType === "storyboardNode" && sourceHandle === "plan_out" && targetType === "assemblyNode") {
@@ -4293,6 +4353,10 @@ function RefNode({ id, data }) {
 function StoryboardPlanNode({ id, data }) {
   const scenes = data?.scenes || [];
   const isStale = !!data?.isStale;
+  const storyboardOut = data?.storyboardOut && typeof data.storyboardOut === "object" ? data.storyboardOut : null;
+  const voiceScript = String(storyboardOut?.voice_script || "").trim();
+  const musicPrompt = String(storyboardOut?.music_prompt || "").trim();
+  const storySummary = String(storyboardOut?.story_summary || "").trim();
   return (
     <>
       <Handle type="target" position={Position.Left} id="plan_in" className="clipSB_handle" style={handleStyle("plan")} />
@@ -4315,14 +4379,24 @@ function StoryboardPlanNode({ id, data }) {
         {scenes.length === 0 ? (
           <div className="clipSB_small">Пусто. Нажми «Разобрать» в BRAIN (бесплатно).</div>
         ) : (
-          <div className="clipSB_planList">
-            {scenes.map((s, idx) => (
-              <div key={getScenarioSceneStableKey(s, idx)} className="clipSB_planRow">
-                <div className="clipSB_planTime">{s.t0}s → {s.t1}s</div>
-                <div className="clipSB_planText">{getSceneUiDescription(s)}</div>
-              </div>
-            ))}
-          </div>
+          <>
+            {storySummary ? <div className="clipSB_small" style={{ marginBottom: 10 }}>{storySummary}</div> : null}
+            {voiceScript ? <div className="clipSB_hint" style={{ marginBottom: 8 }}>Voice script: {voiceScript.slice(0, 160)}{voiceScript.length > 160 ? "…" : ""}</div> : null}
+            {musicPrompt ? <div className="clipSB_hint" style={{ marginBottom: 10 }}>Music prompt: {musicPrompt.slice(0, 140)}{musicPrompt.length > 140 ? "…" : ""}</div> : null}
+            <div className="clipSB_planList">
+              {scenes.map((s, idx) => (
+                <div key={getScenarioSceneStableKey(s, idx)} className="clipSB_planRow">
+                  <div className="clipSB_planTime">{s.t0}s → {s.t1}s</div>
+                  <div className="clipSB_planText">
+                    <div>{getSceneUiDescription(s)}</div>
+                    <div className="clipSB_small" style={{ marginTop: 4 }}>
+                      {(s.ltxMode || s.musicMixHint || s.narrationMode) ? `LTX: ${s.ltxMode || "—"} • mix: ${s.musicMixHint || "—"} • narration: ${s.narrationMode || "—"}` : ""}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </NodeShell>
     </>
@@ -8994,10 +9068,25 @@ onClipSec: (nodeId, value) => {
         }
         
         if (n.type === "storyboardNode") {
+          const nodesById = new Map((Array.isArray(effectiveNodes) ? effectiveNodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
+          const incomingPlanEdge = [...effectiveEdges]
+            .reverse()
+            .find((edge) => edge?.target === n.id && String(edge?.targetHandle || "") === "plan_in") || null;
+          const sourceNode = incomingPlanEdge?.source ? (nodesById.get(incomingPlanEdge.source) || null) : null;
+          const storyboardOut = extractNarrativeStoryboardOut({
+            sourceNode,
+            sourceHandle: String(incomingPlanEdge?.sourceHandle || ""),
+          });
+          const storyboardOutValue = sourceNode?.type === "comfyNarrative" ? (storyboardOut || null) : null;
+          const storyboardScenes = Array.isArray(storyboardOut?.scenes)
+            ? storyboardOut.scenes.map((scene, idx) => normalizeStoryboardOutScene(scene, idx))
+            : null;
           return {
             ...base,
             data: {
               ...base.data,
+              storyboardOut: storyboardOutValue,
+              scenes: storyboardScenes || base.data?.scenes || [],
               onOpenScenario: (nodeId) => {
                 try {
                   window.dispatchEvent(new CustomEvent("ps:clipOpenScenario", { detail: { nodeId } }));
@@ -9170,8 +9259,17 @@ onClipSec: (nodeId, value) => {
                 });
                 nodesRef.current = reboundNodes;
                 setNodes(reboundNodes);
+                const hasStoryboardConsumer = currentEdges.some((edgeItem) =>
+                  edgeItem.source === nodeId
+                  && String(edgeItem.sourceHandle || "") === "storyboard_out"
+                  && reboundNodes.some((nodeItem) => nodeItem.id === edgeItem.target && nodeItem.type === "storyboardNode")
+                );
+                if (hasStoryboardConsumer && !plannerBrainNodeId) {
+                  notify({ type: "success", title: "Storyboard ready", message: "storyboard_out подтверждён и уже передан в Storyboard node." });
+                  return;
+                }
                 if (!plannerBrainNodeId) {
-                  notify({ type: "warning", title: "Connect COMFY BRAIN", message: "Результат подтверждён, но storyboard не запущен: подключите выход «Для мозга» к COMFY BRAIN." });
+                  notify({ type: "warning", title: "Connect Storyboard or COMFY BRAIN", message: "Результат подтверждён, но ни storyboard_out → Storyboard, ни «Для мозга» → COMFY BRAIN не подключены." });
                   return;
                 }
                 const plannerNode = reboundNodes.find((nodeItem) => nodeItem.id === plannerBrainNodeId && nodeItem.type === "comfyBrain");
@@ -11290,6 +11388,15 @@ const hydrate = useCallback((source = "unknown") => {
             return nextEdges;
           }
           return eds;
+        }
+
+        if (src.type === "comfyNarrative" && (params.sourceHandle || "") === "storyboard_out") {
+          if (dst.type !== "storyboardNode" || (params.targetHandle || "") !== "plan_in") return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === "plan_in"));
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle: params.targetHandle || "", sourceType: src.type, targetType: dst.type });
+          nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative-storyboard");
+          return nextEdges;
         }
 
         if (src.type === 'comfyBrain' && (params.sourceHandle || '') === 'comfy_plan') {
