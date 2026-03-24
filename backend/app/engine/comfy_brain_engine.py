@@ -1801,9 +1801,11 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "ROLE DOMINANCE CONTROL:\n"
         "- If roleDominanceMode='off': Gemini may decide scene dominance freely.\n"
         "- If roleDominanceMode='soft': prefer hero as primary narrative driver, prefer antagonist as source of pressure/conflict, prefer support as secondary reacting or assisting presence, but do not enforce this rigidly if scene logic clearly needs variation.\n"
-        "- If roleDominanceMode='strict': each scene should have a dominant role.\n"
-        "- If roleDominanceMode='strict': hero should dominate most scenes unless the story explicitly requires temporary absence.\n"
-        "- If roleDominanceMode='strict': antagonist should dominate key tension/opposition scenes.\n"
+        "- If roleDominanceMode='strict': each scene MUST have a dominant role.\n"
+        "- If roleDominanceMode='strict': each scene MUST clearly indicate which role drives the scene (hero, antagonist, or support).\n"
+        "- If roleDominanceMode='strict': the dominant role must actively influence the scene outcome, not just be present.\n"
+        "- If roleDominanceMode='strict': hero MUST dominate most scenes unless explicitly justified by story structure.\n"
+        "- If roleDominanceMode='strict': antagonist MUST dominate at least one scene where conflict, pressure, or opposition is clearly expressed.\n"
         "- If roleDominanceMode='strict': support should dominate only when the scene is specifically about assistance, reaction, witness perspective, or emotional support.\n"
         "- If roleDominanceMode='strict': avoid scenes where all roles are equally passive.\n"
         "- If roleDominanceMode='strict': avoid scenes where hero is present but not narratively central.\n"
@@ -2108,6 +2110,7 @@ def _estimate_scene_role_dominance(
     role_type_by_role: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     role_types = role_type_by_role if isinstance(role_type_by_role, dict) else {}
+    scene_blob = _scene_text_blob(scene)
     active_roles = [
         str(role or "").strip()
         for role in (
@@ -2131,22 +2134,28 @@ def _estimate_scene_role_dominance(
     for role in ordered_roles:
         score = 0
         role_type = str(role_types.get(role) or "unknown").strip().lower() or "unknown"
+        role_lc = role.lower()
+        explicit_mentions = scene_blob.count(role_lc) if role_lc else 0
         if role == primary_role:
             score += 3
         if role in active_roles:
             score += 2
         if role in secondary_roles:
             score += 1
+        if explicit_mentions > 0:
+            score += explicit_mentions
         if role_type == "hero":
             score += 1
+            if any(token in scene_blob for token in ["perspective", "decide", "decision", "acts", "action", "lead", "drives"]):
+                score += 1
         if role_type == "antagonist" and _scene_supports_tension(scene):
             score += 2
-        if role_type == "support" and any(token in _scene_text_blob(scene) for token in ["assist", "support", "react", "witness", "comfort"]):
+        if role_type == "support" and any(token in scene_blob for token in ["assist", "support", "react", "witness", "comfort"]):
             score += 1
         scored_roles.append((role, role_type, score))
     scored_roles.sort(key=lambda item: item[2], reverse=True)
-    dominant_role = scored_roles[0][0] if scored_roles else ""
-    dominant_role_type = scored_roles[0][1] if scored_roles else "unknown"
+    dominant_role = scored_roles[0][0] if scored_roles and scored_roles[0][2] > 0 else ""
+    dominant_role_type = scored_roles[0][1] if scored_roles and scored_roles[0][2] > 0 else "unknown"
     dominant_score = scored_roles[0][2] if scored_roles else 0
     runner_up_score = scored_roles[1][2] if len(scored_roles) > 1 else 0
     confidence_delta = max(0, dominant_score - runner_up_score)
@@ -2213,8 +2222,17 @@ def _build_role_distribution_warnings(
                 warnings.append("soft_antagonist_not_dominant_in_tension")
         if normalized_dominance_mode == "strict":
             minimum_hero_dominance = max(1, (total_scenes + 1) // 2)
+            missing_dominant_count = sum(1 for item in role_usage_by_scene if not str(item.get("dominantRole") or "").strip())
+            if missing_dominant_count > 0:
+                warnings.append("strict_missing_dominant_role")
             if hero_roles and hero_dominant_count < minimum_hero_dominance:
+                warnings.append("strict_hero_not_dominant_majority")
                 warnings.append("strict_hero_not_dominant_enough")
+            antagonist_is_dominant_any_scene = any(
+                str(item.get("dominantRoleType") or "").strip().lower() == "antagonist" for item in role_usage_by_scene
+            )
+            if antagonist_roles and not antagonist_is_dominant_any_scene:
+                warnings.append("strict_antagonist_no_dominant_scene")
             if antagonist_roles and tension_items and not any(str(item.get("dominantRoleType") or "").strip().lower() == "antagonist" for item in tension_items):
                 warnings.append("strict_antagonist_not_dominant_in_tension")
             if support_overrides_hero:
@@ -2260,6 +2278,9 @@ LOCKED_ROLE_REFINEMENT_WARNING_TRIGGERS = {
     "locked_hero_not_in_majority",
     "locked_antagonist_missing_from_tension_scenes",
     "locked_support_unused",
+    "strict_missing_dominant_role",
+    "strict_hero_not_dominant_majority",
+    "strict_antagonist_no_dominant_scene",
     "strict_hero_not_dominant_enough",
     "strict_antagonist_not_dominant_in_tension",
     "strict_support_overrides_hero",
@@ -2317,10 +2338,16 @@ def _decide_locked_role_refinement(
         return False, "skipped_role_dominance_off"
     if "antagonist" in normalized_role_types and "locked_antagonist_missing_from_tension_scenes" in warning_set:
         return True, "critical_antagonist_missing"
-    if normalized_role_dominance_mode == "strict" and "strict_antagonist_not_dominant_in_tension" in warning_set:
+    if normalized_role_dominance_mode == "strict" and (
+        "strict_antagonist_no_dominant_scene" in warning_set or "strict_antagonist_not_dominant_in_tension" in warning_set
+    ):
         return True, "strict_antagonist_dominance_missing"
-    if normalized_role_dominance_mode == "strict" and "strict_hero_not_dominant_enough" in warning_set:
+    if normalized_role_dominance_mode == "strict" and (
+        "strict_hero_not_dominant_majority" in warning_set or "strict_hero_not_dominant_enough" in warning_set
+    ):
         return True, "strict_hero_dominance_low"
+    if normalized_role_dominance_mode == "strict" and "strict_missing_dominant_role" in warning_set:
+        return True, "strict_missing_scene_dominance"
     if str(role_validation_status or "").strip().lower() == "ok":
         return False, "not_needed"
 
@@ -2408,7 +2435,7 @@ def _build_locked_role_refinement_prompt(
         "ROLE DOMINANCE CONTROL:\n"
         "- If roleDominanceMode='off': keep current role presence logic and avoid forcing dominance rewrites.\n"
         "- If roleDominanceMode='soft': prefer a dominant role per scene, but keep repairs conservative and minimal.\n"
-        "- If roleDominanceMode='strict': ensure each scene has a dominant role, hero dominates most scenes, antagonist dominates key tension/opposition scenes, support dominates only assistance/reaction/witness/emotional-support scenes, avoid passive-everyone scenes, avoid hero-present-but-not-central scenes, and avoid decorative antagonist scenes.\n"
+        "- If roleDominanceMode='strict': ensure each scene has a dominant role, each scene clearly indicates which role drives it (hero/antagonist/support), dominant role actively influences scene outcome (not passive presence), hero dominates most scenes unless explicitly justified by story structure, antagonist dominates at least one scene where conflict/pressure/opposition is clearly expressed, support dominates only assistance/reaction/witness/emotional-support scenes, avoid passive-everyone scenes, avoid hero-present-but-not-central scenes, and avoid decorative antagonist scenes.\n"
         "SCENE QUALITY RULES:\n"
         "- Maintain narrative progression (setup → tension → development → outcome or cliffhanger)\n"
         "- Do NOT just insert characters — integrate them into the action\n"
