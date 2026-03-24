@@ -13,6 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
 ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync"}
 ALLOWED_NARRATION_MODES = {"full", "duck", "pause"}
+ALLOWED_EXPLICIT_ROLE_TYPES = {"hero", "support", "antagonist", "auto"}
 DEFAULT_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 FALLBACK_TEXT_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL_FALLBACK", None) or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 LEGACY_START_FRAME_ALIASES = {
@@ -483,7 +484,13 @@ def _scene_participants(scene: ScenarioDirectorScene, role_labels: dict[str, str
 
 def _build_character_roles(payload: dict[str, Any], role_labels: dict[str, str]) -> list[dict[str, str]]:
     ordered_roles = ["character_1", "character_2", "character_3"]
-    role_copy = {
+    effective_role_types, _, _ = _resolve_effective_role_type_by_role(payload)
+    role_copy_by_type = {
+        "hero": "Главный герой / главный носитель действия",
+        "support": "Партнёр по сцене / поддерживающий акцент",
+        "antagonist": "Антагонист / контр-сила конфликта",
+    }
+    default_role_copy = {
         "character_1": "Главный герой / главный носитель действия",
         "character_2": "Партнёр по сцене / вторичный акцент",
         "character_3": "Поддерживающий персонаж или смысловой объект",
@@ -493,8 +500,78 @@ def _build_character_roles(payload: dict[str, Any], role_labels: dict[str, str])
         label = role_labels.get(role)
         if not label:
             continue
-        out.append({"name": label, "role": role_copy.get(role, "Поддерживающая роль")})
+        explicit_type = str(effective_role_types.get(role) or "").strip().lower()
+        role_copy = role_copy_by_type.get(explicit_type) or default_role_copy.get(role, "Поддерживающая роль")
+        out.append({"name": label, "role": role_copy})
     return out
+
+
+def _resolve_audio_duration_info(payload: dict[str, Any]) -> tuple[float, str]:
+    candidates = [
+        ("payload.audioDurationSec", payload.get("audioDurationSec")),
+        ("metadata.audioDurationSec", (payload.get("metadata") or {}).get("audioDurationSec") if isinstance(payload.get("metadata"), dict) else None),
+        ("source.audioDurationSec", (payload.get("source") or {}).get("audioDurationSec") if isinstance(payload.get("source"), dict) else None),
+        (
+            "source.metadata.audioDurationSec",
+            ((payload.get("source") or {}).get("metadata") or {}).get("audioDurationSec")
+            if isinstance(payload.get("source"), dict) and isinstance((payload.get("source") or {}).get("metadata"), dict)
+            else None,
+        ),
+        (
+            "metadata.audio.durationSec",
+            ((payload.get("metadata") or {}).get("audio") or {}).get("durationSec")
+            if isinstance(payload.get("metadata"), dict) and isinstance((payload.get("metadata") or {}).get("audio"), dict)
+            else None,
+        ),
+        (
+            "source.metadata.audio.durationSec",
+            (((payload.get("source") or {}).get("metadata") or {}).get("audio") or {}).get("durationSec")
+            if isinstance(payload.get("source"), dict)
+            and isinstance((payload.get("source") or {}).get("metadata"), dict)
+            and isinstance(((payload.get("source") or {}).get("metadata") or {}).get("audio"), dict)
+            else None,
+        ),
+    ]
+    for source_key, value in candidates:
+        duration = _safe_float(value, 0.0)
+        if duration > 0:
+            return duration, source_key
+    return 0.0, "missing"
+
+
+def _resolve_effective_role_type_by_role(payload: dict[str, Any]) -> tuple[dict[str, str], dict[str, str], bool]:
+    explicit_map = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
+    effective: dict[str, str] = {}
+    source_map: dict[str, str] = {}
+    role_override_applied = False
+    for role in ("character_1", "character_2", "character_3"):
+        explicit = str(explicit_map.get(role) or "").strip().lower()
+        if explicit in ALLOWED_EXPLICIT_ROLE_TYPES and explicit != "auto":
+            effective[role] = explicit
+            source_map[role] = "explicit"
+            role_override_applied = True
+            continue
+        source_map[role] = "default"
+    if not any(value == "hero" for value in effective.values()):
+        effective.setdefault("character_1", "hero")
+        source_map["character_1"] = source_map.get("character_1") if source_map.get("character_1") == "explicit" else "default"
+    return effective, source_map, role_override_applied
+
+
+def _is_audio_connected(payload: dict[str, Any]) -> bool:
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    source_mode = str(source.get("source_mode") or "").strip().lower()
+    source_origin = str(source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
+    return source_mode == "audio" and source_origin == "connected"
+
+
+def _estimate_text_overlap(text: str, anchor: str) -> float:
+    base = re.findall(r"[a-zA-Zа-яА-Я0-9_]+", str(text or "").lower())
+    ref = set(re.findall(r"[a-zA-Zа-яА-Я0-9_]+", str(anchor or "").lower()))
+    if not base or not ref:
+        return 0.0
+    shared = sum(1 for token in base if token in ref)
+    return round(shared / max(1, len(base)), 4)
 
 
 def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> dict[str, Any]:
@@ -593,7 +670,7 @@ def _build_brain_package(storyboard_out: ScenarioDirectorStoryboardOut, payload:
         "styleProfile": controls.get("styleProfile") or "realistic",
         "styleLabel": controls.get("styleProfile") or "realistic",
         "sourceMode": str(source.get("source_mode") or "audio").upper(),
-        "sourceOrigin": "connected",
+        "sourceOrigin": str(source.get("source_origin") or payload.get("sourceOrigin") or "connected"),
         "sourceLabel": source.get("source_mode") or "audio",
         "sourcePreview": source.get("source_preview") or source.get("source_value") or "",
         "connectedContext": summary,
@@ -602,6 +679,40 @@ def _build_brain_package(storyboard_out: ScenarioDirectorStoryboardOut, payload:
         "audioStrategy": storyboard_out.voice_script or storyboard_out.music_prompt,
         "directorNote": controls.get("directorNote") or "",
     }
+
+
+def _estimate_narrative_bias(
+    payload: dict[str, Any],
+    storyboard_out: ScenarioDirectorStoryboardOut,
+    *,
+    audio_connected: bool,
+    prefer_audio_over_text: bool,
+) -> tuple[str, float, float, list[str]]:
+    warnings: list[str] = []
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    director_note = str(controls.get("directorNote") or "").strip()
+    text_hint_present = bool(director_note)
+    aggregate_story = " ".join(
+        [
+            storyboard_out.story_summary,
+            storyboard_out.full_scenario,
+            storyboard_out.director_summary,
+            " ".join(scene.scene_goal for scene in storyboard_out.scenes),
+            " ".join(scene.action_in_frame for scene in storyboard_out.scenes),
+        ]
+    )
+    text_overlap = _estimate_text_overlap(aggregate_story, director_note) if text_hint_present else 0.0
+    audio_influence = 0.75 if audio_connected else 0.3
+    if prefer_audio_over_text and audio_connected:
+        audio_influence = 0.9
+    text_influence = min(1.0, 0.2 + text_overlap) if text_hint_present else 0.0
+    if audio_connected and prefer_audio_over_text and text_overlap >= 0.6:
+        warnings.append("scenario_may_be_text_led_not_audio_led")
+    if audio_influence - text_influence >= 0.2:
+        return "audio", text_influence, audio_influence, warnings
+    if text_influence - audio_influence >= 0.2:
+        return "text", text_influence, audio_influence, warnings
+    return "mixed", text_influence, audio_influence, warnings
 
 
 def _apply_scene_count_limit(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
@@ -795,6 +906,14 @@ def _limit_lip_sync_usage(storyboard_out: ScenarioDirectorStoryboardOut) -> Scen
 
 
 def _detect_expected_character_roles(payload: dict[str, Any]) -> list[str]:
+    effective_role_types, source_by_role, _ = _resolve_effective_role_type_by_role(payload)
+    explicit_roles = [
+        role
+        for role in ("character_1", "character_2", "character_3")
+        if source_by_role.get(role) == "explicit" and effective_role_types.get(role) in {"hero", "support", "antagonist"}
+    ]
+    if explicit_roles:
+        return explicit_roles[:2]
     refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
     connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
     expected: list[str] = []
@@ -817,6 +936,32 @@ def _detect_expected_character_roles(payload: dict[str, Any]) -> list[str]:
         if any(role in str(entity or "") for entity in implied):
             expected.append(role)
     return expected[:2]
+
+
+def _enforce_explicit_role_assignments(payload: dict[str, Any], storyboard_out: ScenarioDirectorStoryboardOut) -> tuple[ScenarioDirectorStoryboardOut, list[str]]:
+    effective_role_types, source_by_role, _ = _resolve_effective_role_type_by_role(payload)
+    explicit_roles = [
+        role
+        for role in ("character_1", "character_2", "character_3")
+        if source_by_role.get(role) == "explicit" and effective_role_types.get(role) in {"hero", "support", "antagonist"}
+    ]
+    if not explicit_roles:
+        return storyboard_out, []
+    warnings: list[str] = []
+    role_presence = {role: False for role in explicit_roles}
+    for scene in storyboard_out.scenes:
+        for role in explicit_roles:
+            if role in scene.actors:
+                role_presence[role] = True
+    for role in explicit_roles:
+        if role_presence.get(role):
+            continue
+        target_scene = storyboard_out.scenes[0] if storyboard_out.scenes else None
+        if target_scene:
+            target_scene.actors.append(role)
+            role_presence[role] = True
+            warnings.append(f"explicit_role_repaired:{role}")
+    return storyboard_out, warnings
 
 
 def _character_lock_candidate_score(scene: ScenarioDirectorScene, *, scene_index: int, total_scenes: int, companion_roles: set[str]) -> int:
@@ -1064,19 +1209,8 @@ def _assert_storyboard_quality(storyboard_out: ScenarioDirectorStoryboardOut) ->
 
 
 def _resolve_audio_duration_sec(payload: dict[str, Any]) -> float:
-    candidates = [
-        payload.get("audioDurationSec"),
-        (payload.get("metadata") or {}).get("audioDurationSec") if isinstance(payload.get("metadata"), dict) else None,
-        (payload.get("source") or {}).get("audioDurationSec") if isinstance(payload.get("source"), dict) else None,
-        ((payload.get("source") or {}).get("metadata") or {}).get("audioDurationSec")
-        if isinstance(payload.get("source"), dict) and isinstance((payload.get("source") or {}).get("metadata"), dict)
-        else None,
-    ]
-    for value in candidates:
-        duration = _safe_float(value, 0.0)
-        if duration > 0:
-            return duration
-    return 0.0
+    duration, _ = _resolve_audio_duration_info(payload)
+    return duration
 
 
 def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio_duration_sec: float) -> dict[str, Any]:
@@ -1153,6 +1287,7 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     storyboard_out = _apply_scene_count_limit(storyboard_out)
     storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
     storyboard_out = _enforce_character_lock(payload, storyboard_out)
+    storyboard_out, _ = _enforce_explicit_role_assignments(payload, storyboard_out)
     storyboard_out = _apply_timing_variation(storyboard_out)
     storyboard_out = _rebalance_ltx_modes(storyboard_out)
     storyboard_out = _normalize_scene_timeline(storyboard_out)
@@ -1167,18 +1302,29 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
     director_controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     connected_context_summary = payload.get("connected_context_summary", {})
     metadata = payload.get("metadata", {})
-    audio_duration_sec = _resolve_audio_duration_sec(payload)
+    audio_duration_sec, audio_duration_source = _resolve_audio_duration_info(payload)
+    source_mode = str(source.get("source_mode") or "").strip().lower()
+    source_origin = str(source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
+    audio_connected = _is_audio_connected(payload)
+    prefer_audio_over_text = _coerce_bool(director_controls.get("preferAudioOverText"), True)
+    role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
     request_text = (
         "You are Scenario Director for PhotoStudio COMFY.\n"
         "Gemini is the planning brain. Do not delegate planning to heuristics.\n"
         "Return a single JSON object only. No markdown, no commentary.\n"
         "The storyboard_out must be production-usable for downstream Storyboard execution.\n"
         "SOURCE PRIORITY (strict):\n"
-        "1) user source-of-truth / story brief / scenario note\n"
-        "2) connected visual references\n"
-        "3) director notes\n"
-        "4) project style profile\n"
-        "5) only then free dramatization\n"
+        "1) connected AUDIO (when sourceMode=AUDIO and sourceOrigin=connected)\n"
+        "2) user source-of-truth / story brief / scenario note\n"
+        "3) connected visual references\n"
+        "4) director notes\n"
+        "5) project style profile\n"
+        "6) only then free dramatization\n"
+        "AUDIO-FIRST NARRATIVE RULE:\n"
+        "- If AUDIO is connected, derive pacing, emotional contour, escalation, and narrative direction primarily from audio.\n"
+        "- Text hints (directorNote / style hints) are supporting guidance only and must not fully overwrite the audio-driven narrative.\n"
+        "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate the narrative choice.\n"
+        "- Keep text hints as framing/style polish, not as the main plot replacement.\n"
         "ANTI-DRIFT LOCKS:\n"
         "- Preserve the exact count of core characters implied by the source and refs.\n"
         "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
@@ -1233,6 +1379,9 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         '- Allowed values: "full", "duck", "pause".\n'
         '- If unsure, use "full".\n'
         '- Never output null for narration_mode and never omit narration_mode.\n'
+        "ROLE HARD RULE:\n"
+        "- If roleTypeByRole explicitly marks a role as hero/support/antagonist, you MUST preserve it in story summary, scene construction, role summary, and dominant scene behavior.\n"
+        "- Do not silently revert to default character_1 hero if explicit roleTypeByRole provides a hero/support/antagonist mapping.\n"
         "Output contract:\n"
         "{\n"
         '  "story_summary": "",\n'
@@ -1268,7 +1417,7 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "    }\n"
         "  ]\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
@@ -1355,7 +1504,9 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
                     "text": (
                         "You are the production Scenario Director for PhotoStudio COMFY. Return strict JSON only. "
                         "Hard contract: narration_mode must always be a non-null string in every scene (full|duck|pause, default full). "
-                        "If audioDurationSec > 0, scene timeline MUST span full audio from 0.0 to audioDurationSec."
+                        "If audioDurationSec > 0, scene timeline MUST span full audio from 0.0 to audioDurationSec. "
+                        "When sourceMode=AUDIO and sourceOrigin=connected, audio is the primary narrative driver. "
+                        "If roleTypeByRole contains explicit hero/support/antagonist, preserve it across summary and scenes."
                     ),
                 }
             ]
@@ -1414,9 +1565,25 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     storyboard_out = _harden_storyboard_out(storyboard_out, payload)
-    audio_duration_sec = _resolve_audio_duration_sec(payload)
+    storyboard_out, explicit_role_warnings = _enforce_explicit_role_assignments(payload, storyboard_out)
+    audio_duration_sec, audio_duration_source = _resolve_audio_duration_info(payload)
+    audio_connected = _is_audio_connected(payload)
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+    prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), True)
+    text_hint_present = bool(str(controls.get("directorNote") or "").strip())
+    effective_role_type_by_role, role_assignment_source, role_override_applied = _resolve_effective_role_type_by_role(payload)
     coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec)
     coverage_warnings: list[str] = list(coverage.get("warnings") or [])
+    audio_led_warnings: list[str] = []
+    if audio_connected and audio_duration_sec <= 0:
+        audio_led_warnings.append("audio_connected_but_duration_missing")
+    narrative_bias_estimate, text_hint_influence, audio_influence, bias_warnings = _estimate_narrative_bias(
+        payload,
+        storyboard_out,
+        audio_connected=audio_connected,
+        prefer_audio_over_text=prefer_audio_over_text,
+    )
+    audio_led_warnings.extend(bias_warnings)
     timeline_refinement_attempted = False
     timeline_refinement_succeeded = False
     if audio_duration_sec > 0 and coverage.get("timelineCoverageStatus") == "invalid":
@@ -1477,6 +1644,16 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "contractNormalizationApplied": bool(normalized_contract_fields),
             "normalizedContractFields": normalized_contract_fields,
             "audioDurationSec": coverage.get("audioDurationSec"),
+            "audioConnected": audio_connected,
+            "audioDurationSource": audio_duration_source,
+            "audioUsedAsPrimaryNarrativeDriver": bool(audio_connected and prefer_audio_over_text),
+            "textHintPresent": text_hint_present,
+            "textHintInfluence": text_hint_influence,
+            "audioInfluence": audio_influence,
+            "narrativeBiasEstimate": narrative_bias_estimate,
+            "effectiveRoleTypeByRole": effective_role_type_by_role,
+            "roleAssignmentSource": role_assignment_source,
+            "roleOverrideApplied": role_override_applied,
             "timelineStartSec": coverage.get("timelineStartSec"),
             "timelineEndSec": coverage.get("timelineEndSec"),
             "timelineCoverageSec": coverage.get("timelineCoverageSec"),
@@ -1487,6 +1664,15 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "timelineCoverageWarnings": coverage.get("warnings") or [],
             "timelineRefinementAttempted": timeline_refinement_attempted,
             "timelineRefinementSucceeded": timeline_refinement_succeeded,
-            "warnings": list(dict.fromkeys([*normalization_warnings, *coverage_warnings])),
+            "warnings": list(
+                dict.fromkeys(
+                    [
+                        *normalization_warnings,
+                        *coverage_warnings,
+                        *audio_led_warnings,
+                        *explicit_role_warnings,
+                    ]
+                )
+            ),
         },
     }

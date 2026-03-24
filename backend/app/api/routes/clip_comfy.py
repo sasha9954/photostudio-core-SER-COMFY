@@ -121,9 +121,11 @@ class ScenarioDirectorReferenceIn(BaseModel):
 
 class ScenarioDirectorSourceIn(BaseModel):
     source_mode: str = "audio"
+    source_origin: str = "connected"
     source_value: str = ""
     source_preview: str = ""
     source_label: str = ""
+    audioDurationSec: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("source_mode", mode="before")
@@ -138,6 +140,7 @@ class ScenarioDirectorControlsIn(BaseModel):
     narrativeMode: str = "cinematic_expand"
     styleProfile: str = "realistic"
     directorNote: str = ""
+    preferAudioOverText: bool = True
 
 
 class ScenarioDirectorGenerateIn(BaseModel):
@@ -145,6 +148,8 @@ class ScenarioDirectorGenerateIn(BaseModel):
     context_refs: dict[str, ScenarioDirectorReferenceIn] = Field(default_factory=dict)
     director_controls: ScenarioDirectorControlsIn = Field(default_factory=ScenarioDirectorControlsIn)
     connected_context_summary: dict[str, Any] = Field(default_factory=dict)
+    roleTypeByRole: dict[str, str] = Field(default_factory=dict)
+    audioDurationSec: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
