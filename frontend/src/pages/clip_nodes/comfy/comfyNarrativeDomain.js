@@ -84,6 +84,48 @@ function normalizeNarrativeSourceMode(mode) {
   return "audio";
 }
 
+
+function toAudioDurationSec(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return Number(numeric.toFixed(3));
+  return 0;
+}
+
+function resolveScenarioAudioContext(connectedInputs = {}, resolvedSource = {}) {
+  const audioInput = connectedInputs?.audio_in && typeof connectedInputs.audio_in === "object" ? connectedInputs.audio_in : {};
+  const meta = audioInput?.meta && typeof audioInput.meta === "object" ? audioInput.meta : {};
+  const normalizedSourceMode = normalizeNarrativeSourceMode(resolvedSource?.mode);
+  const hasAudioSource = normalizedSourceMode === "audio";
+  const audioDurationSec = toAudioDurationSec(
+    audioInput?.durationSec
+      ?? audioInput?.audioDurationSec
+      ?? meta?.durationSec
+      ?? meta?.audioDurationSec
+      ?? meta?.audio?.durationSec
+      ?? 0
+  );
+
+  const sourceOrigin = normalizeText(
+    audioInput?.origin
+      || meta?.origin
+      || meta?.sourceOrigin
+      || (hasAudioSource ? "audio_node" : "")
+  );
+
+  const mimeType = normalizeText(audioInput?.mimeType || meta?.mimeType || meta?.audio?.mimeType);
+  const fileName = normalizeText(audioInput?.fileName || meta?.fileName || meta?.audio?.fileName || audioInput?.preview);
+  const url = normalizeText(audioInput?.url || meta?.url || meta?.audio?.url || resolvedSource?.value);
+
+  return {
+    hasAudioSource,
+    audioDurationSec,
+    sourceOrigin,
+    mimeType,
+    fileName,
+    url,
+  };
+}
+
 function buildReferencePayload(input, fallbackLabel) {
   if (!input || typeof input !== "object") return null;
   const normalizedRefs = Array.isArray(input.refs)
@@ -285,6 +327,11 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
 
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
   const connectedContextSummary = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
+  const audioContext = resolveScenarioAudioContext(connectedInputs, resolvedSource);
+  const preferAudioOverText = audioContext.hasAudioSource;
+  const segmentationMode = audioContext.hasAudioSource ? "phrase-first" : "default";
+  const timelineSource = audioContext.hasAudioSource ? "audio" : "text";
+  const useAudioPhraseBoundaries = audioContext.hasAudioSource;
   const contextRefs = {
     character_1: buildReferencePayload(connectedInputs?.ref_character_1, "Character 1"),
     character_2: buildReferencePayload(connectedInputs?.ref_character_2, "Character 2"),
@@ -299,25 +346,42 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       .filter(([, roleType]) => !!roleType)
   );
 
-  return {
+  const payload = {
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
       source_value: sourceValue,
       source_preview: normalizeText(resolvedSource.preview) || sourceValue,
       source_label: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label) || "Source of truth",
+      source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+      audioDurationSec: audioContext.audioDurationSec,
+      mimeType: audioContext.mimeType,
+      fileName: audioContext.fileName,
       metadata: {
         origin: normalizeText(resolvedSource.origin) || "connected",
         label: normalizeText(resolvedSource.label),
         connectedHandle: Object.entries(connectedInputs).find(([, value]) => value && normalizeText(value.value) === sourceValue)?.[0] || "",
         activeSourceMode: connectedContextSummary.activeSourceMode || null,
+        audio: {
+          durationSec: audioContext.audioDurationSec,
+          mimeType: audioContext.mimeType,
+          fileName: audioContext.fileName,
+          url: audioContext.url || sourceValue,
+          origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+        },
       },
     },
     context_refs: Object.fromEntries(Object.entries(contextRefs).filter(([, value]) => !!value)),
+    source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+    audioDurationSec: audioContext.audioDurationSec,
     director_controls: {
       contentType: normalizeText(state.contentType) || "story",
       narrativeMode: normalizeText(state.narrativeMode) || "cinematic_expand",
       styleProfile: normalizeText(state.styleProfile) || "realistic",
       directorNote: normalizeText(state.directorNote),
+      preferAudioOverText,
+      segmentationMode,
+      timelineSource,
+      useAudioPhraseBoundaries,
     },
     connected_context_summary: connectedContextSummary,
     metadata: {
@@ -325,8 +389,28 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       sourceLabel: normalizeText(resolvedSource.sourceLabel) || normalizeText(resolvedSource.label),
       fileOrLinkMeta: connectedInputs?.video_file_in?.meta || connectedInputs?.video_link_in?.meta || connectedInputs?.audio_in?.meta || {},
       roleTypeByRole,
+      audio: {
+        durationSec: audioContext.audioDurationSec,
+        mimeType: audioContext.mimeType,
+        fileName: audioContext.fileName,
+        url: audioContext.url || sourceValue,
+        origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+      },
     },
   };
+
+  if (audioContext.hasAudioSource) {
+    console.debug("[ScenarioDirector] audio payload context", {
+      sourceMode: normalizeNarrativeSourceMode(resolvedSource.mode),
+      hasAudioSource: audioContext.hasAudioSource,
+      audioDurationSec: audioContext.audioDurationSec,
+      source_origin: audioContext.sourceOrigin || normalizeText(resolvedSource.origin) || "connected",
+      preferAudioOverText,
+      timelineSource,
+    });
+  }
+
+  return payload;
 }
 
 function formatActorLabel(actor, roleLabels) {

@@ -3,11 +3,17 @@ import json
 import logging
 import os
 import re
+import tempfile
 from typing import Any
+from urllib.parse import urlparse
+
+import requests
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from app.core.config import settings
+from app.core.static_paths import ASSETS_DIR
+from app.engine.audio_analyzer import analyze_audio, derive_audio_semantic_profile
 from app.engine.gemini_rest import post_generate_content
 
 ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
@@ -507,36 +513,224 @@ def _build_character_roles(payload: dict[str, Any], role_labels: dict[str, str])
 
 
 def _resolve_audio_duration_info(payload: dict[str, Any]) -> tuple[float, str]:
-    candidates = [
+    normalized = _normalize_audio_context(payload)
+    return _safe_float(normalized.get("audioDurationSec"), 0.0), str(normalized.get("audioDurationSource") or "missing")
+
+
+def _resolve_audio_asset_path(audio_url: str | None) -> str | None:
+    clean = str(audio_url or "").strip()
+    if not clean:
+        return None
+    parsed = urlparse(clean)
+    filename = os.path.basename(parsed.path)
+    if not filename:
+        return None
+    base = os.path.splitext(filename)[0]
+    candidates = [filename, base, f"{base}.mp3", f"{base}.wav", f"{base}.ogg", f"{base}.m4a"]
+    for name in candidates:
+        path = os.path.join(str(ASSETS_DIR), name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _normalize_audio_context(payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    source_metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    source_audio_meta = source_metadata.get("audio") if isinstance(source_metadata.get("audio"), dict) else {}
+    metadata_audio = metadata.get("audio") if isinstance(metadata.get("audio"), dict) else {}
+    controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
+
+    source_mode = str(
+        source.get("source_mode")
+        or payload.get("source_mode")
+        or payload.get("sourceMode")
+        or metadata.get("sourceMode")
+        or "audio"
+    ).strip().lower()
+    duration_candidates = [
         ("payload.audioDurationSec", payload.get("audioDurationSec")),
-        ("metadata.audioDurationSec", (payload.get("metadata") or {}).get("audioDurationSec") if isinstance(payload.get("metadata"), dict) else None),
-        ("source.audioDurationSec", (payload.get("source") or {}).get("audioDurationSec") if isinstance(payload.get("source"), dict) else None),
-        (
-            "source.metadata.audioDurationSec",
-            ((payload.get("source") or {}).get("metadata") or {}).get("audioDurationSec")
-            if isinstance(payload.get("source"), dict) and isinstance((payload.get("source") or {}).get("metadata"), dict)
-            else None,
-        ),
-        (
-            "metadata.audio.durationSec",
-            ((payload.get("metadata") or {}).get("audio") or {}).get("durationSec")
-            if isinstance(payload.get("metadata"), dict) and isinstance((payload.get("metadata") or {}).get("audio"), dict)
-            else None,
-        ),
-        (
-            "source.metadata.audio.durationSec",
-            (((payload.get("source") or {}).get("metadata") or {}).get("audio") or {}).get("durationSec")
-            if isinstance(payload.get("source"), dict)
-            and isinstance((payload.get("source") or {}).get("metadata"), dict)
-            and isinstance(((payload.get("source") or {}).get("metadata") or {}).get("audio"), dict)
-            else None,
-        ),
+        ("source.audioDurationSec", source.get("audioDurationSec")),
+        ("source.metadata.audioDurationSec", source_metadata.get("audioDurationSec")),
+        ("metadata.audioDurationSec", metadata.get("audioDurationSec")),
+        ("metadata.audio.durationSec", metadata_audio.get("durationSec")),
+        ("source.metadata.audio.durationSec", source_audio_meta.get("durationSec")),
+        ("source_metadata.audioDurationSec", (payload.get("source_metadata") or {}).get("audioDurationSec") if isinstance(payload.get("source_metadata"), dict) else None),
     ]
-    for source_key, value in candidates:
-        duration = _safe_float(value, 0.0)
-        if duration > 0:
-            return duration, source_key
-    return 0.0, "missing"
+    audio_duration_sec = 0.0
+    duration_source = "missing"
+    for key, value in duration_candidates:
+        parsed = _safe_float(value, 0.0)
+        if parsed > 0:
+            audio_duration_sec = parsed
+            duration_source = key
+            break
+
+    source_origin = str(
+        payload.get("source_origin")
+        or source.get("source_origin")
+        or source.get("origin")
+        or metadata_audio.get("origin")
+        or payload.get("sourceOrigin")
+        or ("connected" if source_mode == "audio" else "")
+    ).strip()
+    audio_url = str(
+        source.get("source_value")
+        or source.get("value")
+        or payload.get("source_value")
+        or metadata_audio.get("url")
+        or source_audio_meta.get("url")
+        or ""
+    ).strip()
+    prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), source_mode == "audio")
+    timeline_source = str(controls.get("timelineSource") or ("audio" if source_mode == "audio" else "text")).strip().lower() or "text"
+    segmentation_mode = str(controls.get("segmentationMode") or ("phrase-first" if source_mode == "audio" else "default")).strip().lower() or "default"
+    has_audio = source_mode == "audio" and bool(audio_url)
+
+    return {
+        "hasAudio": has_audio,
+        "audioUrl": audio_url or None,
+        "audioDurationSec": audio_duration_sec,
+        "audioDurationSource": duration_source,
+        "sourceMode": source_mode.upper(),
+        "sourceOrigin": source_origin or None,
+        "preferAudioOverText": prefer_audio_over_text,
+        "timelineSource": timeline_source,
+        "segmentationMode": segmentation_mode,
+        "useAudioPhraseBoundaries": _coerce_bool(controls.get("useAudioPhraseBoundaries"), source_mode == "audio"),
+    }
+
+
+def _build_audio_analysis_fallback(duration_sec: float, hint: str, source: str = "none") -> dict[str, Any]:
+    return {
+        "ok": False,
+        "audioDurationSec": _safe_float(duration_sec, 0.0),
+        "phrases": [],
+        "pauseWindows": [],
+        "energyTransitions": [],
+        "sections": [],
+        "beats": [],
+        "bars": [],
+        "source": source,
+        "hint": hint,
+        "errors": [hint] if hint else [],
+    }
+
+
+def _analyze_audio_for_scenario_director(audio_context: dict[str, Any]) -> dict[str, Any]:
+    audio_url = str(audio_context.get("audioUrl") or "").strip()
+    payload_duration = _safe_float(audio_context.get("audioDurationSec"), 0.0)
+    if not audio_url:
+        return _build_audio_analysis_fallback(payload_duration, "audio_url_missing", source="missing")
+
+    local_path = _resolve_audio_asset_path(audio_url)
+    source = "local_asset" if local_path else "http_download"
+    temp_path: str | None = None
+    errors: list[str] = []
+    try:
+        analysis = analyze_audio(local_path) if local_path else None
+        if analysis is None:
+            suffix = os.path.splitext(urlparse(audio_url).path)[1] or ".audio"
+            response = requests.get(audio_url, timeout=30)
+            response.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(response.content)
+                temp_path = tmp.name
+            analysis = analyze_audio(temp_path)
+        semantic = derive_audio_semantic_profile(analysis)
+        return {
+            "ok": True,
+            "audioDurationSec": _safe_float(analysis.get("duration"), payload_duration),
+            "phrases": analysis.get("vocalPhrases") if isinstance(analysis.get("vocalPhrases"), list) else [],
+            "pauseWindows": [
+                {"start": _safe_float(item, 0.0), "end": _safe_float(item, 0.0)}
+                for item in (analysis.get("pausePoints") or [])
+            ],
+            "energyTransitions": [{"timeSec": _safe_float(item, 0.0)} for item in (analysis.get("energyPeaks") or [])],
+            "sections": analysis.get("sections") if isinstance(analysis.get("sections"), list) else [],
+            "beats": analysis.get("beats") if isinstance(analysis.get("beats"), list) else [],
+            "bars": analysis.get("bars") if isinstance(analysis.get("bars"), list) else [],
+            "source": source,
+            "hint": "analysis_ok",
+            "errors": errors,
+            "semantic": semantic,
+        }
+    except Exception as exc:
+        errors.append(f"audio_analysis_failed:{str(exc)[:180]}")
+        return {
+            **_build_audio_analysis_fallback(payload_duration, "analysis_failed", source=source),
+            "errors": errors,
+        }
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _build_audio_timeline_guidance(audio_analysis: dict[str, Any], audio_context: dict[str, Any]) -> dict[str, Any]:
+    phrase_candidates = [
+        {"timeSec": _safe_float((phrase or {}).get("end"), 0.0), "reason": "phrase_end", "weight": 10}
+        for phrase in (audio_analysis.get("phrases") or [])
+        if _safe_float((phrase or {}).get("end"), -1) > 0
+    ]
+    pause_candidates = [
+        {"timeSec": _safe_float((pause or {}).get("start"), 0.0), "reason": "pause", "weight": 9}
+        for pause in (audio_analysis.get("pauseWindows") or [])
+        if _safe_float((pause or {}).get("start"), -1) > 0
+    ]
+    energy_candidates = [
+        {"timeSec": _safe_float((transition or {}).get("timeSec"), 0.0), "reason": "energy", "weight": 5}
+        for transition in (audio_analysis.get("energyTransitions") or [])
+        if _safe_float((transition or {}).get("timeSec"), -1) > 0
+    ]
+    section_candidates: list[dict[str, Any]] = []
+    for section in (audio_analysis.get("sections") or []):
+        start = _safe_float((section or {}).get("start"), -1)
+        end = _safe_float((section or {}).get("end"), -1)
+        if start > 0:
+            section_candidates.append({"timeSec": start, "reason": "section_start", "weight": 6})
+        if end > 0:
+            section_candidates.append({"timeSec": end, "reason": "section_end", "weight": 7})
+    return {
+        "timelineSource": "audio",
+        "segmentationMode": "phrase-first",
+        "sourceMode": audio_context.get("sourceMode"),
+        "phraseCandidates": phrase_candidates,
+        "pauseCandidates": pause_candidates,
+        "energyCandidates": energy_candidates,
+        "sectionCandidates": section_candidates,
+        "hints": [
+            "audio is source of timing truth",
+            "align boundaries to phrase endings and pauses",
+            "use section and energy transitions as secondary boundaries",
+        ],
+    }
+
+
+def _build_phrase_first_segmentation_guidance(audio_analysis: dict[str, Any], audio_context: dict[str, Any]) -> dict[str, Any]:
+    guidance = _build_audio_timeline_guidance(audio_analysis, audio_context)
+    all_candidates = [
+        *guidance.get("phraseCandidates", []),
+        *guidance.get("pauseCandidates", []),
+        *guidance.get("energyCandidates", []),
+        *guidance.get("sectionCandidates", []),
+    ]
+    ordered = sorted(
+        all_candidates,
+        key=lambda item: (_safe_float(item.get("timeSec"), 0.0), -int(item.get("weight") or 0)),
+    )
+    dedup: list[dict[str, Any]] = []
+    for item in ordered:
+        t = _safe_float(item.get("timeSec"), -1)
+        if t <= 0:
+            continue
+        if dedup and abs(_safe_float(dedup[-1].get("timeSec"), -99) - t) < 0.35:
+            if int(item.get("weight") or 0) > int(dedup[-1].get("weight") or 0):
+                dedup[-1] = item
+            continue
+        dedup.append(item)
+    guidance["boundaryCandidates"] = dedup[:80]
+    return guidance
 
 
 def _resolve_effective_role_type_by_role(payload: dict[str, Any]) -> tuple[dict[str, str], dict[str, str], bool]:
@@ -559,10 +753,9 @@ def _resolve_effective_role_type_by_role(payload: dict[str, Any]) -> tuple[dict[
 
 
 def _is_audio_connected(payload: dict[str, Any]) -> bool:
-    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
-    source_mode = str(source.get("source_mode") or "").strip().lower()
-    source_origin = str(source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
-    return source_mode == "audio" and source_origin == "connected"
+    audio_context = _normalize_audio_context(payload)
+    source_origin = str(audio_context.get("sourceOrigin") or "connected").strip().lower()
+    return bool(audio_context.get("hasAudio") and source_origin == "connected")
 
 
 def _estimate_text_overlap(text: str, anchor: str) -> float:
@@ -1213,14 +1406,18 @@ def _resolve_audio_duration_sec(payload: dict[str, Any]) -> float:
     return duration
 
 
-def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio_duration_sec: float) -> dict[str, Any]:
+def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio_duration_sec: float, *, coverage_source: str = "fallback") -> dict[str, Any]:
     if audio_duration_sec <= 0:
         return {
             "audioDurationSec": 0.0,
+            "expectedAudioDurationSec": 0.0,
+            "actualCoveredDurationSec": 0.0,
+            "coverageSource": "missing",
             "timelineStartSec": 0.0,
             "timelineEndSec": 0.0,
             "timelineCoverageSec": 0.0,
-            "timelineCoverageRatio": 0.0,
+            "timelineCoverageRatio": None,
+            "coverageRatio": None,
             "uncoveredTailSec": 0.0,
             "internalGapCount": 0,
             "timelineCoverageStatus": "ok",
@@ -1229,10 +1426,14 @@ def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio
     if not scenes:
         return {
             "audioDurationSec": audio_duration_sec,
+            "expectedAudioDurationSec": audio_duration_sec,
+            "actualCoveredDurationSec": 0.0,
+            "coverageSource": coverage_source,
             "timelineStartSec": 0.0,
             "timelineEndSec": 0.0,
             "timelineCoverageSec": 0.0,
             "timelineCoverageRatio": 0.0,
+            "coverageRatio": 0.0,
             "uncoveredTailSec": audio_duration_sec,
             "internalGapCount": 0,
             "timelineCoverageStatus": "invalid",
@@ -1272,10 +1473,14 @@ def _validate_audio_timeline_coverage(scenes: list[ScenarioDirectorScene], audio
         status = "warning"
     return {
         "audioDurationSec": round(audio_duration_sec, 3),
+        "expectedAudioDurationSec": round(audio_duration_sec, 3),
+        "actualCoveredDurationSec": round(total_coverage, 3),
+        "coverageSource": coverage_source,
         "timelineStartSec": round(first_start, 3),
         "timelineEndSec": round(last_end, 3),
         "timelineCoverageSec": round(total_coverage, 3),
         "timelineCoverageRatio": coverage_ratio,
+        "coverageRatio": coverage_ratio,
         "uncoveredTailSec": uncovered_tail,
         "internalGapCount": gap_count,
         "timelineCoverageStatus": status,
@@ -1296,17 +1501,33 @@ def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payloa
     return storyboard_out
 
 
-def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = False) -> str:
+def _build_request_text(
+    payload: dict[str, Any],
+    *,
+    audio_context: dict[str, Any] | None = None,
+    audio_analysis: dict[str, Any] | None = None,
+    audio_guidance: dict[str, Any] | None = None,
+    strict_json_retry: bool = False,
+) -> str:
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
     director_controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
     connected_context_summary = payload.get("connected_context_summary", {})
     metadata = payload.get("metadata", {})
-    audio_duration_sec, audio_duration_source = _resolve_audio_duration_info(payload)
-    source_mode = str(source.get("source_mode") or "").strip().lower()
-    source_origin = str(source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
-    audio_connected = _is_audio_connected(payload)
-    prefer_audio_over_text = _coerce_bool(director_controls.get("preferAudioOverText"), True)
+    normalized_audio = audio_context if isinstance(audio_context, dict) else _normalize_audio_context(payload)
+    runtime_analysis = audio_analysis if isinstance(audio_analysis, dict) else _build_audio_analysis_fallback(
+        _safe_float(normalized_audio.get("audioDurationSec"), 0.0), "analysis_not_requested"
+    )
+    runtime_guidance = audio_guidance if isinstance(audio_guidance, dict) else {}
+    audio_duration_sec = _safe_float(
+        runtime_analysis.get("audioDurationSec"),
+        _safe_float(normalized_audio.get("audioDurationSec"), 0.0),
+    )
+    audio_duration_source = "analysis" if _safe_float(runtime_analysis.get("audioDurationSec"), 0.0) > 0 else str(normalized_audio.get("audioDurationSource") or "missing")
+    source_mode = str(normalized_audio.get("sourceMode") or source.get("source_mode") or "").strip().lower()
+    source_origin = str(normalized_audio.get("sourceOrigin") or source.get("source_origin") or payload.get("sourceOrigin") or "connected").strip().lower()
+    audio_connected = bool(normalized_audio.get("hasAudio"))
+    prefer_audio_over_text = _coerce_bool(normalized_audio.get("preferAudioOverText"), True)
     role_type_by_role = payload.get("roleTypeByRole") if isinstance(payload.get("roleTypeByRole"), dict) else {}
     request_text = (
         "You are Scenario Director for PhotoStudio COMFY.\n"
@@ -1325,6 +1546,9 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "- Text hints (directorNote / style hints) are supporting guidance only and must not fully overwrite the audio-driven narrative.\n"
         "- If preferAudioOverText=true and audio/text conflict, audio MUST dominate the narrative choice.\n"
         "- Keep text hints as framing/style polish, not as the main plot replacement.\n"
+        "- AUDIO-FIRST SEGMENTATION: do not build evenly spaced scenes when audio analysis exists.\n"
+        "- Align scene boundaries to phrase endings first, pause windows second, then section/energy transitions.\n"
+        "- Treat directorNote/text as semantic interpretation only, not primary timing source.\n"
         "ANTI-DRIFT LOCKS:\n"
         "- Preserve the exact count of core characters implied by the source and refs.\n"
         "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
@@ -1417,7 +1641,7 @@ def _build_request_text(payload: dict[str, Any], *, strict_json_retry: bool = Fa
         "    }\n"
         "  ]\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
@@ -1496,7 +1720,32 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             status_code=503,
         )
 
-    request_text = _build_request_text(payload)
+    audio_context = _normalize_audio_context(payload)
+    audio_analysis = _build_audio_analysis_fallback(_safe_float(audio_context.get("audioDurationSec"), 0.0), "analysis_skipped")
+    audio_hints: list[str] = []
+    audio_errors: list[str] = []
+    if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" and audio_context.get("hasAudio"):
+        audio_analysis = _analyze_audio_for_scenario_director(audio_context)
+        if audio_analysis.get("ok"):
+            audio_hints.append("audio_analysis_ok")
+        else:
+            audio_hints.append(str(audio_analysis.get("hint") or "audio_analysis_failed"))
+            audio_errors.extend(audio_analysis.get("errors") or [])
+    elif str(audio_context.get("sourceMode") or "").upper() == "AUDIO":
+        audio_hints.append("audio_mode_without_audio_url")
+
+    can_use_phrase_first = bool(
+        str(audio_context.get("sourceMode") or "").upper() == "AUDIO"
+        and _coerce_bool(audio_context.get("preferAudioOverText"), True)
+        and audio_analysis.get("ok")
+        and (
+            len(audio_analysis.get("phrases") or []) > 0
+            or len(audio_analysis.get("pauseWindows") or []) > 0
+            or len(audio_analysis.get("sections") or []) > 0
+        )
+    )
+    audio_guidance = _build_phrase_first_segmentation_guidance(audio_analysis, audio_context) if can_use_phrase_first else {}
+    request_text = _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance=audio_guidance)
     body = {
         "systemInstruction": {
             "parts": [
@@ -1540,7 +1789,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         retried_for_json = True
         retry_body = {
             **body,
-            "contents": [{"role": "user", "parts": [{"text": _build_request_text(payload, strict_json_retry=True)}]}],
+            "contents": [{"role": "user", "parts": [{"text": _build_request_text(payload, audio_context=audio_context, audio_analysis=audio_analysis, audio_guidance=audio_guidance, strict_json_retry=True)}]}],
         }
         retry_response, retry_model_used, retry_attempts = _send_director_request(api_key, retry_body)
         attempted_models.extend(model for model in retry_attempts if model not in attempted_models)
@@ -1566,13 +1815,16 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
 
     storyboard_out = _harden_storyboard_out(storyboard_out, payload)
     storyboard_out, explicit_role_warnings = _enforce_explicit_role_assignments(payload, storyboard_out)
-    audio_duration_sec, audio_duration_source = _resolve_audio_duration_info(payload)
+    audio_duration_from_analysis = _safe_float(audio_analysis.get("audioDurationSec"), 0.0)
+    audio_duration_from_payload = _safe_float(audio_context.get("audioDurationSec"), 0.0)
+    audio_duration_sec = audio_duration_from_analysis or audio_duration_from_payload
+    audio_duration_source = "analysis" if audio_duration_from_analysis > 0 else ("payload" if audio_duration_from_payload > 0 else "missing")
     audio_connected = _is_audio_connected(payload)
     controls = payload.get("director_controls") if isinstance(payload.get("director_controls"), dict) else {}
-    prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), True)
+    prefer_audio_over_text = _coerce_bool(controls.get("preferAudioOverText"), _coerce_bool(audio_context.get("preferAudioOverText"), True))
     text_hint_present = bool(str(controls.get("directorNote") or "").strip())
     effective_role_type_by_role, role_assignment_source, role_override_applied = _resolve_effective_role_type_by_role(payload)
-    coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec)
+    coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
     coverage_warnings: list[str] = list(coverage.get("warnings") or [])
     audio_led_warnings: list[str] = []
     if audio_connected and audio_duration_sec <= 0:
@@ -1606,7 +1858,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
                 refinement_parsed, _, refinement_normalization_warnings = _normalize_scenario_director_scene_defaults(refinement_parsed)
                 refined_storyboard = ScenarioDirectorStoryboardOut.model_validate(refinement_parsed)
                 refined_storyboard = _harden_storyboard_out(refined_storyboard, payload)
-                refined_coverage = _validate_audio_timeline_coverage(refined_storyboard.scenes, audio_duration_sec)
+                refined_coverage = _validate_audio_timeline_coverage(refined_storyboard.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
                 if refined_coverage.get("timelineCoverageStatus") == "ok":
                     storyboard_out = refined_storyboard
                     coverage = refined_coverage
@@ -1644,9 +1896,24 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "contractNormalizationApplied": bool(normalized_contract_fields),
             "normalizedContractFields": normalized_contract_fields,
             "audioDurationSec": coverage.get("audioDurationSec"),
+            "audioDurationSec_payload": audio_duration_from_payload,
+            "audioDurationSec_analysis": audio_duration_from_analysis,
             "audioConnected": audio_connected,
             "audioDurationSource": audio_duration_source,
             "audioUsedAsPrimaryNarrativeDriver": bool(audio_connected and prefer_audio_over_text),
+            "audioSourceMode": audio_context.get("sourceMode"),
+            "preferAudioOverText": prefer_audio_over_text,
+            "timelineSource": audio_context.get("timelineSource"),
+            "segmentationMode": audio_context.get("segmentationMode"),
+            "audioAnalysisOk": bool(audio_analysis.get("ok")),
+            "phraseCount": len(audio_analysis.get("phrases") or []),
+            "pauseCount": len(audio_analysis.get("pauseWindows") or []),
+            "sectionCount": len(audio_analysis.get("sections") or []),
+            "energyTransitionCount": len(audio_analysis.get("energyTransitions") or []),
+            "usedPhraseFirstSegmentation": can_use_phrase_first,
+            "sceneBoundaryStrategy": "phrase_pause_energy_section" if can_use_phrase_first else ("audio_duration_fallback" if str(audio_context.get("sourceMode") or "").upper() == "AUDIO" else "text_default"),
+            "audioAnalysisSource": audio_analysis.get("source"),
+            "audioAnalysisHint": audio_analysis.get("hint"),
             "textHintPresent": text_hint_present,
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
@@ -1658,12 +1925,19 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "timelineEndSec": coverage.get("timelineEndSec"),
             "timelineCoverageSec": coverage.get("timelineCoverageSec"),
             "timelineCoverageRatio": coverage.get("timelineCoverageRatio"),
+            "coverageRatio": coverage.get("coverageRatio"),
+            "expectedAudioDurationSec": coverage.get("expectedAudioDurationSec"),
+            "actualCoveredDurationSec": coverage.get("actualCoveredDurationSec"),
+            "coverageSource": coverage.get("coverageSource"),
             "uncoveredTailSec": coverage.get("uncoveredTailSec"),
             "internalGapCount": coverage.get("internalGapCount"),
             "timelineCoverageStatus": coverage.get("timelineCoverageStatus"),
             "timelineCoverageWarnings": coverage.get("warnings") or [],
+            "sceneBoundaryCandidatesSample": (audio_guidance.get("boundaryCandidates") or [])[:12] if isinstance(audio_guidance, dict) else [],
             "timelineRefinementAttempted": timeline_refinement_attempted,
             "timelineRefinementSucceeded": timeline_refinement_succeeded,
+            "hints": list(dict.fromkeys([*audio_hints, *(audio_guidance.get("hints") or [])])) if isinstance(audio_guidance, dict) else audio_hints,
+            "errors": audio_errors,
             "warnings": list(
                 dict.fromkeys(
                     [
