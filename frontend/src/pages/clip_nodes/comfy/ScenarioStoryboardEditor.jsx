@@ -15,6 +15,8 @@ const TOP_TABS = [
   { id: "debug", label: "Debug" },
 ];
 
+const BG_AUDIO_ITEM_ID = "__bg_audio__";
+
 function fmtSec(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "—";
@@ -58,14 +60,22 @@ export default function ScenarioStoryboardEditor({
   onUpdateMusic,
   onGenerateMusic,
 }) {
-  const [selected, setSelected] = useState(0);
+  const [activeSelectionType, setActiveSelectionType] = useState("scene");
+  const [activeSelectionId, setActiveSelectionId] = useState("");
   const [activeTab, setActiveTab] = useState("phrases");
   const [tabPanelOpen, setTabPanelOpen] = useState(true);
   const masterAudioRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
-    setSelected(0);
+    const firstSceneId = String(scenes?.[0]?.sceneId || "").trim();
+    if (firstSceneId) {
+      setActiveSelectionType("scene");
+      setActiveSelectionId(firstSceneId);
+    } else {
+      setActiveSelectionType("bg_audio");
+      setActiveSelectionId(BG_AUDIO_ITEM_ID);
+    }
   }, [open, nodeId]);
 
   const safeScenes = Array.isArray(scenes) ? scenes : [];
@@ -84,7 +94,7 @@ export default function ScenarioStoryboardEditor({
     }));
   }, [safeAudioData?.phrases, safeScenes]);
 
-  const safeIndex = safeScenes.length ? Math.min(Math.max(selected, 0), safeScenes.length - 1) : -1;
+  const safeIndex = safeScenes.findIndex((scene, idx) => String(scene?.sceneId || `S${idx + 1}`) === activeSelectionId);
   const selectedScene = safeIndex >= 0 ? safeScenes[safeIndex] : null;
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
@@ -115,6 +125,7 @@ export default function ScenarioStoryboardEditor({
   const imageStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.imageStatus || selectedRuntime?.status, assetUrl: selectedScene?.imageUrl });
   const videoStatus = resolveBlockStatus({ runtimeStatus: selectedRuntime?.videoStatus || selectedRuntime?.status || selectedScene?.videoStatus, assetUrl: selectedScene?.videoUrl });
   const musicStatus = resolveBlockStatus({ runtimeStatus: safeAudioData?.musicStatus, assetUrl: safeAudioData?.musicUrl });
+  const isBgAudioSelected = activeSelectionType === "bg_audio";
 
   const tabContent = (() => {
     if (activeTab === "scenario") {
@@ -210,12 +221,40 @@ export default function ScenarioStoryboardEditor({
 
         <div className="clipSB_scenarioBody clipSB_scenarioEditorBody">
           <div className="clipSB_scenarioList clipSB_scenarioEditorSceneList">
+            <button
+              className={`clipSB_scenarioItem clipSB_scenarioBgAudioItem ${isBgAudioSelected ? "isActive" : ""}`}
+              type="button"
+              onClick={() => {
+                setActiveSelectionType("bg_audio");
+                setActiveSelectionId(BG_AUDIO_ITEM_ID);
+              }}
+            >
+              <div className="clipSB_scenarioItemTop">
+                <div className="clipSB_storyboardSceneId">[ АУДИО ФОН ]</div>
+              </div>
+              <div className="clipSB_scenarioItemText">Глобальный музыкальный слой для всего ролика.</div>
+              <div className="clipSB_scenarioEditorBadgeRow">
+                <span className="clipSB_tag">bg audio</span>
+                <span className="clipSB_tag">music</span>
+                <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${musicStatus}`}>{musicStatus}</span>
+              </div>
+              <div className="clipSB_small clipSB_scenarioBgAudioMeta">глобальный слой</div>
+            </button>
+
             {safeScenes.map((scene, idx) => {
               const sceneId = String(scene?.sceneId || `S${idx + 1}`);
               const runtime = safeGeneration[sceneId] && typeof safeGeneration[sceneId] === "object" ? safeGeneration[sceneId] : {};
               const status = resolveBlockStatus({ runtimeStatus: runtime?.status || runtime?.videoStatus || runtime?.imageStatus, assetUrl: scene?.videoUrl || scene?.imageUrl });
               return (
-                <button key={sceneId} className={`clipSB_scenarioItem ${idx === safeIndex ? "isActive" : ""}`} type="button" onClick={() => setSelected(idx)}>
+                <button
+                  key={sceneId}
+                  className={`clipSB_scenarioItem ${activeSelectionType === "scene" && sceneId === activeSelectionId ? "isActive" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    setActiveSelectionType("scene");
+                    setActiveSelectionId(sceneId);
+                  }}
+                >
                   <div className="clipSB_scenarioItemTop">
                     <div className="clipSB_storyboardSceneId">[ {sceneId} · {fmtSec(scene?.audioSliceStartSec ?? scene?.t0)}–{fmtSec(scene?.audioSliceEndSec ?? scene?.t1)} ]</div>
                   </div>
@@ -230,53 +269,53 @@ export default function ScenarioStoryboardEditor({
           </div>
 
           <div className="clipSB_scenarioEdit clipSB_scenarioEditorWork">
-            {!selectedScene ? <div className="clipSB_empty">Нет выбранной сцены</div> : (
-              <>
-                <div className="clipSB_scenarioEditorGlobalAudio">
-                  <div className="clipSB_scenarioEditorBlockHead">
-                    <h4>ФОНОВОЕ АУДИО</h4>
-                    <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${musicStatus}`}>{musicStatus}</span>
-                  </div>
-                  <div className="clipSB_small">MASTER AUDIO • duration: {fmtSec(safeAudioData?.durationSec)}s</div>
-                  {safeAudioData?.audioUrl ? (
-                    <audio ref={masterAudioRef} controls className="clipSB_audioPlayer" src={safeAudioData.audioUrl} />
-                  ) : (
-                    <div className="clipSB_hint">Master audio отсутствует.</div>
-                  )}
+            {isBgAudioSelected ? (
+              <div className="clipSB_scenarioEditorBlock">
+                <div className="clipSB_scenarioEditorBlockHead">
+                  <h4>ФОНОВОЕ АУДИО</h4>
+                  <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${musicStatus}`}>{musicStatus}</span>
+                </div>
+                <div className="clipSB_small">MASTER AUDIO • duration: {fmtSec(safeAudioData?.durationSec)}s</div>
+                {safeAudioData?.audioUrl ? (
+                  <audio ref={masterAudioRef} controls className="clipSB_audioPlayer" src={safeAudioData.audioUrl} />
+                ) : (
+                  <div className="clipSB_hint">Master audio отсутствует.</div>
+                )}
+                <textarea
+                  className="clipSB_textarea"
+                  rows={2}
+                  value={String(safeAudioData?.musicPromptRu || "")}
+                  onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value })}
+                  placeholder="musicPromptRu"
+                />
+                <details>
+                  <summary>EN</summary>
                   <textarea
                     className="clipSB_textarea"
                     rows={2}
-                    value={String(safeAudioData?.musicPromptRu || "")}
-                    onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value })}
-                    placeholder="musicPromptRu"
+                    value={String(safeAudioData?.musicPromptEn || "")}
+                    onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptEn: event.target.value })}
+                    placeholder="musicPromptEn"
                   />
-                  <details>
-                    <summary>EN</summary>
-                    <textarea
-                      className="clipSB_textarea"
-                      rows={2}
-                      value={String(safeAudioData?.musicPromptEn || "")}
-                      onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptEn: event.target.value })}
-                      placeholder="musicPromptEn"
-                    />
-                  </details>
-                  <div className="clipSB_scenarioEditorBtnRow">
-                    <button className="clipSB_btn" type="button" onClick={() => onGenerateMusic?.(nodeId)} disabled={musicStatus === "loading"}>
-                      {musicStatus === "loading" ? "Генерирую..." : "Сгенерировать музыку"}
-                    </button>
-                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateMusic?.(nodeId, { musicUrl: "", musicStatus: "idle" })}>Удалить</button>
-                  </div>
-                  {safeAudioData?.musicUrl ? <audio controls className="clipSB_audioPlayer" src={safeAudioData.musicUrl} /> : null}
-                  <label className="clipSB_checkRow">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(safeAudioData?.useInMontage)}
-                      onChange={(event) => onUpdateMusic?.(nodeId, { useInMontage: event.target.checked })}
-                    />
-                    <span>использовать в монтаже</span>
-                  </label>
+                </details>
+                <div className="clipSB_scenarioEditorBtnRow">
+                  <button className="clipSB_btn" type="button" onClick={() => onGenerateMusic?.(nodeId)} disabled={musicStatus === "loading"}>
+                    {musicStatus === "loading" ? "Генерирую..." : "Сгенерировать музыку"}
+                  </button>
+                  <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateMusic?.(nodeId, { musicUrl: "", musicStatus: "idle" })}>Удалить</button>
                 </div>
-
+                {safeAudioData?.musicUrl ? <audio controls className="clipSB_audioPlayer" src={safeAudioData.musicUrl} /> : null}
+                <label className="clipSB_checkRow">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(safeAudioData?.useInMontage)}
+                    onChange={(event) => onUpdateMusic?.(nodeId, { useInMontage: event.target.checked })}
+                  />
+                  <span>использовать в монтаже</span>
+                </label>
+              </div>
+            ) : !selectedScene ? <div className="clipSB_empty">Нет выбранной сцены</div> : (
+              <>
                 <div className="clipSB_scenarioEditorSceneTitle">Сцена {selectedSceneId}</div>
 
                 <div className="clipSB_scenarioEditorBlock">
