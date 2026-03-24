@@ -41,6 +41,20 @@ class RenderMode(str, Enum):
     lip_sync = "lip_sync"
 
 
+SCENE_INTENTS = (
+    "setup",
+    "pursuit",
+    "confrontation",
+    "threat",
+    "escape",
+    "support",
+    "dialogue",
+    "reveal",
+    "observation",
+    "transition",
+)
+
+
 class AudioLayerRef(BaseModel):
     kind: str
     url: str | None = None
@@ -141,6 +155,7 @@ class PlannedScene(BaseModel):
     end_sec: float
     duration_sec: float
     summary: str
+    intent: str | None = None
     narration_mode: NarrationMode = NarrationMode.full
     audio_segment_type: AudioSegmentType = AudioSegmentType.unknown
     continuation_from_prev: bool = False
@@ -190,6 +205,37 @@ def _normalize_project_mode(value: Any) -> ProjectMode:
         if raw == mode.value:
             return mode
     return ProjectMode.narration_first
+
+
+def _estimate_scene_intent(scene: dict[str, Any], scene_index: int) -> tuple[str, float]:
+    scene_blob = " ".join(
+        [
+            _clean_str(scene.get("intent")),
+            _clean_str(scene.get("sceneText")),
+            _clean_str(scene.get("visualDescription")),
+            _clean_str(scene.get("sceneMeaning")),
+            _clean_str(scene.get("summary")),
+            _clean_str(scene.get("title")),
+            _clean_str(scene.get("sceneNarrativeStep")),
+            _clean_str(scene.get("sceneGoal")),
+        ]
+    ).lower()
+    keyword_map = [
+        ("pursuit", ("chase", "run", "follow")),
+        ("confrontation", ("fight", "argue", "attack")),
+        ("threat", ("danger", "fear", "control")),
+        ("escape", ("escape", "flee")),
+        ("support", ("help", "comfort")),
+        ("dialogue", ("talk", "say", "explain")),
+        ("reveal", ("discover", "realize")),
+        ("observation", ("watch", "observe")),
+    ]
+    for intent, keywords in keyword_map:
+        if any(keyword in scene_blob for keyword in keywords):
+            return intent, 0.82
+    if scene_index == 0:
+        return "setup", 0.58
+    return "transition", 0.5
 
 
 def build_project_planning_input(payload: dict[str, Any]) -> ProjectPlanningInput:
@@ -479,6 +525,8 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
     raw_scenes = planner_result.get("scenes") if isinstance(planner_result.get("scenes"), list) else []
     planned_scenes: list[PlannedScene] = []
     render_tasks: list[LtxRenderTask] = []
+    scene_intent_by_scene: list[dict[str, str]] = []
+    scene_intent_confidence: list[dict[str, Any]] = []
     previous_shot_id: str | None = None
 
     for idx, scene in enumerate(raw_scenes):
@@ -493,6 +541,9 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
         lipsync_policy, has_vocal_rhythm = _compute_lipsync_policy(scene, context, audio_segment_type)
         render_mode, render_reason = _select_render_mode(scene, project_input, audio_segment_type, has_vocal_rhythm, lipsync_policy)
         shot_id = f"{scene_id}__shot_001"
+        scene_intent_raw = _clean_str(scene.get("intent")).lower()
+        estimated_intent, estimated_confidence = _estimate_scene_intent(scene, idx)
+        scene_intent = scene_intent_raw if scene_intent_raw in SCENE_INTENTS else estimated_intent
         continuation = render_mode == RenderMode.continuation
         start_frame_source = "previous_shot_last_frame" if continuation else "scene_keyframe"
         shot = PlannedShot(
@@ -528,12 +579,20 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             end_sec=round(end_sec, 3),
             duration_sec=round(duration_sec, 3),
             summary=_clean_str(scene.get("sceneText") or scene.get("visualDescription") or scene.get("sceneMeaning") or scene.get("title") or scene_id),
+            intent=scene_intent,
             narration_mode=narration_mode,
             audio_segment_type=audio_segment_type,
             continuation_from_prev=continuation,
             shots=[shot],
         )
         planned_scenes.append(planned_scene)
+        scene_intent_by_scene.append({"sceneId": scene_id, "intent": scene_intent})
+        scene_intent_confidence.append({
+            "sceneId": scene_id,
+            "intent": scene_intent,
+            "confidence": round(0.95, 2) if scene_intent_raw in SCENE_INTENTS else round(estimated_confidence, 2),
+            "source": "planner" if scene_intent_raw in SCENE_INTENTS else "estimated",
+        })
         validation.errors.extend(shot_validation.errors)
         validation.warnings.extend(shot_validation.warnings)
         previous_shot_id = shot_id
@@ -554,5 +613,8 @@ def build_audio_first_planner_output(project_input: ProjectPlanningInput, planne
             "analysisSourceOfTruth": context.analysis_source_of_truth,
             "auxiliaryAudioAnalysis": context.auxiliary_audio_analysis,
             "globalMusicTrackGeneralized": bool(project_input.global_music_track_url),
+            "sceneIntentByScene": scene_intent_by_scene,
+            "sceneIntentConfidence": scene_intent_confidence,
+            "sceneIntentWarnings": [],
         },
     )
