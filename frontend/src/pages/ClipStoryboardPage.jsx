@@ -51,6 +51,7 @@ import {
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
 import { buildScenarioDirectorRequestPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import { buildScenarioPreviewInput, normalizeScenarioStoryboardPackage } from "./clip_nodes/comfy/scenarioStoryboardDomain";
+import ScenarioStoryboardEditor from "./clip_nodes/comfy/ScenarioStoryboardEditor";
 
 
 // -------------------------
@@ -5397,27 +5398,13 @@ const [scenarioEditor, setScenarioEditor] = useState({
   nodeId: null,
   selected: 0,
 });
+const [activeScenarioStoryboardId, setActiveScenarioStoryboardId] = useState(null);
+const [isScenarioStoryboardOpen, setIsScenarioStoryboardOpen] = useState(false);
 const [comfyEditor, setComfyEditor] = useState({
   open: false,
   nodeId: null,
   selected: 0,
 });
-
-// Open scenario overlay from node button (custom event)
-useEffect(() => {
-  const handler = (e) => {
-    const nodeId = e?.detail?.nodeId || null;
-    setScenarioEditor((s) => ({
-      ...s,
-      open: true,
-      nodeId,
-      selected: 0,
-    }));
-  };
-
-  window.addEventListener("ps:clipOpenScenario", handler);
-  return () => window.removeEventListener("ps:clipOpenScenario", handler);
-}, []);
 
 useEffect(() => {
   if (!brainGuideOpen) return;
@@ -5512,8 +5499,12 @@ useEffect(() => {
     []
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
-  const [edges, setEdges] = useEdgesState(defaultEdges);
+const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
+const [edges, setEdges] = useEdgesState(defaultEdges);
+const onOpenScenarioStoryboard = useCallback((nodeId) => {
+  setActiveScenarioStoryboardId(nodeId || null);
+  setIsScenarioStoryboardOpen(true);
+}, []);
 
   useEffect(() => {
     nodesCountRef.current = nodes.length;
@@ -5523,6 +5514,11 @@ const scenarioNode = useMemo(() => {
   if (scenarioEditor.nodeId) return nodes.find((n) => n.id === scenarioEditor.nodeId) || null;
   return nodes.find((n) => n.type === "storyboardNode") || null;
 }, [nodes, scenarioEditor.nodeId]);
+
+const activeScenarioStoryboardNode = useMemo(() => {
+  if (activeScenarioStoryboardId) return nodes.find((n) => n.id === activeScenarioStoryboardId && n.type === "scenarioStoryboard") || null;
+  return nodes.find((n) => n.type === "scenarioStoryboard") || null;
+}, [activeScenarioStoryboardId, nodes]);
 
 const scenarioBrainRefs = useMemo(() => {
   if (!scenarioNode?.id) return { character: [], location: [], style: [], props: [] };
@@ -9468,6 +9464,25 @@ onClipSec: (nodeId, value) => {
             ? normalizedPackage.scenes
             : (Array.isArray(base?.data?.scenes) ? base.data.scenes : []);
           const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, base.data?.sceneGeneration);
+          const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
+          const phraseBreakdown = scenes.map((scene, idx) => ({
+            sceneId: String(scene?.sceneId || `S${idx + 1}`),
+            startSec: Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0),
+            endSec: Number(scene?.audioSliceEndSec ?? scene?.t1 ?? scene?.t0 ?? 0),
+            text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
+            energy: String(scene?.emotionRu || "").trim(),
+            context: String(scene?.locationRu || "").trim(),
+          }));
+          const audioData = {
+            ...currentAudioData,
+            audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || "").trim(),
+            durationSec: Number(currentAudioData.durationSec ?? normalizedPackage?.audioDurationSec ?? 0) || 0,
+            phrases: phraseBreakdown,
+            musicPromptRu: String(currentAudioData.musicPromptRu || normalizedPackage?.musicPromptRu || "").trim(),
+            musicPromptEn: String(currentAudioData.musicPromptEn || normalizedPackage?.musicPromptEn || "").trim(),
+            musicStatus: String(currentAudioData.musicStatus || "idle"),
+            musicUrl: String(currentAudioData.musicUrl || "").trim(),
+          };
           return {
             ...base,
             data: {
@@ -9475,6 +9490,8 @@ onClipSec: (nodeId, value) => {
               scenes,
               sceneGeneration,
               scenarioPackage: normalizedPackage,
+              audioData,
+              onOpenScenarioStoryboard: onOpenScenarioStoryboard,
               onScenarioSceneUpdate: (nodeId, sceneId, patch = {}) => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
@@ -9509,6 +9526,56 @@ onClipSec: (nodeId, value) => {
                     },
                   };
                 })));
+              },
+              onScenarioMusicUpdate: (nodeId, patch = {}) => {
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                  if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                  const audioDataNow = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      audioData: {
+                        ...audioDataNow,
+                        ...patch,
+                      },
+                    },
+                  };
+                })));
+              },
+              onScenarioMusicGenerate: (nodeId) => {
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                  if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                  const audioDataNow = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                  return {
+                    ...nodeItem,
+                    data: {
+                      ...nodeItem.data,
+                      audioData: {
+                        ...audioDataNow,
+                        musicStatus: "loading",
+                      },
+                    },
+                  };
+                })));
+                window.setTimeout(() => {
+                  setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                    if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                    const audioDataNow = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                    const fallbackMusic = String(audioDataNow?.audioUrl || "").trim();
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        audioData: {
+                          ...audioDataNow,
+                          musicStatus: fallbackMusic ? "done" : "error",
+                          musicUrl: fallbackMusic,
+                        },
+                      },
+                    };
+                  })));
+                }, 1100);
               },
             },
           };
@@ -10881,6 +10948,7 @@ return base;
       buildComfyStoryboardPatch,
       clearClipStoryboardStorageForCurrentAccount,
       stopScenarioVideoPolling,
+      onOpenScenarioStoryboard,
       accountKey,
       STORE_KEY,
     ]
@@ -12769,6 +12837,19 @@ const hydrate = useCallback((source = "unknown") => {
           </div>
         </div>
       ) : null}
+
+      <ScenarioStoryboardEditor
+        open={isScenarioStoryboardOpen}
+        nodeId={activeScenarioStoryboardNode?.id || null}
+        scenes={activeScenarioStoryboardNode?.data?.scenes || []}
+        sceneGeneration={activeScenarioStoryboardNode?.data?.sceneGeneration || {}}
+        audioData={activeScenarioStoryboardNode?.data?.audioData || {}}
+        onClose={() => setIsScenarioStoryboardOpen(false)}
+        onUpdateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneUpdate}
+        onGenerateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneGenerate}
+        onUpdateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicUpdate}
+        onGenerateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicGenerate}
+      />
 
       {comfyEditor.open ? (
         <div className="clipSB_scenarioOverlay" onClick={() => setComfyEditor((state) => ({ ...state, open: false }))}>
