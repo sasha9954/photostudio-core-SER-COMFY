@@ -20,6 +20,7 @@ from app.engine.audio_first_planner import (
     ProjectMode,
     ProjectPlanningInput,
     RenderMode,
+    SCENE_INTENTS,
     build_audio_planning_context,
     validate_project_input,
 )
@@ -91,6 +92,7 @@ class GeminiPlannerScene(BaseModel):
     scene_id: str
     scene_mode: str
     summary: str
+    intent: str | None = None
     start_sec: float
     end_sec: float
     duration_sec: float
@@ -345,6 +347,7 @@ def _build_gemini_planner_output_contract_dict(planner_input: GeminiPlannerInput
                 "scene_id": "scene_001",
                 "scene_mode": "string",
                 "summary": "string",
+                "intent": "setup|pursuit|confrontation|threat|escape|support|dialogue|reveal|observation|transition|null",
                 "start_sec": 0.0,
                 "end_sec": 4.2,
                 "duration_sec": 4.2,
@@ -416,7 +419,19 @@ def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) 
         "- If role_dominance_mode='off': Gemini may decide scene dominance freely.\n"
         "- If role_dominance_mode='soft': prefer hero as primary narrative driver, antagonist as source of pressure/conflict, support as secondary reacting or assisting presence, but do not enforce rigidly when scene logic clearly needs variation.\n"
         "- If role_dominance_mode='strict': each scene MUST have a dominant role. Each scene MUST clearly indicate which role drives the scene (hero, antagonist, or support). The dominant role must actively influence the scene outcome, not just be present. Hero MUST dominate most scenes unless explicitly justified by story structure. Antagonist MUST dominate at least one scene where conflict, pressure, or opposition is clearly expressed. Support should dominate only when the scene is specifically about assistance, reaction, witness perspective, or emotional support.\n"
-        "- If role_dominance_mode='strict': avoid scenes where all roles are equally passive, avoid scenes where hero is present but not narratively central, avoid antagonist being decorative, and respect locked role hierarchy across scene progression."
+        "- If role_dominance_mode='strict': avoid scenes where all roles are equally passive, avoid scenes where hero is present but not narratively central, avoid antagonist being decorative, and respect locked role hierarchy across scene progression.\n"
+        "SCENE INTENT LOGIC:\n"
+        f"- Each scene should have a clear purpose (intent). Use only these intents when possible: {', '.join(SCENE_INTENTS)}.\n"
+        "- Do not leave scenes purpose-less.\n"
+        "- Prefer clear progression across scenes: setup -> tension -> escalation -> outcome.\n"
+        "ROLE + INTENT ALIGNMENT:\n"
+        "- Hero-driven scenes often use setup, escape, reveal, dialogue.\n"
+        "- Antagonist-driven scenes often use threat, pursuit, confrontation.\n"
+        "- Support-driven scenes often use support, dialogue, observation.\n"
+        "STRICT MODE ADDITION:\n"
+        "- If role_dominance_mode='strict': each scene MUST have a clear intent.\n"
+        "- If role_dominance_mode='strict': the dominant role should align with scene intent.\n"
+        "- If role_dominance_mode='strict': avoid scenes where intent is unclear or neutral."
     )
 
 
@@ -856,6 +871,7 @@ def _build_compatibility_scene(scene: PlannedScene) -> dict[str, Any]:
         "sceneMode": scene.scene_mode,
         "narrationMode": scene.narration_mode.value,
         "audioSegmentType": scene.audio_segment_type.value,
+        "intent": scene.intent,
         "continuationFromPrev": scene.continuation_from_prev,
         "cameraType": first_shot.framing if first_shot else "",
         "shotType": first_shot.shot_type if first_shot else "",
@@ -1018,6 +1034,7 @@ def map_gemini_plan_to_canonical_audio_first_output(
             end_sec=_round_sec(scene.end_sec),
             duration_sec=_round_sec(scene.duration_sec),
             summary=scene.summary or scene.scene_id,
+            intent=(_clean_str(scene.intent).lower() or None),
             narration_mode=scene.narration_mode,
             audio_segment_type=_convert_audio_segment_type(scene.audio_segment_type),
             continuation_from_prev=scene.continuation_from_prev,
