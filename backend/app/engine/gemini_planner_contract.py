@@ -415,7 +415,7 @@ def build_gemini_planner_system_rules(planner_input: GeminiPlannerInputPackage) 
         "- planner_input.role_dominance_mode is one of 'off', 'soft', or 'strict'.\n"
         "- If role_dominance_mode='off': Gemini may decide scene dominance freely.\n"
         "- If role_dominance_mode='soft': prefer hero as primary narrative driver, antagonist as source of pressure/conflict, support as secondary reacting or assisting presence, but do not enforce rigidly when scene logic clearly needs variation.\n"
-        "- If role_dominance_mode='strict': each scene should have a dominant role. Hero should dominate most scenes unless story explicitly requires temporary absence. Antagonist should dominate key tension/opposition scenes. Support should dominate only when the scene is specifically about assistance, reaction, witness perspective, or emotional support.\n"
+        "- If role_dominance_mode='strict': each scene MUST have a dominant role. Each scene MUST clearly indicate which role drives the scene (hero, antagonist, or support). The dominant role must actively influence the scene outcome, not just be present. Hero MUST dominate most scenes unless explicitly justified by story structure. Antagonist MUST dominate at least one scene where conflict, pressure, or opposition is clearly expressed. Support should dominate only when the scene is specifically about assistance, reaction, witness perspective, or emotional support.\n"
         "- If role_dominance_mode='strict': avoid scenes where all roles are equally passive, avoid scenes where hero is present but not narratively central, avoid antagonist being decorative, and respect locked role hierarchy across scene progression."
     )
 
