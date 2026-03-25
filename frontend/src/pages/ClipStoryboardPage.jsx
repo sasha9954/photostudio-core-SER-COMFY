@@ -166,6 +166,7 @@ const CLIP_TRACE_VISUAL_LOCK = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GRAPH = false;
 const CLIP_TRACE_INTRO_PREVIEW = false;
+const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
@@ -4978,7 +4979,7 @@ function StoryboardPlanNode({ id, data }) {
   const isStale = !!data?.isStale;
   const storyboardOut = data?.storyboardOut && typeof data.storyboardOut === "object" ? data.storyboardOut : null;
   const voiceScript = String(storyboardOut?.voice_script || "").trim();
-  const musicPrompt = String(storyboardOut?.music_prompt || "").trim();
+  const musicPrompt = String(storyboardOut?.globalMusicPrompt || storyboardOut?.music_prompt || "").trim();
   const storySummary = String(storyboardOut?.story_summary || "").trim();
   const directorSummary = String(storyboardOut?.director_summary || "").trim();
   const sceneGeneration = data?.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
@@ -10024,11 +10025,26 @@ onClipSec: (nodeId, value) => {
             audioUrl: String(currentAudioData.audioUrl || normalizedPackage?.audioUrl || "").trim(),
             durationSec: Number(currentAudioData.durationSec ?? normalizedPackage?.audioDurationSec ?? 0) || 0,
             phrases: phraseBreakdown,
+            globalMusicPrompt: String(
+              currentAudioData.globalMusicPrompt
+              || normalizedPackage?.globalMusicPrompt
+              || normalizedPackage?.bgMusicPrompt
+              || ""
+            ).trim(),
             musicPromptRu: String(currentAudioData.musicPromptRu || normalizedPackage?.musicPromptRu || "").trim(),
             musicPromptEn: String(currentAudioData.musicPromptEn || normalizedPackage?.musicPromptEn || "").trim(),
-            musicStatus: String(currentAudioData.musicStatus || "idle"),
-            musicUrl: String(currentAudioData.musicUrl || "").trim(),
+            musicStatus: String(currentAudioData.musicStatus || normalizedPackage?.musicStatus || "idle"),
+            musicUrl: String(currentAudioData.musicUrl || normalizedPackage?.musicUrl || "").trim(),
           };
+          if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
+            console.debug("[SCENARIO STORYBOARD AUDIO]", {
+              hasScenarioPackageGlobalMusicPrompt: !!String(normalizedPackage?.globalMusicPrompt || "").trim(),
+              hasAudioDataGlobalMusicPrompt: !!String(audioData?.globalMusicPrompt || "").trim(),
+              musicPromptRuLength: String(audioData?.musicPromptRu || "").trim().length,
+              musicPromptEnLength: String(audioData?.musicPromptEn || "").trim().length,
+              globalMusicPromptLength: String(audioData?.globalMusicPrompt || "").trim().length,
+            });
+          }
           return {
             ...base,
             data: {

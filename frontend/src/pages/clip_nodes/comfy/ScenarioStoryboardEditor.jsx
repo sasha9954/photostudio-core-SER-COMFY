@@ -226,6 +226,13 @@ export default function ScenarioStoryboardEditor({
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);
   const bgMusicSource = resolveMusicSource(safeAudioData);
+  const globalMusicPrompt = String(
+    safeAudioData?.globalMusicPrompt
+    || safeAudioData?.musicPromptRu
+    || safeAudioData?.musicPromptEn
+    || "",
+  ).trim();
+  const hasBgMusicPrompt = Boolean(globalMusicPrompt);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
   const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);
   const bgMusicFileName = String(
@@ -237,6 +244,7 @@ export default function ScenarioStoryboardEditor({
   const bgAudioStatusLabel = hasBgMusic ? "audio: есть" : "audio: нет";
   const bgMontageStatusLabel = hasBgMusic ? `монтаж: ${usesBgMusicInMontage ? "да" : "нет"}` : "";
   const bgSourceStatusLabel = hasBgMusic && bgMusicSource !== "none" ? `source: ${bgMusicSource}` : "";
+  const bgPromptStatusLabel = hasBgMusicPrompt ? "prompt: есть" : "prompt: нет";
 
   const handleUploadBgMusicClick = () => {
     bgMusicUploadRef.current?.click();
@@ -396,6 +404,7 @@ export default function ScenarioStoryboardEditor({
               <div className="clipSB_scenarioEditorBadgeRow">
                 <span className="clipSB_tag">bg audio</span>
                 <span className="clipSB_tag">{bgAudioStatusLabel}</span>
+                <span className="clipSB_tag">{bgPromptStatusLabel}</span>
                 {bgMontageStatusLabel ? <span className="clipSB_tag">{bgMontageStatusLabel}</span> : null}
                 {bgSourceStatusLabel ? <span className="clipSB_tag">{bgSourceStatusLabel}</span> : null}
               </div>
@@ -487,8 +496,8 @@ export default function ScenarioStoryboardEditor({
                     <textarea
                       className="clipSB_textarea clipSB_scenarioBgAudioPrompt"
                       rows={3}
-                      value={String(safeAudioData?.musicPromptRu || "")}
-                      onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value })}
+                      value={String(safeAudioData?.musicPromptRu || safeAudioData?.globalMusicPrompt || "")}
+                      onChange={(event) => onUpdateMusic?.(nodeId, { musicPromptRu: event.target.value, globalMusicPrompt: event.target.value })}
                       placeholder="Сценарист ещё не предложил фоновую музыку"
                     />
                     <details>
