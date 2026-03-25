@@ -2,18 +2,36 @@ const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
 const DEFAULT_GLOBAL_VISUAL_LOCK = {
   captureStyle: "cinematic commercial realism",
-  cameraLanguage: "controlled smooth cinematic camera",
-  lensFeel: "consistent medium focal cinematic lens",
-  lightingStyle: "soft directional key light, controlled contrast, realistic bounce",
-  colorGrade: "natural cinematic grade, balanced contrast, soft highlights",
-  imageDensity: "high-end clean detailed natural textures",
+  cameraLanguage: "controlled cinematic camera",
+  lensFeel: "consistent medium focal cinematic lens compression",
+  lightingStyle: "soft directional key, controlled contrast, realistic bounce light",
+  colorGrade: "natural cinematic grade, balanced contrast, soft highlight rolloff",
+  imageDensity: "high-end clean detailed natural texture",
+  productionConsistency: "all scenes must feel captured by the same production setup",
   continuityRule: "all scenes must feel captured by the same production setup",
   forbiddenDrift: [
     "no drastic lighting changes",
-    "no color palette shifts",
-    "no quality degradation",
+    "no sudden palette shifts",
+    "no image quality drops",
     "no style jumps",
-    "no camera language change",
+    "no camera language changes",
+    "no texture density drift",
+  ],
+};
+const DEFAULT_GLOBAL_CAMERA_PROFILE = {
+  lensProfile: "cinematic medium focal length, natural perspective, soft background separation",
+  exposureProfile: "balanced cinematic exposure, protected highlights, readable shadows",
+  dynamicRangeProfile: "wide dynamic range feel, soft highlight rolloff, no clipped look",
+  sharpnessProfile: "clean but natural detail, no over-sharpened AI look",
+  textureProfile: "natural skin/material texture, premium production clarity",
+  motionProfile: "controlled cinematic movement, no random camera behavior",
+  continuityProfile: "same capture system feel across all scenes",
+  forbiddenCameraDrift: [
+    "no abrupt focal length changes unless scene explicitly requires it",
+    "no exposure jumps between scenes",
+    "no contrast regime shifts",
+    "no sharpness inconsistency",
+    "no change in cinematic capture feel",
   ],
 };
 const GLOBAL_VISUAL_DRIFT_GUARDS = [
@@ -22,6 +40,19 @@ const GLOBAL_VISUAL_DRIFT_GUARDS = [
   "no drop in visual quality",
   "no change in camera style",
 ];
+const normalizeStringList = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  return [];
+};
 
 function toNumber(value, fallback = 0) {
   const direct = Number(value);
@@ -88,8 +119,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
 
   const forbiddenInsertionsRaw = source.forbiddenInsertions ?? source.forbidden_insertions;
   const forbiddenChangesRaw = source.forbiddenChanges ?? source.forbidden_changes;
-  const forbiddenInsertions = Array.isArray(forbiddenInsertionsRaw) ? forbiddenInsertionsRaw.filter(Boolean) : [];
-  const forbiddenChanges = Array.isArray(forbiddenChangesRaw) ? forbiddenChangesRaw.filter(Boolean) : [];
+  const forbiddenInsertions = normalizeStringList(forbiddenInsertionsRaw);
+  const forbiddenChanges = normalizeStringList(forbiddenChangesRaw);
   const normalizedScene = {
     sceneId: normalizeText(source.sceneId ?? source.scene_id) || `S${index + 1}`,
     t0,
@@ -165,6 +196,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     debug: source.debug,
     meta: source.meta,
     globalVisualLock: scenarioPackage?.globalVisualLock || null,
+    globalCameraProfile: scenarioPackage?.globalCameraProfile || null,
   };
   if (SCENARIO_STORYBOARD_TRACE) {
     console.debug("[SCENARIO TRANSFER] normalized scene", {
@@ -201,9 +233,13 @@ function buildGlobalVisualLock(storyboardOut = {}, directorOutput = {}) {
   const environmentLock = storyboardOut?.environmentLock ?? storyboardOut?.environment_lock ?? directorOutput?.environmentLock ?? directorOutput?.environment_lock;
   const world = storyboardOut?.world ?? storyboardOut?.world_en ?? storyboardOut?.world_ru ?? directorOutput?.world ?? directorOutput?.worldEn ?? directorOutput?.worldRu;
   const generationHints = storyboardOut?.generationHints ?? storyboardOut?.generation_hints ?? directorOutput?.generationHints ?? directorOutput?.generation_hints;
-  const hasAnySource = !!existingLock || !!styleLock || !!environmentLock || !!world || !!generationHints;
-  const nextForbiddenDrift = Array.isArray(baseLock?.forbiddenDrift)
-    ? Array.from(new Set([...DEFAULT_GLOBAL_VISUAL_LOCK.forbiddenDrift, ...baseLock.forbiddenDrift.filter(Boolean)]))
+  const providerHints = storyboardOut?.providerHints ?? storyboardOut?.provider_hints ?? directorOutput?.providerHints ?? directorOutput?.provider_hints;
+  const modelAssignments = storyboardOut?.modelAssignments ?? storyboardOut?.model_assignments ?? directorOutput?.modelAssignments ?? directorOutput?.model_assignments;
+  const meta = storyboardOut?.meta ?? directorOutput?.meta;
+  const debug = storyboardOut?.debug ?? directorOutput?.debug;
+  const hasAnySource = !!existingLock || !!styleLock || !!environmentLock || !!world || !!generationHints || !!providerHints || !!modelAssignments || !!meta || !!debug;
+  const nextForbiddenDrift = normalizeStringList(baseLock?.forbiddenDrift).length
+    ? Array.from(new Set([...DEFAULT_GLOBAL_VISUAL_LOCK.forbiddenDrift, ...normalizeStringList(baseLock?.forbiddenDrift)]))
     : DEFAULT_GLOBAL_VISUAL_LOCK.forbiddenDrift;
   return hasAnySource
     ? {
@@ -212,6 +248,10 @@ function buildGlobalVisualLock(storyboardOut = {}, directorOutput = {}) {
       ...(environmentLock && typeof environmentLock === "object" ? { environmentLock } : {}),
       ...(world ? { world } : {}),
       ...(generationHints ? { generationHints } : {}),
+      ...(providerHints ? { providerHints } : {}),
+      ...(modelAssignments ? { modelAssignments } : {}),
+      ...(meta ? { meta } : {}),
+      ...(debug ? { debug } : {}),
       ...baseLock,
       forbiddenDrift: nextForbiddenDrift,
     }
@@ -221,14 +261,31 @@ function buildGlobalVisualLock(storyboardOut = {}, directorOutput = {}) {
     };
 }
 
+function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
+  const existingProfile = storyboardOut?.globalCameraProfile
+    ?? storyboardOut?.global_camera_profile
+    ?? directorOutput?.globalCameraProfile
+    ?? directorOutput?.global_camera_profile;
+  const baseProfile = existingProfile && typeof existingProfile === "object" ? existingProfile : {};
+  const nextForbiddenCameraDrift = normalizeStringList(baseProfile?.forbiddenCameraDrift).length
+    ? Array.from(new Set([...DEFAULT_GLOBAL_CAMERA_PROFILE.forbiddenCameraDrift, ...normalizeStringList(baseProfile?.forbiddenCameraDrift)]))
+    : DEFAULT_GLOBAL_CAMERA_PROFILE.forbiddenCameraDrift;
+  return {
+    ...DEFAULT_GLOBAL_CAMERA_PROFILE,
+    ...baseProfile,
+    forbiddenCameraDrift: nextForbiddenCameraDrift,
+  };
+}
+
 export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
+  const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
   const scenesRaw = Array.isArray(storyboardOut?.scenes)
     ? storyboardOut.scenes
     : Array.isArray(directorOutput?.scenes)
       ? directorOutput.scenes
       : [];
-  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, { globalVisualLock }));
+  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, { globalVisualLock, globalCameraProfile }));
 
   const storySummary = normalizeDualField({
     ru: storyboardOut?.story_summary_ru ?? directorOutput?.history?.summaryRu ?? preferRuFrom(directorOutput?.history, storyboardOut?.story_summary),
@@ -285,6 +342,7 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     plannerDebug: storyboardOut?.plannerDebug ?? storyboardOut?.planner_debug ?? directorOutput?.plannerDebug ?? directorOutput?.planner_debug,
     generationHints: storyboardOut?.generationHints ?? storyboardOut?.generation_hints ?? directorOutput?.generationHints ?? directorOutput?.generation_hints,
     globalVisualLock,
+    globalCameraProfile,
     modelAssignments: storyboardOut?.modelAssignments ?? storyboardOut?.model_assignments ?? directorOutput?.modelAssignments ?? directorOutput?.model_assignments,
     providerHints: storyboardOut?.providerHints ?? storyboardOut?.provider_hints ?? directorOutput?.providerHints ?? directorOutput?.provider_hints,
     debug: storyboardOut?.debug ?? directorOutput?.debug,

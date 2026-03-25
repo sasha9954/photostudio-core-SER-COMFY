@@ -162,34 +162,109 @@ const CLIP_TRACE_BRAIN_REFRESH = false;
 const CLIP_TRACE_GRAPH_HYDRATE = false;
 const CLIP_TRACE_ASSEMBLY_SOURCE = false;
 const CLIP_TRACE_SCENARIO_TRANSFER = false;
+const CLIP_TRACE_VISUAL_LOCK = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
-const GLOBAL_VISUAL_DRIFT_GUARDS = [
+const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
   "no change in color grading",
-  "no drop in visual quality",
-  "no change in camera style",
+  "no change in capture quality",
+  "no change in camera language",
+  "no exposure drift",
+  "no dynamic range drift",
+  "no sharpness regime shift",
 ];
-const GLOBAL_VISUAL_LOCK_IMAGE_TEXT = `
-GLOBAL VISUAL CONSISTENCY:
+const GLOBAL_FORBIDDEN_INSERTIONS_GUARDS = [
+  "do not introduce a different visual style",
+  "do not introduce a different lens feel",
+  "do not introduce a different production look",
+];
 
-* Same camera setup across all scenes
-* Same lighting logic and direction
-* Same color grading and tonal balance
-* Same image density and texture quality
-* Same cinematic realism level
-* No visual style drift between frames
-* Maintain identical production quality
-`.trim();
-const GLOBAL_VISUAL_LOCK_VIDEO_TEXT = `
-GLOBAL VIDEO CONSISTENCY:
+function normalizeScenarioStringList(value) {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.map((item) => String(item || "").trim()).filter(Boolean)));
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (!value) return [];
+  if (typeof value === "object") {
+    return Array.from(new Set(Object.values(value).map((item) => String(item || "").trim()).filter(Boolean)));
+  }
+  return [];
+}
 
-* Continuous camera language across scenes
-* Consistent lighting and atmosphere
-* Matching color grading between shots
-* Same production-level quality
-* Smooth continuity between frames
-* No visual jumps or quality drops
-`.trim();
+function mergeScenarioStringLists(...lists) {
+  return Array.from(new Set(lists.flatMap((list) => normalizeScenarioStringList(list)).filter(Boolean)));
+}
+
+function stringifyScenarioLockValue(value) {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+  if (value && typeof value === "object") {
+    return Object.values(value).map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+  }
+  return "";
+}
+
+function buildScenarioVisualGlueText(scene = {}) {
+  const globalVisualLock = scene?.globalVisualLock && typeof scene.globalVisualLock === "object" ? scene.globalVisualLock : {};
+  const globalCameraProfile = scene?.globalCameraProfile && typeof scene.globalCameraProfile === "object" ? scene.globalCameraProfile : {};
+  const environmentLockText = stringifyScenarioLockValue(scene?.environmentLock);
+  const styleLockText = stringifyScenarioLockValue(scene?.styleLock);
+  const identityLockText = stringifyScenarioLockValue(scene?.identityLock);
+  const visualConsistencyLines = [
+    globalVisualLock?.productionConsistency || "all scenes must feel captured by the same production setup",
+    globalVisualLock?.cameraLanguage || "controlled cinematic camera language",
+    globalVisualLock?.lightingStyle || "soft directional key, controlled contrast, realistic bounce light",
+    globalVisualLock?.colorGrade || "natural cinematic grade, balanced contrast, soft highlight rolloff",
+    globalVisualLock?.imageDensity || "high-end clean detailed natural texture",
+    ...normalizeScenarioStringList(globalVisualLock?.forbiddenDrift).slice(0, 2),
+    environmentLockText ? "maintain environment continuity" : "",
+    styleLockText ? "preserve style continuity" : "",
+    identityLockText ? "preserve identity continuity" : "",
+  ].filter(Boolean).slice(0, 8);
+  const cameraProfileLines = [
+    globalCameraProfile?.lensProfile || globalVisualLock?.lensFeel || "cinematic medium focal lens feel",
+    globalCameraProfile?.exposureProfile || "balanced exposure with protected highlights",
+    globalCameraProfile?.dynamicRangeProfile || "wide dynamic range feel with soft highlight rolloff",
+    globalCameraProfile?.sharpnessProfile || "natural premium detail without over-sharpening",
+    globalCameraProfile?.continuityProfile || "same capture system feel across the entire sequence",
+  ].filter(Boolean).slice(0, 6);
+  return [
+    "GLOBAL VISUAL CONSISTENCY:",
+    ...visualConsistencyLines.map((line) => `- ${line}`),
+    "",
+    "HARD CAMERA PROFILE:",
+    ...cameraProfileLines.map((line) => `- ${line}`),
+  ].join("\n").trim();
+}
+
+function buildScenarioVideoVisualGlueText(scene = {}) {
+  const globalVisualLock = scene?.globalVisualLock && typeof scene.globalVisualLock === "object" ? scene.globalVisualLock : {};
+  const globalCameraProfile = scene?.globalCameraProfile && typeof scene.globalCameraProfile === "object" ? scene.globalCameraProfile : {};
+  const videoConsistencyLines = [
+    globalVisualLock?.cameraLanguage || "continuous camera language across scenes",
+    globalVisualLock?.lightingStyle || "consistent lighting and atmosphere",
+    globalVisualLock?.colorGrade || "consistent palette and tonal balance",
+    globalVisualLock?.productionConsistency || "matching production quality and image density",
+    ...normalizeScenarioStringList(globalVisualLock?.forbiddenDrift).slice(0, 2),
+  ].filter(Boolean).slice(0, 6);
+  const cameraProfileLines = [
+    globalCameraProfile?.lensProfile || globalVisualLock?.lensFeel || "maintain consistent lens behavior",
+    globalCameraProfile?.exposureProfile || "maintain stable exposure and contrast feel",
+    globalCameraProfile?.dynamicRangeProfile || "preserve highlight rolloff and dynamic range feel",
+    globalCameraProfile?.textureProfile || "keep natural premium detail level",
+    globalCameraProfile?.continuityProfile || "keep the sequence visually unified",
+  ].filter(Boolean).slice(0, 6);
+  return [
+    "GLOBAL VIDEO CONSISTENCY:",
+    ...videoConsistencyLines.map((line) => `- ${line}`),
+    "",
+    "HARD CAMERA PROFILE:",
+    ...cameraProfileLines.map((line) => `- ${line}`),
+  ].join("\n").trim();
+}
 
 function hasScenarioContractValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -199,8 +274,8 @@ function hasScenarioContractValue(value) {
 }
 
 function buildScenarioSceneContractPayload(scene = {}) {
-  const forbiddenInsertions = Array.isArray(scene?.forbiddenInsertions) ? scene.forbiddenInsertions : [];
-  const forbiddenChanges = Array.isArray(scene?.forbiddenChanges) ? scene.forbiddenChanges : [];
+  const forbiddenInsertions = mergeScenarioStringLists(scene?.forbiddenInsertions, GLOBAL_FORBIDDEN_INSERTIONS_GUARDS);
+  const forbiddenChanges = mergeScenarioStringLists(scene?.forbiddenChanges, GLOBAL_FORBIDDEN_CHANGES_GUARDS);
   return {
     sceneId: scene?.sceneId || "",
     sceneType: scene?.sceneType,
@@ -212,8 +287,8 @@ function buildScenarioSceneContractPayload(scene = {}) {
     sceneAction: scene?.sceneAction,
     cameraIntent: scene?.cameraIntent,
     environmentMotion: scene?.environmentMotion,
-    forbiddenInsertions: Array.from(new Set([...forbiddenInsertions, ...GLOBAL_VISUAL_DRIFT_GUARDS])),
-    forbiddenChanges: Array.from(new Set([...forbiddenChanges, ...GLOBAL_VISUAL_DRIFT_GUARDS])),
+    forbiddenInsertions,
+    forbiddenChanges,
     renderMode: scene?.renderMode,
     ltxMode: scene?.ltxMode,
     transitionType: scene?.transitionType,
@@ -233,6 +308,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     plannerDebug: scene?.plannerDebug,
     generationHints: scene?.generationHints,
     globalVisualLock: scene?.globalVisualLock,
+    globalCameraProfile: scene?.globalCameraProfile,
     modelAssignments: scene?.modelAssignments,
     providerHints: scene?.providerHints,
     audioSliceStartSec: scene?.audioSliceStartSec,
@@ -7646,16 +7722,26 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       setScenarioImageError("Добавьте prompt для генерации кадра");
       return;
     }
-    const finalImagePrompt = `${GLOBAL_VISUAL_LOCK_IMAGE_TEXT}\n\n${sceneDelta}`.trim();
+    const visualGlueText = buildScenarioVisualGlueText(scenarioSelected);
+    const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}`.trim();
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
     try {
       const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
-      console.log("[VISUAL LOCK IMAGE]", {
-        sceneId,
-        hasLock: !!scenarioSelected?.globalVisualLock,
-      });
+      if (CLIP_TRACE_VISUAL_LOCK) {
+        console.debug("[SCENARIO VISUAL LOCK] image prompt", {
+          sceneId,
+          renderMode: String(scenarioSelected?.renderMode || ""),
+          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          hasGlobalVisualLock: hasScenarioContractValue(scenarioSelected?.globalVisualLock),
+          hasGlobalCameraProfile: hasScenarioContractValue(scenarioSelected?.globalCameraProfile),
+          finalPromptLength: finalSceneDelta.length,
+          hasEnvironmentLock: hasScenarioContractValue(scenarioSelected?.environmentLock),
+          hasStyleLock: hasScenarioContractValue(scenarioSelected?.styleLock),
+          hasIdentityLock: hasScenarioContractValue(scenarioSelected?.identityLock),
+        });
+      }
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
       }
@@ -7663,7 +7749,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         method: "POST",
         body: {
           sceneId,
-          sceneDelta: `${finalImagePrompt}
+          sceneDelta: `${finalSceneDelta}
 Aspect ratio: ${imageFormat}`,
           sceneText,
           width,
@@ -7940,7 +8026,9 @@ Aspect ratio: ${imageFormat}`,
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: scenarioSelected, previousScene: scenarioPreviousScene })
       : "";
-    const finalVideoPrompt = `${GLOBAL_VISUAL_LOCK_VIDEO_TEXT}\n\n${String(scenarioSelected?.videoPrompt || "").trim()}`.trim();
+    const originalVideoPrompt = String(scenarioSelected?.videoPrompt || "").trim();
+    const videoVisualGlueText = buildScenarioVideoVisualGlueText(scenarioSelected);
+    const finalVideoPrompt = `${videoVisualGlueText}\n\n${originalVideoPrompt}`.trim();
     const sourceImageUrl = transitionType === "continuous"
       ? (effectiveStartImageUrl || endImageUrl || frameImageUrl || "")
       : (frameImageUrl || "");
@@ -7961,10 +8049,18 @@ Aspect ratio: ${imageFormat}`,
         getSceneTransitionPrompt(scenarioSelected),
       ].filter(Boolean).join("\n");
       const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
-      console.log("[VISUAL LOCK VIDEO]", {
-        sceneId,
-        hasLock: !!scenarioSelected?.globalVisualLock,
-      });
+      if (CLIP_TRACE_VISUAL_LOCK) {
+        console.debug("[SCENARIO VISUAL LOCK] video prompt", {
+          sceneId,
+          renderMode: String(effectiveRenderMode || ""),
+          ltxMode: String(scenarioSelected?.ltxMode || ""),
+          transitionType: String(transitionType || ""),
+          lipSync: Boolean(effectiveLipSync),
+          hasGlobalVisualLock: hasScenarioContractValue(scenarioSelected?.globalVisualLock),
+          hasGlobalCameraProfile: hasScenarioContractValue(scenarioSelected?.globalCameraProfile),
+          finalVideoPromptLength: finalVideoPrompt.length,
+        });
+      }
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
       }
@@ -9582,6 +9678,12 @@ onClipSec: (nodeId, value) => {
             ? (sourceNode?.data?.outputs?.directorOutput || sourceNode?.data?.pendingOutputs?.directorOutput || null)
             : null;
           const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+          if (CLIP_TRACE_VISUAL_LOCK) {
+            console.debug("[SCENARIO VISUAL LOCK] package", {
+              hasGlobalVisualLock: hasScenarioContractValue(normalizedPackage?.globalVisualLock),
+              hasGlobalCameraProfile: hasScenarioContractValue(normalizedPackage?.globalCameraProfile),
+            });
+          }
           if (CLIP_TRACE_SCENARIO_TRANSFER) {
             const sampleScene = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes[0] : null;
             console.debug("[SCENARIO TRANSFER] normalizeScenarioScene sample", buildScenarioTransferLogData(sampleScene || {}, sampleScene || {}));
