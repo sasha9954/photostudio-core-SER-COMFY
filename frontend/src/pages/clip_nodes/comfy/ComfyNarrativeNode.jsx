@@ -298,13 +298,6 @@ export default function ComfyNarrativeNode({ id, data }) {
                   {NARRATIVE_STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.labelRu}</option>)}
                 </select>
               </label>
-
-              <label className="clipSB_narrativeField clipSB_narrativeField--compact">
-                <div className="clipSB_brainLabel clipSB_brainLabel--compact">Format</div>
-                <select className="clipSB_select clipSB_narrativeSelect" value={data?.format || "9:16"} onChange={(e) => data?.onFieldChange?.(id, { format: e.target.value })}>
-                  {NARRATIVE_FORMAT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
             </div>
 
             <label className="clipSB_narrativeField">
@@ -371,6 +364,13 @@ export default function ComfyNarrativeNode({ id, data }) {
                 {isGenerating ? "ГЕНЕРИРУЕМ..." : "СОЗДАТЬ СЦЕНАРИЙ"}
               </button>
             </div>
+
+            <label className="clipSB_narrativeField clipSB_narrativeFormatField">
+              <div className="clipSB_brainLabel">FORMAT</div>
+              <select className="clipSB_select clipSB_narrativeSelect clipSB_narrativeSelect--bottom" value={data?.format || "9:16"} onChange={(e) => data?.onFieldChange?.(id, { format: e.target.value })}>
+                {NARRATIVE_FORMAT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
           </section>
 
           <section className="clipSB_narrativeResultSection">

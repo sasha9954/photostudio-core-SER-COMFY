@@ -94,7 +94,7 @@ const PORT_COLORS = {
   comfy_video: "var(--family-generation)",
   intro_context: "var(--family-text)",
   intro_frame: "var(--family-generation)",
-  intro_to_assembly: "var(--family-assembly)",
+  intro_to_assembly: "var(--family-generation)",
   brain_to_storyboard: "var(--family-brain)",
   storyboard_to_assembly: "var(--family-storyboard)",
   assembly: "var(--family-assembly)",
@@ -5364,7 +5364,7 @@ function AssemblyNode({ id, data }) {
 
   return (
     <>
-      <Handle type="target" position={Position.Left} id="assembly_in" className="clipSB_handle" style={handleStyle("assembly")} />
+      <Handle type="target" position={Position.Left} id="assembly_in" className="clipSB_handle" style={handleStyle("storyboard_to_assembly")} />
       <Handle type="target" position={Position.Left} id="assembly_intro" className="clipSB_handle" style={handleStyle("intro_to_assembly", { top: 132 })} />
       <NodeShell
         title="ASSEMBLY"
