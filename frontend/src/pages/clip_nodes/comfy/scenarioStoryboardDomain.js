@@ -1,4 +1,5 @@
 const normalizeText = (value) => String(value || "").trim();
+const SCENARIO_STORYBOARD_TRACE = false;
 
 function toNumber(value, fallback = 0) {
   const direct = Number(value);
@@ -63,7 +64,7 @@ export function normalizeScenarioScene(scene = {}, index = 0) {
     en: source.locationEn ?? source.location_en ?? source.worldEn ?? source.world_en ?? source.location,
   });
 
-  return {
+  const normalizedScene = {
     sceneId: normalizeText(source.sceneId ?? source.scene_id) || `S${index + 1}`,
     t0,
     t1,
@@ -104,7 +105,63 @@ export function normalizeScenarioScene(scene = {}, index = 0) {
     startFrameStatus: normalizeText(source.startFrameStatus ?? source.start_frame_status),
     endFrameImageUrl: normalizeText(source.endFrameImageUrl ?? source.end_frame_image_url ?? source.endFramePreviewUrl ?? source.end_frame_preview_url),
     endFrameStatus: normalizeText(source.endFrameStatus ?? source.end_frame_status),
+    sceneType: source.sceneType ?? source.scene_type,
+    primaryRole: source.primaryRole ?? source.primary_role,
+    secondaryRoles: source.secondaryRoles ?? source.secondary_roles,
+    refsUsed: source.refsUsed ?? source.refs_used,
+    refDirectives: source.refDirectives ?? source.ref_directives,
+    focalSubject: source.focalSubject ?? source.focal_subject,
+    sceneAction: source.sceneAction ?? source.scene_action,
+    cameraIntent: source.cameraIntent ?? source.camera_intent,
+    environmentMotion: source.environmentMotion ?? source.environment_motion,
+    forbiddenInsertions: source.forbiddenInsertions ?? source.forbidden_insertions,
+    forbiddenChanges: source.forbiddenChanges ?? source.forbidden_changes,
+    lipSync: source.lipSync ?? source.lip_sync,
+    lipSyncText: source.lipSyncText ?? source.lip_sync_text,
+    transitionType: source.transitionType ?? source.transition_type,
+    shotType: source.shotType ?? source.shot_type,
+    continuity: source.continuity,
+    worldScaleContext: source.worldScaleContext ?? source.world_scale_context,
+    entityScaleAnchors: source.entityScaleAnchors ?? source.entity_scale_anchors,
+    environmentLock: source.environmentLock ?? source.environment_lock,
+    styleLock: source.styleLock ?? source.style_lock,
+    identityLock: source.identityLock ?? source.identity_lock,
+    mustAppear: source.mustAppear ?? source.must_appear,
+    mustNotAppear: source.mustNotAppear ?? source.must_not_appear,
+    heroEntityId: source.heroEntityId ?? source.hero_entity_id,
+    supportEntityIds: source.supportEntityIds ?? source.support_entity_ids,
+    plannerDebug: source.plannerDebug ?? source.planner_debug,
+    generationHints: source.generationHints ?? source.generation_hints,
+    modelAssignments: source.modelAssignments ?? source.model_assignments,
+    providerHints: source.providerHints ?? source.provider_hints,
+    audioDurationSec: source.audioDurationSec ?? source.audio_duration_sec,
+    sceneMeta: source.sceneMeta ?? source.scene_meta,
+    debug: source.debug,
+    meta: source.meta,
   };
+  if (SCENARIO_STORYBOARD_TRACE) {
+    console.debug("[SCENARIO TRANSFER] normalized scene", {
+      sceneId: normalizedScene.sceneId,
+      renderMode: normalizedScene.renderMode,
+      ltxMode: normalizedScene.ltxMode,
+      sceneType: normalizedScene.sceneType,
+      primaryRole: normalizedScene.primaryRole,
+      secondaryRoles: Array.isArray(normalizedScene.secondaryRoles) ? normalizedScene.secondaryRoles : [],
+      refsUsed: Array.isArray(normalizedScene.refsUsed) ? normalizedScene.refsUsed : [],
+      lipSync: Boolean(normalizedScene.lipSync),
+      audioSliceStartSec: normalizedScene.audioSliceStartSec,
+      audioSliceEndSec: normalizedScene.audioSliceEndSec,
+      hasContinuity: !!normalizedScene.continuity,
+      hasIdentityLock: normalizedScene.identityLock !== undefined && normalizedScene.identityLock !== null,
+      hasStyleLock: normalizedScene.styleLock !== undefined && normalizedScene.styleLock !== null,
+      hasEnvironmentLock: normalizedScene.environmentLock !== undefined && normalizedScene.environmentLock !== null,
+      hasMustAppear: Array.isArray(normalizedScene.mustAppear) ? normalizedScene.mustAppear.length > 0 : !!normalizedScene.mustAppear,
+      hasMustNotAppear: Array.isArray(normalizedScene.mustNotAppear) ? normalizedScene.mustNotAppear.length > 0 : !!normalizedScene.mustNotAppear,
+      hasModelAssignments: !!normalizedScene.modelAssignments,
+      hasProviderHints: !!normalizedScene.providerHints,
+    });
+  }
+  return normalizedScene;
 }
 
 export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
@@ -140,6 +197,39 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     previewPromptEn: previewPrompt.en,
     actors,
     locations,
+    audioUrl: normalizeText(
+      storyboardOut?.audioUrl
+      ?? storyboardOut?.audio_url
+      ?? directorOutput?.audioUrl
+      ?? directorOutput?.audio_url
+    ),
+    audioDurationSec: toNumber(
+      storyboardOut?.audioDurationSec
+      ?? storyboardOut?.audio_duration_sec
+      ?? directorOutput?.audioDurationSec
+      ?? directorOutput?.audio_duration_sec,
+      0
+    ),
+    musicPromptRu: normalizeText(
+      storyboardOut?.musicPromptRu
+      ?? storyboardOut?.music_prompt_ru
+      ?? directorOutput?.musicPromptRu
+      ?? directorOutput?.music_prompt_ru
+    ),
+    musicPromptEn: normalizeText(
+      storyboardOut?.musicPromptEn
+      ?? storyboardOut?.music_prompt_en
+      ?? directorOutput?.musicPromptEn
+      ?? directorOutput?.music_prompt_en
+    ),
+    musicStatus: normalizeText(storyboardOut?.musicStatus ?? storyboardOut?.music_status ?? directorOutput?.musicStatus ?? directorOutput?.music_status),
+    musicUrl: normalizeText(storyboardOut?.musicUrl ?? storyboardOut?.music_url ?? directorOutput?.musicUrl ?? directorOutput?.music_url),
+    plannerDebug: storyboardOut?.plannerDebug ?? storyboardOut?.planner_debug ?? directorOutput?.plannerDebug ?? directorOutput?.planner_debug,
+    generationHints: storyboardOut?.generationHints ?? storyboardOut?.generation_hints ?? directorOutput?.generationHints ?? directorOutput?.generation_hints,
+    modelAssignments: storyboardOut?.modelAssignments ?? storyboardOut?.model_assignments ?? directorOutput?.modelAssignments ?? directorOutput?.model_assignments,
+    providerHints: storyboardOut?.providerHints ?? storyboardOut?.provider_hints ?? directorOutput?.providerHints ?? directorOutput?.provider_hints,
+    debug: storyboardOut?.debug ?? directorOutput?.debug,
+    meta: storyboardOut?.meta ?? directorOutput?.meta,
   };
 }
 

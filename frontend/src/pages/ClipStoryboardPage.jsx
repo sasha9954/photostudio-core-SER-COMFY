@@ -161,7 +161,78 @@ const CLIP_TRACE_COMFY_REFS = false;
 const CLIP_TRACE_BRAIN_REFRESH = false;
 const CLIP_TRACE_GRAPH_HYDRATE = false;
 const CLIP_TRACE_ASSEMBLY_SOURCE = false;
+const CLIP_TRACE_SCENARIO_TRANSFER = false;
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
+
+function hasScenarioContractValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  if (typeof value === "string") return value.trim().length > 0;
+  return value !== undefined && value !== null;
+}
+
+function buildScenarioSceneContractPayload(scene = {}) {
+  return {
+    sceneId: scene?.sceneId || "",
+    sceneType: scene?.sceneType,
+    primaryRole: scene?.primaryRole,
+    secondaryRoles: scene?.secondaryRoles,
+    refsUsed: scene?.refsUsed,
+    refDirectives: scene?.refDirectives,
+    focalSubject: scene?.focalSubject,
+    sceneAction: scene?.sceneAction,
+    cameraIntent: scene?.cameraIntent,
+    environmentMotion: scene?.environmentMotion,
+    forbiddenInsertions: scene?.forbiddenInsertions,
+    forbiddenChanges: scene?.forbiddenChanges,
+    renderMode: scene?.renderMode,
+    ltxMode: scene?.ltxMode,
+    transitionType: scene?.transitionType,
+    shotType: scene?.shotType,
+    lipSync: scene?.lipSync,
+    lipSyncText: scene?.lipSyncText,
+    continuity: scene?.continuity,
+    worldScaleContext: scene?.worldScaleContext,
+    entityScaleAnchors: scene?.entityScaleAnchors,
+    environmentLock: scene?.environmentLock,
+    styleLock: scene?.styleLock,
+    identityLock: scene?.identityLock,
+    mustAppear: scene?.mustAppear,
+    mustNotAppear: scene?.mustNotAppear,
+    heroEntityId: scene?.heroEntityId,
+    supportEntityIds: scene?.supportEntityIds,
+    plannerDebug: scene?.plannerDebug,
+    generationHints: scene?.generationHints,
+    modelAssignments: scene?.modelAssignments,
+    providerHints: scene?.providerHints,
+    audioSliceStartSec: scene?.audioSliceStartSec,
+    audioSliceEndSec: scene?.audioSliceEndSec,
+    audioDurationSec: scene?.audioDurationSec,
+  };
+}
+
+function buildScenarioTransferLogData(scene = {}, contractPayload = {}) {
+  return {
+    sceneId: String(scene?.sceneId || contractPayload?.sceneId || ""),
+    renderMode: String(scene?.renderMode || contractPayload?.renderMode || ""),
+    ltxMode: String(scene?.ltxMode || contractPayload?.ltxMode || ""),
+    sceneType: String(scene?.sceneType || contractPayload?.sceneType || ""),
+    primaryRole: String(scene?.primaryRole || contractPayload?.primaryRole || ""),
+    secondaryRoles: Array.isArray(scene?.secondaryRoles ?? contractPayload?.secondaryRoles) ? (scene?.secondaryRoles ?? contractPayload?.secondaryRoles) : [],
+    refsUsed: Array.isArray(scene?.refsUsed ?? contractPayload?.refsUsed) ? (scene?.refsUsed ?? contractPayload?.refsUsed) : [],
+    lipSync: Boolean(scene?.lipSync ?? contractPayload?.lipSync),
+    audioSliceStartSec: scene?.audioSliceStartSec ?? contractPayload?.audioSliceStartSec ?? null,
+    audioSliceEndSec: scene?.audioSliceEndSec ?? contractPayload?.audioSliceEndSec ?? null,
+    hasContinuity: hasScenarioContractValue(scene?.continuity ?? contractPayload?.continuity),
+    hasIdentityLock: hasScenarioContractValue(scene?.identityLock ?? contractPayload?.identityLock),
+    hasStyleLock: hasScenarioContractValue(scene?.styleLock ?? contractPayload?.styleLock),
+    hasEnvironmentLock: hasScenarioContractValue(scene?.environmentLock ?? contractPayload?.environmentLock),
+    hasMustAppear: hasScenarioContractValue(scene?.mustAppear ?? contractPayload?.mustAppear),
+    hasMustNotAppear: hasScenarioContractValue(scene?.mustNotAppear ?? contractPayload?.mustNotAppear),
+    hasModelAssignments: hasScenarioContractValue(scene?.modelAssignments ?? contractPayload?.modelAssignments),
+    hasProviderHints: hasScenarioContractValue(scene?.providerHints ?? contractPayload?.providerHints),
+  };
+}
 
 function isAbortLikeError(error) {
   return error?.name === "AbortError" || String(error?.message || "").trim() === "AbortError";
@@ -7549,6 +7620,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     setScenarioImageLoading(true);
     setScenarioImageError("");
     try {
+      const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      if (CLIP_TRACE_SCENARIO_TRANSFER) {
+        console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
+      }
       const out = await fetchJson(`/api/clip/image`, {
         method: "POST",
         body: {
@@ -7558,6 +7633,7 @@ Aspect ratio: ${imageFormat}`,
           sceneText,
           width,
           height,
+          ...scenarioContractPayload,
           refs: normalizeClipImageRefsPayload({
             ...scenarioBrainRefs,
             previousContinuityMemory,
@@ -7848,6 +7924,10 @@ Aspect ratio: ${imageFormat}`,
         continuityBridgePrompt,
         getSceneTransitionPrompt(scenarioSelected),
       ].filter(Boolean).join("\n");
+      const scenarioContractPayload = buildScenarioSceneContractPayload(scenarioSelected);
+      if (CLIP_TRACE_SCENARIO_TRANSFER) {
+        console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(scenarioSelected, scenarioContractPayload));
+      }
       const out = await fetchJson(endpoint, {
         method: "POST",
         body: {
@@ -7866,6 +7946,7 @@ Aspect ratio: ${imageFormat}`,
           sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
           provider: effectiveVideoProvider,
+          ...scenarioContractPayload,
         },
       });
       console.info("[VIDEO START RESPONSE]", {
@@ -7928,6 +8009,7 @@ Aspect ratio: ${imageFormat}`,
           sceneType: scenarioSelected.sceneType || "",
           format: normalizeSceneImageFormat(scenarioSelected.imageFormat),
           provider: effectiveVideoProvider,
+          ...scenarioContractPayload,
         },
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
@@ -9460,6 +9542,10 @@ onClipSec: (nodeId, value) => {
             ? (sourceNode?.data?.outputs?.directorOutput || sourceNode?.data?.pendingOutputs?.directorOutput || null)
             : null;
           const normalizedPackage = normalizeScenarioStoryboardPackage({ storyboardOut, directorOutput });
+          if (CLIP_TRACE_SCENARIO_TRANSFER) {
+            const sampleScene = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes[0] : null;
+            console.debug("[SCENARIO TRANSFER] normalizeScenarioScene sample", buildScenarioTransferLogData(sampleScene || {}, sampleScene || {}));
+          }
           const scenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
             : (Array.isArray(base?.data?.scenes) ? base.data.scenes : []);
