@@ -4120,6 +4120,7 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_scenarioEditorPanel {
   width: min(1240px, 97vw);
   height: min(860px, 94vh);
+  position: relative;
 }
 
 .clipSB_scenarioEditorAudioPanel {
@@ -4194,15 +4195,6 @@ body.ps_clip_fullscreen .mainCol {
   border-color: rgba(120,190,255,0.6);
 }
 
-.clipSB_scenarioEditorTabPanel {
-  border-radius: 10px;
-  background: rgba(255,255,255,0.03);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
-  padding: 10px;
-  max-height: 30vh;
-  overflow: auto;
-}
-
 .clipSB_scenarioEditorTabBody {
   display: grid;
   gap: 8px;
@@ -4220,6 +4212,49 @@ body.ps_clip_fullscreen .mainCol {
   line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.clipSB_scenarioEditorInfoModalOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  background: rgba(5, 8, 14, 0.62);
+  backdrop-filter: blur(3px);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.clipSB_scenarioEditorInfoModal {
+  width: min(900px, 100%);
+  max-height: min(78vh, 100%);
+  border-radius: 14px;
+  background: rgba(16, 22, 36, 0.98);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.48), inset 0 0 0 1px rgba(255,255,255,0.14);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.clipSB_scenarioEditorInfoModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+
+.clipSB_scenarioEditorInfoModalTitle {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.clipSB_scenarioEditorInfoModalBody {
+  padding: 12px 14px 14px;
+  overflow: auto;
+  min-height: 0;
 }
 
 .clipSB_scenarioEditorSceneList {

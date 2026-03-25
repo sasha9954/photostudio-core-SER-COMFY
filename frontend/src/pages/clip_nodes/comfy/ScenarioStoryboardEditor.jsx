@@ -5,7 +5,6 @@ const TOP_TABS = [
   { id: "context", label: "Контекст" },
   { id: "actors", label: "Актеры" },
   { id: "phrases", label: "Фразы" },
-  { id: "preview", label: "Preview" },
   { id: "debug", label: "Debug" },
 ];
 
@@ -73,7 +72,7 @@ export default function ScenarioStoryboardEditor({
   const [activeSelectionType, setActiveSelectionType] = useState("scene");
   const [activeSelectionId, setActiveSelectionId] = useState("");
   const [activeTab, setActiveTab] = useState("phrases");
-  const [tabPanelOpen, setTabPanelOpen] = useState(true);
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
   const [audioSceneOpen, setAudioSceneOpen] = useState(false);
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
@@ -89,6 +88,15 @@ export default function ScenarioStoryboardEditor({
       setActiveSelectionId(BG_AUDIO_ITEM_ID);
     }
   }, [open, nodeId]);
+
+  useEffect(() => {
+    if (!open || !infoModalOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setInfoModalOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, infoModalOpen]);
 
   const safeScenes = Array.isArray(scenes) ? scenes : [];
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
@@ -282,9 +290,6 @@ export default function ScenarioStoryboardEditor({
         </div>
       );
     }
-    if (activeTab === "preview") {
-      return <div className="clipSB_scenarioEditorTabBody clipSB_hint">Preview panel оставлен как вторичная инфо-зона.</div>;
-    }
     return (
       <div className="clipSB_scenarioEditorTabBody">
         <pre className="clipSB_scenarioEditorDebug">{JSON.stringify({
@@ -318,18 +323,27 @@ export default function ScenarioStoryboardEditor({
                 className={`clipSB_scenarioEditorTabBtn ${activeTab === tab.id ? "isActive" : ""}`}
                 onClick={() => {
                   setActiveTab(tab.id);
-                  setTabPanelOpen(true);
+                  setInfoModalOpen(true);
                 }}
               >
                 {tab.label}
               </button>
             ))}
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setTabPanelOpen((prev) => !prev)}>
-              {tabPanelOpen ? "Скрыть панель" : "Показать панель"}
-            </button>
           </div>
-          {tabPanelOpen ? <div className="clipSB_scenarioEditorTabPanel">{tabContent}</div> : null}
         </div>
+        {infoModalOpen ? (
+          <div className="clipSB_scenarioEditorInfoModalOverlay" onClick={() => setInfoModalOpen(false)}>
+            <div className="clipSB_scenarioEditorInfoModal" onClick={(event) => event.stopPropagation()}>
+              <div className="clipSB_scenarioEditorInfoModalHeader">
+                <div className="clipSB_scenarioEditorInfoModalTitle">{TOP_TABS.find((tab) => tab.id === activeTab)?.label || "Инфо"}</div>
+                <button className="clipSB_iconBtn" type="button" onClick={() => setInfoModalOpen(false)}>×</button>
+              </div>
+              <div className="clipSB_scenarioEditorInfoModalBody">
+                {tabContent}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="clipSB_scenarioBody clipSB_scenarioEditorBody">
           <div className="clipSB_scenarioList clipSB_scenarioEditorSceneList">
