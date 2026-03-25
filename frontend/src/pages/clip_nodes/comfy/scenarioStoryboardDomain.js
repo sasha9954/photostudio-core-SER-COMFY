@@ -1,6 +1,7 @@
 const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
+const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const DEFAULT_GLOBAL_VISUAL_LOCK = {
   captureStyle: "cinematic commercial realism",
   cameraLanguage: "controlled cinematic camera",
@@ -88,6 +89,18 @@ function resolveFormatAlias(...candidates) {
     if (normalized === "9:16" || normalized === "16:9" || normalized === "1:1") return normalized;
   }
   return "";
+}
+
+function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {}) {
+  return normalizeText(
+    storyboardOut?.globalMusicPrompt
+    ?? storyboardOut?.music_prompt
+    ?? storyboardOut?.bgMusicPrompt
+    ?? directorOutput?.globalMusicPrompt
+    ?? directorOutput?.bgMusicPrompt
+    ?? directorOutput?.music?.globalMusicPrompt
+    ?? directorOutput?.music_prompt
+  );
 }
 
 export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = null) {
@@ -336,6 +349,19 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   });
   const actors = Array.from(new Set(scenes.flatMap((scene) => (Array.isArray(scene.actors) ? scene.actors : [])).filter(Boolean)));
   const locations = Array.from(new Set(scenes.map((scene) => normalizeText(scene.locationEn || scene.locationRu)).filter(Boolean)));
+  const globalMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut || {}, directorOutput || {});
+  const musicPromptRu = normalizeText(
+    storyboardOut?.musicPromptRu
+    ?? storyboardOut?.music_prompt_ru
+    ?? directorOutput?.musicPromptRu
+    ?? directorOutput?.music_prompt_ru
+  );
+  const musicPromptEn = normalizeText(
+    storyboardOut?.musicPromptEn
+    ?? storyboardOut?.music_prompt_en
+    ?? directorOutput?.musicPromptEn
+    ?? directorOutput?.music_prompt_en
+  );
 
   const normalizedPackage = {
     scenes,
@@ -361,18 +387,10 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
       ?? directorOutput?.audio_duration_sec,
       0
     ),
-    musicPromptRu: normalizeText(
-      storyboardOut?.musicPromptRu
-      ?? storyboardOut?.music_prompt_ru
-      ?? directorOutput?.musicPromptRu
-      ?? directorOutput?.music_prompt_ru
-    ),
-    musicPromptEn: normalizeText(
-      storyboardOut?.musicPromptEn
-      ?? storyboardOut?.music_prompt_en
-      ?? directorOutput?.musicPromptEn
-      ?? directorOutput?.music_prompt_en
-    ),
+    globalMusicPrompt,
+    musicPromptRu,
+    musicPromptEn,
+    bgMusicPrompt: normalizeText(storyboardOut?.bgMusicPrompt ?? directorOutput?.bgMusicPrompt) || globalMusicPrompt,
     musicStatus: normalizeText(storyboardOut?.musicStatus ?? storyboardOut?.music_status ?? directorOutput?.musicStatus ?? directorOutput?.music_status),
     musicUrl: normalizeText(storyboardOut?.musicUrl ?? storyboardOut?.music_url ?? directorOutput?.musicUrl ?? directorOutput?.music_url),
     plannerDebug: storyboardOut?.plannerDebug ?? storyboardOut?.planner_debug ?? directorOutput?.plannerDebug ?? directorOutput?.planner_debug,
@@ -388,6 +406,22 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     console.debug("[SCENARIO FORMAT] normalized package", {
       format: normalizedPackage.format || "",
       scenesCount: Array.isArray(normalizedPackage.scenes) ? normalizedPackage.scenes.length : 0,
+    });
+  }
+  if (CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) {
+    console.debug("[SCENARIO GLOBAL MUSIC]", {
+      hasDirectorGlobalMusicPrompt: !!normalizeText(
+        directorOutput?.globalMusicPrompt
+        ?? directorOutput?.music?.globalMusicPrompt
+        ?? directorOutput?.music_prompt
+        ?? directorOutput?.bgMusicPrompt
+      ),
+      hasStoryboardOutMusicPrompt: !!normalizeText(
+        storyboardOut?.globalMusicPrompt
+        ?? storyboardOut?.music_prompt
+        ?? storyboardOut?.bgMusicPrompt
+      ),
+      normalizedGlobalMusicPromptLength: globalMusicPrompt.length,
     });
   }
   return normalizedPackage;

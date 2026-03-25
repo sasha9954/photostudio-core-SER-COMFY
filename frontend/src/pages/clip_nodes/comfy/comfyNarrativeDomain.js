@@ -226,6 +226,18 @@ const splitEntities = (text) => normalizeText(text)
   .filter(Boolean)
   .slice(0, 6);
 
+function resolveDirectorGlobalMusicPrompt(response = {}, storyboardOut = null, directorOutput = null) {
+  return normalizeText(
+    response?.globalMusicPrompt
+    ?? response?.bgMusicPrompt
+    ?? storyboardOut?.globalMusicPrompt
+    ?? storyboardOut?.music_prompt
+    ?? directorOutput?.music?.globalMusicPrompt
+    ?? directorOutput?.music_prompt
+    ?? directorOutput?.globalMusicPrompt
+  );
+}
+
 const buildSceneWindow = (index, totalScenes) => {
   const safeIndex = Number(index) || 0;
   const safeTotal = Math.max(1, Number(totalScenes) || 1);
@@ -483,6 +495,11 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
     toneStyleDirection: normalizeText(state.styleProfile) || "realistic",
     directorSummary: normalizeText(storyboardOut.director_summary),
   };
+  const globalMusicPrompt = normalizeText(
+    storyboardOut?.globalMusicPrompt
+    ?? storyboardOut?.music_prompt
+    ?? storyboardOut?.bgMusicPrompt
+  );
   const normalizedScenes = scenes.map((scene, index) => {
     const ltxMode = normalizeText(scene.ltx_mode) || "i2v";
     return {
@@ -540,11 +557,12 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       pauseDuckSilenceNotes: scene.pauseDuckSilenceNotes,
     })),
     music: {
-      globalMusicPrompt: normalizeText(storyboardOut.music_prompt),
+      globalMusicPrompt,
       mood: normalizeText(state.styleProfile) || "realistic",
       style: `${normalizeText(state.contentType) || "story"} / ${normalizeText(state.styleProfile) || "realistic"}`,
       pacingHints: "Use the approved storyboard_out pacing when Storyboard executes the scenes.",
     },
+    globalMusicPrompt,
   };
 }
 
@@ -572,20 +590,29 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
   const directorOutput = response?.directorOutput && typeof response.directorOutput === "object"
     ? response.directorOutput
     : mapStoryboardOutToDirectorOutput(storyboardOut, state);
+  const globalMusicPrompt = resolveDirectorGlobalMusicPrompt(response, storyboardOut, directorOutput);
   const normalizedStoryboardOut = {
     ...storyboardOut,
     format: normalizeText(storyboardOut?.format) || resolvedFormat,
     aspectRatio: normalizeText(storyboardOut?.aspectRatio ?? storyboardOut?.aspect_ratio) || resolvedFormat,
+    globalMusicPrompt: normalizeText(storyboardOut?.globalMusicPrompt) || globalMusicPrompt,
   };
   return {
     storyboardOut: normalizedStoryboardOut,
     scenario: normalizeText(response?.scenario) || normalizeText(storyboardOut.full_scenario),
     voiceScript: normalizeText(response?.voiceScript) || normalizeText(storyboardOut.voice_script),
     brainPackage: response?.brainPackage && typeof response.brainPackage === "object" ? response.brainPackage : null,
-    bgMusicPrompt: normalizeText(response?.bgMusicPrompt) || normalizeText(storyboardOut.music_prompt),
+    bgMusicPrompt: normalizeText(response?.bgMusicPrompt) || globalMusicPrompt || normalizeText(storyboardOut.music_prompt),
+    globalMusicPrompt,
     directorOutput: {
       ...(directorOutput && typeof directorOutput === "object" ? directorOutput : {}),
       format: normalizeText(directorOutput?.format) || resolvedFormat,
+      globalMusicPrompt: normalizeText(directorOutput?.globalMusicPrompt) || globalMusicPrompt,
+      music_prompt: normalizeText(directorOutput?.music_prompt) || globalMusicPrompt,
+      music: {
+        ...(directorOutput?.music && typeof directorOutput.music === "object" ? directorOutput.music : {}),
+        globalMusicPrompt: normalizeText(directorOutput?.music?.globalMusicPrompt) || globalMusicPrompt,
+      },
     },
   };
 }
