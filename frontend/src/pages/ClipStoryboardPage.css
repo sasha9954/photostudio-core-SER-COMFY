@@ -3635,6 +3635,15 @@ body.ps_clip_fullscreen .mainCol {
   margin-top: 2px;
 }
 
+.clipSB_narrativeFormatField {
+  margin-top: 2px;
+}
+
+.clipSB_narrativeSelect--bottom {
+  min-height: 34px;
+  font-size: 12px;
+}
+
 .clipSB_narrativeStack {
   display: flex;
   flex-direction: column;
