@@ -7717,11 +7717,16 @@ def clip_image(payload: ClipImageIn):
     if isinstance(raw_refs_by_role_incoming, dict):
         incoming_character_1 = raw_refs_by_role_incoming.get("character_1") or []
     print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole.character_1=" + json.dumps(incoming_character_1, ensure_ascii=False))
+    incoming_character_2 = []
+    if isinstance(raw_refs_by_role_incoming, dict):
+        incoming_character_2 = raw_refs_by_role_incoming.get("character_2") or []
+    print("[COMFY IMAGE DEBUG] incoming refs.raw.refsByRole.character_2=" + json.dumps(incoming_character_2, ensure_ascii=False))
 
     comfy_refs_by_role = _clean_refs_by_role_for_image(raw_refs_by_role_incoming)
     print("[COMFY IMAGE DEBUG] cleaned refsByRole=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_2=" + json.dumps(comfy_refs_by_role.get("character_2") or [], ensure_ascii=False))
     reference_profiles = build_reference_profiles({
         role: [{"url": url, "name": ""} for url in (comfy_refs_by_role.get(role) or [])]
         for role in COMFY_REF_ROLES
@@ -7908,6 +7913,14 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] scene secondaryRoles=" + json.dumps(scene_secondary_roles, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene contract=" + json.dumps(scene_contract, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] scene active roles=" + json.dumps(scene_active_roles, ensure_ascii=False))
+    print("[COMFY IMAGE DEBUG] has character_2 signal=" + json.dumps({
+        "incomingSceneActiveRoles": "character_2" in incoming_scene_active_roles,
+        "sceneActiveRoles": "character_2" in scene_active_roles,
+        "sceneSecondaryRoles": "character_2" in scene_secondary_roles,
+        "sceneContractMustAppear": "character_2" in (scene_contract.get("mustAppear") or []),
+        "sceneContractSupportEntityIds": "character_2" in (scene_contract.get("supportEntityIds") or []),
+        "refsByRoleCharacter2Count": len(comfy_refs_by_role.get("character_2") or []),
+    }, ensure_ascii=False))
     if dropped_by_must_not_appear:
         print("[COMFY IMAGE DEBUG] scene droppedByMustNotAppear=" + json.dumps(dropped_by_must_not_appear, ensure_ascii=False))
     if scene_contract.get("degradedRoles"):

@@ -4,6 +4,13 @@ const normalizeText = (value) => String(value || "").trim();
 const SCENARIO_STORYBOARD_TRACE = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
+const SCENARIO_ROLE_TRACE_SCENE_ID = "";
+
+function shouldTraceScenarioRoleScene(sceneId = "") {
+  const needle = normalizeText(SCENARIO_ROLE_TRACE_SCENE_ID);
+  if (!needle) return false;
+  return normalizeText(sceneId) === needle;
+}
 export const SCENARIO_LTX_WORKFLOW_MAP = {
   i2v: "i2v",
   f_l: "f_l",
@@ -785,7 +792,28 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     globalVisualLock: scenarioPackage?.globalVisualLock || null,
     globalCameraProfile: scenarioPackage?.globalCameraProfile || null,
   };
+  if (shouldTraceScenarioRoleScene(normalizedScene.sceneId)) {
+    console.debug("[SCENARIO ROLE TRACE] normalizedScene.before_resolveScenarioSceneRoleContract", {
+      sceneId: normalizedScene.sceneId,
+      primaryRole: normalizedScene.primaryRole || "",
+      secondaryRoles: normalizedScene.secondaryRoles || [],
+      sceneActiveRoles: normalizedScene.sceneActiveRoles || [],
+      refsUsed: normalizedScene.refsUsed || [],
+      mustAppear: normalizedScene.mustAppear || [],
+      refsUsedByRoleKeys: Object.keys(normalizeObjectMap(normalizedScene.refsUsedByRole)),
+      actors: Array.isArray(normalizedScene.actors) ? normalizedScene.actors : [],
+      refsByRoleKeys: Object.keys(normalizeObjectMap(normalizedScene.refsByRole)),
+    });
+  }
   const resolvedRoleContract = resolveScenarioSceneRoleContract(normalizedScene, scenarioPackage || {});
+  if (shouldTraceScenarioRoleScene(normalizedScene.sceneId)) {
+    console.debug("[SCENARIO ROLE TRACE] resolvedRoleContract.after_resolveScenarioSceneRoleContract", {
+      sceneId: normalizedScene.sceneId,
+      ...resolvedRoleContract,
+      refsUsedByRoleKeys: Object.keys(normalizeObjectMap(resolvedRoleContract?.refsUsedByRole)),
+      hasCharacter2InSceneActiveRoles: Array.isArray(resolvedRoleContract?.sceneActiveRoles) && resolvedRoleContract.sceneActiveRoles.includes("character_2"),
+    });
+  }
   normalizedScene.primaryRole = resolvedRoleContract.primaryRole;
   normalizedScene.secondaryRoles = resolvedRoleContract.secondaryRoles;
   normalizedScene.sceneActiveRoles = resolvedRoleContract.sceneActiveRoles;
@@ -945,20 +973,32 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     : Array.isArray(directorOutput?.scenes)
       ? directorOutput.scenes
       : [];
-  const scenes = scenesRaw.map((scene, idx) => normalizeScenarioScene(scene, idx, {
-    globalVisualLock,
-    globalCameraProfile,
-    format,
-    refsByRole,
-    connectedRefsByRole,
-    roleTypeByRole,
-    connectedContextSummary,
-    heroParticipants,
-    supportingParticipants,
-    mustAppearRoles,
-    contextRefs,
-    refDirectives,
-  }));
+  const scenes = scenesRaw.map((scene, idx) => {
+    const tracedSceneId = normalizeText(scene?.sceneId ?? scene?.scene_id) || `S${idx + 1}`;
+    if (shouldTraceScenarioRoleScene(tracedSceneId)) {
+      const plannerSceneRaw = Array.isArray(storyboardOut?.scenes) ? (storyboardOut.scenes[idx] || null) : null;
+      const directorSceneRaw = Array.isArray(directorOutput?.scenes) ? (directorOutput.scenes[idx] || null) : null;
+      console.debug("[SCENARIO ROLE TRACE] raw planner/director scene", {
+        sceneId: tracedSceneId,
+        plannerSceneRaw,
+        directorSceneRaw,
+      });
+    }
+    return normalizeScenarioScene(scene, idx, {
+      globalVisualLock,
+      globalCameraProfile,
+      format,
+      refsByRole,
+      connectedRefsByRole,
+      roleTypeByRole,
+      connectedContextSummary,
+      heroParticipants,
+      supportingParticipants,
+      mustAppearRoles,
+      contextRefs,
+      refDirectives,
+    });
+  });
 
   const storySummary = normalizeDualField({
     ru: storyboardOut?.story_summary_ru ?? directorOutput?.history?.summaryRu ?? preferRuFrom(directorOutput?.history, storyboardOut?.story_summary),
