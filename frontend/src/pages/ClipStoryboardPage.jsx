@@ -10707,6 +10707,19 @@ onClipSec: (nodeId, value) => {
           });
           const sceneGeneration = buildStoryboardSceneGenerationMap(scenes, base.data?.sceneGeneration);
           const currentAudioData = base?.data?.audioData && typeof base.data.audioData === "object" ? base.data.audioData : {};
+          const packageMusicPromptSourceKindRaw = String(normalizedPackage?.musicPromptSourceKind || "").trim().toLowerCase();
+          const packageMusicPromptSourceText = String(normalizedPackage?.musicPromptSourceText || "").trim();
+          const packageFallbackMusicPrompt = String(normalizedPackage?.fallbackMusicPrompt || "").trim();
+          const packageResolvedMusicPromptSourceKind = packageMusicPromptSourceKindRaw === "real" && packageMusicPromptSourceText
+            ? "real"
+            : (packageMusicPromptSourceText || packageFallbackMusicPrompt)
+              ? "fallback"
+              : "empty";
+          const packageResolvedMusicPromptSourceText = packageResolvedMusicPromptSourceKind === "real"
+            ? packageMusicPromptSourceText
+            : packageResolvedMusicPromptSourceKind === "fallback"
+              ? (packageMusicPromptSourceText || packageFallbackMusicPrompt)
+              : "";
           const phraseBreakdown = scenes.map((scene, idx) => ({
             sceneId: String(scene?.sceneId || `S${idx + 1}`),
             startSec: Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0),
@@ -10723,44 +10736,36 @@ onClipSec: (nodeId, value) => {
             packageGlobalMusicPrompt: String(normalizedPackage?.musicPromptSourceText || normalizedPackage?.globalMusicPrompt || "").trim(),
             globalMusicPrompt: String(
               revisionChanged
-                ? (
-                  (String(normalizedPackage?.musicPromptSourceKind || "").trim().toLowerCase() === "real"
-                    ? normalizedPackage?.musicPromptSourceText
-                    : "")
-                  || currentAudioData.globalMusicPrompt
-                  || ""
-                )
+                ? packageResolvedMusicPromptSourceText
                 : (
                   currentAudioData.globalMusicPrompt
-                  || (String(normalizedPackage?.musicPromptSourceKind || "").trim().toLowerCase() === "real"
-                    ? normalizedPackage?.musicPromptSourceText
-                    : "")
+                  || packageResolvedMusicPromptSourceText
                   || ""
                 )
             ).trim(),
             musicPromptSourceKind: String(
               revisionChanged
-                ? (normalizedPackage?.musicPromptSourceKind || "empty")
+                ? packageResolvedMusicPromptSourceKind
                 : (currentAudioData.musicPromptSourceKind || normalizedPackage?.musicPromptSourceKind || "empty")
             ).trim().toLowerCase(),
             musicPromptSourceText: String(
               revisionChanged
-                ? (normalizedPackage?.musicPromptSourceText || "")
+                ? packageResolvedMusicPromptSourceText
                 : (currentAudioData.musicPromptSourceText || normalizedPackage?.musicPromptSourceText || "")
             ).trim(),
             fallbackMusicPrompt: String(
               revisionChanged
-                ? (normalizedPackage?.fallbackMusicPrompt || "")
+                ? packageFallbackMusicPrompt
                 : (currentAudioData.fallbackMusicPrompt || normalizedPackage?.fallbackMusicPrompt || "")
             ).trim(),
             musicPromptRu: String(
               revisionChanged
-                ? (normalizedPackage?.musicPromptRu || currentAudioData.musicPromptRu || "")
+                ? (normalizedPackage?.musicPromptRu || "")
                 : (currentAudioData.musicPromptRu || normalizedPackage?.musicPromptRu || "")
             ).trim(),
             musicPromptEn: String(
               revisionChanged
-                ? (normalizedPackage?.musicPromptEn || currentAudioData.musicPromptEn || "")
+                ? (normalizedPackage?.musicPromptEn || "")
                 : (currentAudioData.musicPromptEn || normalizedPackage?.musicPromptEn || "")
             ).trim(),
             musicStatus: String(
@@ -10829,6 +10834,21 @@ onClipSec: (nodeId, value) => {
             : (String(currentAudioData.globalMusicPrompt || currentAudioData.musicPromptRu || currentAudioData.musicPromptEn || "").trim()
               ? "currentAudioData"
               : "fallback");
+          const usedCurrentAudioDataTextFallback = revisionChanged
+            ? false
+            : (
+              !String(normalizedPackage?.musicPromptSourceText || "").trim()
+              && !!String(currentAudioData.globalMusicPrompt || currentAudioData.musicPromptRu || currentAudioData.musicPromptEn || "").trim()
+            );
+          console.debug("[SCENARIO MUSIC TEXT SYNC]", {
+            revisionChanged,
+            musicPromptSourceKind: String(audioData?.musicPromptSourceKind || "empty").trim().toLowerCase() || "empty",
+            musicPromptSourceTextLength: String(audioData?.musicPromptSourceText || "").trim().length,
+            globalMusicPromptLength: String(audioData?.globalMusicPrompt || "").trim().length,
+            musicPromptRuLength: String(audioData?.musicPromptRu || "").trim().length,
+            musicPromptEnLength: String(audioData?.musicPromptEn || "").trim().length,
+            usedCurrentAudioDataTextFallback,
+          });
           const currentHasMusicResult = !!String(
             currentAudioData.musicUrl
             || currentAudioData.musicStatus
