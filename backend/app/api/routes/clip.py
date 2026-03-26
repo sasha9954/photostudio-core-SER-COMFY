@@ -544,17 +544,15 @@ def _normalize_clip_video_transition_type(value: str | None) -> str:
 
 LTX_WORKFLOW_KEY_TO_FILE = {
     "i2v": "image-video.json",
-    "i2v_as": "image-video-golos-zvuk.json",
     "f_l": "imag-imag-video-bz.json",
-    "f_l_as": "imag-imag-video-zvuk.json",
     "continuation": "image-video.json",
     "lip_sync": "image-lipsink-video-music.json",
 }
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
-    "image-video-golos-zvuk.json": "i2v_as",
+    "image-video-golos-zvuk.json": "i2v",
     "imag-imag-video-bz.json": "f_l",
-    "imag-imag-video-zvuk.json": "f_l_as",
+    "imag-imag-video-zvuk.json": "f_l",
     "image-lipsink-video-music.json": "lip_sync",
 }
 
@@ -565,8 +563,10 @@ LTX_LEGACY_WORKFLOW_ALIASES = {"i2v_as": "i2v", "f_l_as": "f_l"}
 
 LTX_MODE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
+    # legacy input alias (do not treat as production key)
     "i2v_as": "i2v",
     "f_l": "f_l",
+    # legacy input alias (do not treat as production key)
     "f_l_as": "f_l",
     "continuation": "continuation",
     "lip_sync": "lip_sync",
@@ -575,22 +575,22 @@ LTX_MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_distilled_fp8": {
         "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_dev_fp16": {
         "key": "ltx23_dev_fp16",
         "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_distilled_fp16": {
         "key": "ltx23_distilled_fp16",
         "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
     "ltx23_13b_dev_fp8": {
         "key": "ltx23_13b_dev_fp8",
@@ -605,10 +605,8 @@ LTX_MODEL_KEY_TO_MODEL_SPEC = {
 }
 LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
     "i2v": "ltx23_dev_fp8",
-    "i2v_as": "ltx23_dev_fp8",
     "lip_sync": "ltx23_dev_fp8",
     "f_l": "ltx23_distilled_fp8",
-    "f_l_as": "ltx23_distilled_fp8",
 }
 
 
@@ -616,6 +614,8 @@ def _normalize_ltx_workflow_key(candidate: str | None) -> str:
     raw = str(candidate or "").strip().lower()
     if not raw:
         return ""
+    if raw in LTX_LEGACY_WORKFLOW_ALIASES:
+        return LTX_LEGACY_WORKFLOW_ALIASES[raw]
     if raw in LTX_WORKFLOW_KEY_TO_FILE:
         return LTX_LEGACY_WORKFLOW_ALIASES.get(raw, raw)
     if raw in LTX_WORKFLOW_FILE_TO_KEY:
