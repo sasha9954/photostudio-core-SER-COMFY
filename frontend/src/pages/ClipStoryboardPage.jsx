@@ -9339,7 +9339,10 @@ Aspect ratio: ${imageFormat}`,
   }, [scenarioScenes]);
 
   const handleScenarioGenerateVideo = useCallback(async (options = {}) => {
-    const targetSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
+    const requestedSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
+    const requestedSceneId = String(options?.sceneId || options?.selectedSceneId || "").trim();
+    const resolvedSceneIndex = requestedSceneId ? resolveScenarioSceneIndex(requestedSceneId) : -1;
+    const targetSceneIndex = requestedSceneIndex >= 0 ? requestedSceneIndex : resolvedSceneIndex;
     const targetScene = scenarioScenes[targetSceneIndex] || null;
     if (CLIP_TRACE_SCENARIO_EDITOR_GENERATE) {
       console.debug("[SCENARIO GENERATE ROUTE]", {
@@ -9420,7 +9423,7 @@ Aspect ratio: ${imageFormat}`,
     const continuityBridgePrompt = transitionType === "continuous"
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
-    const originalVideoPrompt = String(targetScene?.videoPrompt || "").trim();
+    const originalVideoPrompt = getSceneTransitionPrompt(targetScene);
     const sceneHumanVisualAnchors = buildScenarioHumanVisualAnchors(targetScene);
     const humanAnchorBlock = sceneHumanVisualAnchors.length
       ? [
@@ -9494,46 +9497,52 @@ Aspect ratio: ${imageFormat}`,
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
+      const videoStartPayload = {
+        sceneId,
+        imageUrl: sourceImageUrl,
+        startImageUrl: effectiveStartImageUrl,
+        endImageUrl,
+        audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
+        external_audio_used: requiresAudioSensitiveVideo,
+        external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
+        videoPrompt: finalVideoPrompt,
+        sceneHumanVisualAnchors,
+        transitionActionPrompt,
+        transitionType,
+        requestedDurationSec,
+        lipSync: effectiveLipSync,
+        renderMode: effectiveRenderMode,
+        ltxMode: String(targetScene?.ltxMode || ""),
+        imageStrategy,
+        resolvedWorkflowKey,
+        resolvedModelKey,
+        workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
+        modelFileOverride: String(targetScene?.modelFileOverride || ""),
+        requiresTwoFrames,
+        requiresContinuation,
+        requiresAudioSensitiveVideo,
+        continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
+        continuationSourceSceneId,
+        continuationSourceAssetUrl,
+        continuationSourceAssetType,
+        shotType: targetScene.shotType || "",
+        sceneType: targetScene.sceneType || "",
+        format: resolvePreferredSceneFormat(
+          targetScene?.format,
+          targetScene?.imageFormat
+        ),
+        provider: effectiveVideoProvider,
+        sceneRenderProvider: effectiveVideoProvider,
+        ...scenarioContractPayload,
+      };
+      console.debug("[SCENARIO VIDEO START PAYLOAD]", {
+        endpoint,
+        sceneId,
+        payload: videoStartPayload,
+      });
       const out = await fetchJson(endpoint, {
         method: "POST",
-        body: {
-          sceneId,
-          imageUrl: sourceImageUrl,
-          startImageUrl: effectiveStartImageUrl,
-          endImageUrl,
-          audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
-          external_audio_used: requiresAudioSensitiveVideo,
-          external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
-          videoPrompt: finalVideoPrompt,
-          sceneHumanVisualAnchors,
-          transitionActionPrompt,
-          transitionType,
-          requestedDurationSec,
-          lipSync: effectiveLipSync,
-          renderMode: effectiveRenderMode,
-          ltxMode: String(targetScene?.ltxMode || ""),
-          imageStrategy,
-          resolvedWorkflowKey,
-          resolvedModelKey,
-          workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
-          modelFileOverride: String(targetScene?.modelFileOverride || ""),
-          requiresTwoFrames,
-          requiresContinuation,
-          requiresAudioSensitiveVideo,
-          continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
-          continuationSourceSceneId,
-          continuationSourceAssetUrl,
-          continuationSourceAssetType,
-          shotType: targetScene.shotType || "",
-          sceneType: targetScene.sceneType || "",
-          format: resolvePreferredSceneFormat(
-            targetScene?.format,
-            targetScene?.imageFormat
-          ),
-          provider: effectiveVideoProvider,
-          sceneRenderProvider: effectiveVideoProvider,
-          ...scenarioContractPayload,
-        },
+        body: videoStartPayload,
       });
       console.info("[VIDEO START RESPONSE]", {
         scope: "scenario",
@@ -9583,45 +9592,51 @@ Aspect ratio: ${imageFormat}`,
       }
 
       // Fallback for environments where async endpoints are not available yet.
+      const legacyPayload = {
+        sceneId,
+        imageUrl: sourceImageUrl,
+        startImageUrl: effectiveStartImageUrl,
+        endImageUrl,
+        audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
+        external_audio_used: requiresAudioSensitiveVideo,
+        external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
+        videoPrompt: finalVideoPrompt,
+        transitionActionPrompt,
+        transitionType,
+        requestedDurationSec,
+        lipSync: effectiveLipSync,
+        renderMode: effectiveRenderMode,
+        ltxMode: String(targetScene?.ltxMode || ""),
+        imageStrategy,
+        resolvedWorkflowKey,
+        resolvedModelKey,
+        workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
+        modelFileOverride: String(targetScene?.modelFileOverride || ""),
+        requiresTwoFrames,
+        requiresContinuation,
+        requiresAudioSensitiveVideo,
+        continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
+        continuationSourceSceneId,
+        continuationSourceAssetUrl,
+        continuationSourceAssetType,
+        shotType: targetScene.shotType || "",
+        sceneType: targetScene.sceneType || "",
+        format: resolvePreferredSceneFormat(
+          targetScene?.format,
+          targetScene?.imageFormat
+        ),
+        provider: effectiveVideoProvider,
+        sceneRenderProvider: effectiveVideoProvider,
+        ...scenarioContractPayload,
+      };
+      console.debug("[SCENARIO VIDEO LEGACY PAYLOAD]", {
+        endpoint: "/api/clip/video",
+        sceneId,
+        payload: legacyPayload,
+      });
       const legacyOut = await fetchJson("/api/clip/video", {
         method: "POST",
-        body: {
-          sceneId,
-          imageUrl: sourceImageUrl,
-          startImageUrl: effectiveStartImageUrl,
-          endImageUrl,
-          audioSliceUrl: requiresAudioSensitiveVideo ? (targetScene.audioSliceUrl || "") : "",
-          external_audio_used: requiresAudioSensitiveVideo,
-          external_audio_reason: requiresAudioSensitiveVideo ? "lip_sync_scene" : "not_applicable_non_lipsync",
-          videoPrompt: finalVideoPrompt,
-          transitionActionPrompt,
-          transitionType,
-          requestedDurationSec,
-          lipSync: effectiveLipSync,
-          renderMode: effectiveRenderMode,
-          ltxMode: String(targetScene?.ltxMode || ""),
-          imageStrategy,
-          resolvedWorkflowKey,
-          resolvedModelKey,
-          workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
-          modelFileOverride: String(targetScene?.modelFileOverride || ""),
-          requiresTwoFrames,
-          requiresContinuation,
-          requiresAudioSensitiveVideo,
-          continuationFromPrevious: Boolean(targetScene?.continuationFromPrevious ?? targetScene?.continuation ?? requiresContinuation),
-          continuationSourceSceneId,
-          continuationSourceAssetUrl,
-          continuationSourceAssetType,
-          shotType: targetScene.shotType || "",
-          sceneType: targetScene.sceneType || "",
-          format: resolvePreferredSceneFormat(
-            targetScene?.format,
-            targetScene?.imageFormat
-          ),
-          provider: effectiveVideoProvider,
-          sceneRenderProvider: effectiveVideoProvider,
-          ...scenarioContractPayload,
-        },
+        body: legacyPayload,
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
       updateScenarioScene(targetSceneIndex, {
@@ -9640,7 +9655,7 @@ Aspect ratio: ${imageFormat}`,
       setScenarioVideoError(String(e?.message || e));
       updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e) });
     }
-  }, [openNextSceneWithoutVideo, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
+  }, [openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
@@ -11577,7 +11592,7 @@ onClipSec: (nodeId, value) => {
                   handleGenerateScenarioImage("end", { sceneIndex, sceneId: normalizedSceneId, ...meta });
                   return;
                 }
-                handleScenarioGenerateVideo({ sceneIndex });
+                handleScenarioGenerateVideo({ sceneIndex, sceneId: normalizedSceneId, ...meta });
               },
               onScenarioMusicUpdate: (nodeId, patch = {}) => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
