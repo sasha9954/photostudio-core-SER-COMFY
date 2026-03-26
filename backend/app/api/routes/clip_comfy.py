@@ -1,5 +1,6 @@
 import re
 from typing import Any
+import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -175,6 +176,133 @@ ANIMAL_LABEL_BY_SPECIES = {
     "horse": "лошадь",
     "bird": "птица",
 }
+
+
+def _flag_enabled(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_use_scenario_director_fixture(req: dict[str, Any], *, reason: str = "") -> bool:
+    metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+    controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
+
+    if _flag_enabled(metadata.get("forceLocalDeterministicFixture")):
+        return True
+    if _flag_enabled(metadata.get("force_local_deterministic_fixture")):
+        return True
+    if _flag_enabled(controls.get("forceLocalDeterministicFixture")):
+        return True
+
+    fallback_on_gemini_403 = _flag_enabled(
+        metadata.get("fallbackToLocalDeterministicFixtureOnGemini403"),
+        default=True,
+    )
+    env_fallback = _flag_enabled(os.getenv("SCENARIO_DIRECTOR_FIXTURE_ON_GEMINI_403"), default=True)
+    return "gemini_403" in str(reason or "").strip().lower() and fallback_on_gemini_403 and env_fallback
+
+
+def _build_scenario_director_fixture(req: dict[str, Any], *, fixture_reason: str) -> dict[str, Any]:
+    source = req.get("source") if isinstance(req.get("source"), dict) else {}
+    source_value = str(source.get("source_value") or source.get("sourceValue") or "").strip()
+    audio_duration_sec = float(req.get("audioDurationSec") or source.get("audioDurationSec") or 12.0)
+    if audio_duration_sec <= 0:
+        audio_duration_sec = 12.0
+    scene_id = "TRACE_SCENE_2P_001"
+
+    refs_by_role: dict[str, list[str]] = {}
+    context_refs = req.get("context_refs") if isinstance(req.get("context_refs"), dict) else {}
+    for role in CONNECT_REFS_MAIN_ROLES:
+        role_payload = context_refs.get(role) if isinstance(context_refs.get(role), dict) else {}
+        refs = role_payload.get("refs") if isinstance(role_payload.get("refs"), list) else []
+        normalized_refs = [str(item).strip() for item in refs if str(item).strip()]
+        if normalized_refs:
+            refs_by_role[role] = normalized_refs
+
+    if "character_1" not in refs_by_role:
+        refs_by_role["character_1"] = ["https://local.fixture/character_1.jpg"]
+    if "character_2" not in refs_by_role:
+        refs_by_role["character_2"] = ["https://local.fixture/character_2.jpg"]
+
+    scene_contract = {
+        "sceneId": scene_id,
+        "t0": 0,
+        "t1": round(audio_duration_sec, 3),
+        "durationSec": round(audio_duration_sec, 3),
+        "summaryRu": "character_1 и character_2 взаимодействуют в одном кадре.",
+        "summaryEn": "character_1 and character_2 interact in one frame.",
+        "imagePromptRu": "Кинематографичный двухперсонажный кадр с character_1 и character_2 без потери идентичности.",
+        "imagePromptEn": "Cinematic two-character frame with character_1 and character_2 and stable identity.",
+        "videoPromptRu": "Камера обходит обоих героев, сохраняя их в кадре.",
+        "videoPromptEn": "Camera moves around both heroes while keeping them in frame.",
+        "actors": ["character_1", "character_2"],
+        "sceneType": "dialogue",
+        "primaryRole": "character_1",
+        "secondaryRoles": ["character_2"],
+        "sceneActiveRoles": ["character_1", "character_2"],
+        "refsUsed": ["character_1", "character_2"],
+        "mustAppear": ["character_1", "character_2"],
+        "supportEntityIds": ["character_2"],
+        "refsByRole": {
+            "character_1": refs_by_role.get("character_1", []),
+            "character_2": refs_by_role.get("character_2", []),
+        },
+        "refsUsedByRole": {
+            "character_1": refs_by_role.get("character_1", []),
+            "character_2": refs_by_role.get("character_2", []),
+        },
+        "connectedRefsByRole": {
+            "character_1": refs_by_role.get("character_1", []),
+            "character_2": refs_by_role.get("character_2", []),
+        },
+    }
+
+    storyboard_out = {
+        "format": "9:16",
+        "aspectRatio": "9:16",
+        "story_summary": "Deterministic local fixture storyboard for two characters.",
+        "director_summary": "Two-character interaction preserved in contract.",
+        "voice_script": "Character one approaches. Character two responds. Both remain visible.",
+        "globalMusicPrompt": "Cinematic tension with warm resolve.",
+        "scenes": [scene_contract],
+        "refsByRole": scene_contract["refsByRole"],
+        "connectedRefsByRole": scene_contract["connectedRefsByRole"],
+        "heroParticipants": ["character_1"],
+        "supportingParticipants": ["character_2"],
+        "mustAppearRoles": ["character_1", "character_2"],
+    }
+    director_output = {
+        "format": "9:16",
+        "globalMusicPrompt": "Cinematic tension with warm resolve.",
+        "refsByRole": scene_contract["refsByRole"],
+        "connectedRefsByRole": scene_contract["connectedRefsByRole"],
+        "heroParticipants": ["character_1"],
+        "supportingParticipants": ["character_2"],
+        "mustAppearRoles": ["character_1", "character_2"],
+        "scenes": [scene_contract],
+        "debug": {
+            "fixtureUsed": True,
+            "fixtureReason": fixture_reason,
+            "sourceValuePresent": bool(source_value),
+            "audioDurationSec": audio_duration_sec,
+        },
+    }
+    return {
+        "ok": True,
+        "storyboardOut": storyboard_out,
+        "directorOutput": director_output,
+        "scenario": storyboard_out["story_summary"],
+        "voiceScript": storyboard_out["voice_script"],
+        "globalMusicPrompt": storyboard_out["globalMusicPrompt"],
+        "debug": {
+            "fixtureUsed": True,
+            "fixtureReason": fixture_reason,
+            "sceneId": scene_id,
+        },
+    }
 
 
 def _extract_profile_tokens(profile: dict[str, Any] | None) -> str:
@@ -440,6 +568,9 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
 @router.post("/clip/comfy/scenario-director/generate")
 async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
     req = payload.model_dump(mode="json")
+    if _should_use_scenario_director_fixture(req, reason="manual_override"):
+        logger.warning("[clip_comfy_scenario_director_generate] using deterministic fixture reason=manual_override")
+        return _build_scenario_director_fixture(req, fixture_reason="manual_override")
     try:
         mode = str(req.get("mode") or "oneshot").strip().lower()
         if mode == "master":
@@ -448,6 +579,11 @@ async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerat
             return run_scenario_director_scenes(req)
         return run_scenario_director(req)
     except ScenarioDirectorError as exc:
+        exc_details = exc.details if isinstance(exc.details, dict) else {}
+        http_status = int(exc_details.get("http_status") or 0)
+        if http_status == 403 and _should_use_scenario_director_fixture(req, reason="gemini_403"):
+            logger.warning("[clip_comfy_scenario_director_generate] Gemini 403 fallback to deterministic fixture")
+            return _build_scenario_director_fixture(req, fixture_reason="gemini_403_fallback")
         detail: dict[str, Any] = {"code": exc.code, "message": exc.message}
         if exc.details:
             detail["details"] = exc.details
