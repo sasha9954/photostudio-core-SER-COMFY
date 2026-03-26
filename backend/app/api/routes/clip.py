@@ -540,20 +540,41 @@ LTX_WORKFLOW_KEY_TO_FILE = {
     "i2v_as": "image-video-golos-zvuk.json",
     "f_l": "imag-imag-video-bz.json",
     "f_l_as": "imag-imag-video-zvuk.json",
+    "continuation": "image-video.json",
     "lip_sync": "image-lipsink-video-music.json",
+}
+LTX_WORKFLOW_FILE_TO_KEY = {
+    "image-video.json": "i2v",
+    "image-video-golos-zvuk.json": "i2v_as",
+    "imag-imag-video-bz.json": "f_l",
+    "imag-imag-video-zvuk.json": "f_l_as",
+    "image-lipsink-video-music.json": "lip_sync",
 }
 
 LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "i2v_as", "lip_sync"}
 LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l", "f_l_as"}
 LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS = {"i2v_as", "f_l_as", "lip_sync"}
+LTX_CONTINUATION_WORKFLOW_KEYS = {"continuation"}
 
 LTX_MODE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
     "i2v_as": "i2v_as",
     "f_l": "f_l",
     "f_l_as": "f_l_as",
+    "continuation": "continuation",
     "lip_sync": "lip_sync",
 }
+
+
+def _normalize_ltx_workflow_key(candidate: str | None) -> str:
+    raw = str(candidate or "").strip().lower()
+    if not raw:
+        return ""
+    if raw in LTX_WORKFLOW_KEY_TO_FILE:
+        return raw
+    if raw in LTX_WORKFLOW_FILE_TO_KEY:
+        return LTX_WORKFLOW_FILE_TO_KEY[raw]
+    return ""
 
 
 def _resolve_ltx_workflow_selection(
@@ -566,7 +587,7 @@ def _resolve_ltx_workflow_selection(
     start_image_url: str,
     end_image_url: str,
 ) -> tuple[str, str, str, str]:
-    normalized_payload_key = str(payload_workflow_key or "").strip().lower()
+    normalized_payload_key = _normalize_ltx_workflow_key(payload_workflow_key)
     normalized_ltx_mode = str(ltx_mode or "").strip().lower()
     fallback_workflow_key = ""
     source = "default"
@@ -586,8 +607,8 @@ def _resolve_ltx_workflow_selection(
             fallback_workflow_key = "i2v"
             source = "legacy_default"
 
-    final_workflow_key = normalized_payload_key if normalized_payload_key in LTX_WORKFLOW_KEY_TO_FILE else fallback_workflow_key
-    workflow_source = "payload" if normalized_payload_key in LTX_WORKFLOW_KEY_TO_FILE else source
+    final_workflow_key = normalized_payload_key if normalized_payload_key else fallback_workflow_key
+    workflow_source = "payload" if normalized_payload_key else source
     workflow_file = LTX_WORKFLOW_KEY_TO_FILE.get(final_workflow_key) or LTX_WORKFLOW_KEY_TO_FILE["i2v"]
     workflow_path = f"app/workflows/{workflow_file}"
     return final_workflow_key, fallback_workflow_key, workflow_source, workflow_path
@@ -9052,6 +9073,8 @@ def clip_video(payload: ClipVideoIn):
 
     if final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS:
         mode = "continuous"
+    elif final_workflow_key in LTX_CONTINUATION_WORKFLOW_KEYS:
+        mode = "continuous"
     elif final_workflow_key == "lip_sync":
         mode = "lipsync"
     else:
@@ -9061,6 +9084,13 @@ def clip_video(payload: ClipVideoIn):
     print(
         "[CLIP VIDEO PROVIDER] "
         f"sceneId={scene_id} provider={provider} mode={mode} transitionType={transition_type} format={output_format}"
+    )
+    print(
+        "[LTX ROUTER] "
+        f"sceneId={scene_id} ltxMode={str(payload.ltxMode or '').strip()} "
+        f"resolvedWorkflowKey={str(payload.resolvedWorkflowKey or '').strip()} "
+        f"finalWorkflowKey={final_workflow_key} workflowFile={LTX_WORKFLOW_KEY_TO_FILE.get(final_workflow_key, '')} "
+        f"provider={provider} mode={mode}"
     )
 
     if provider == "comfy_remote":
@@ -9111,11 +9141,23 @@ def clip_video(payload: ClipVideoIn):
             height=height,
             requested_duration_sec=requested_duration,
             workflow_path=workflow_path,
+            workflow_key=final_workflow_key,
+            start_image_bytes=None,
+            end_image_bytes=None,
+            audio_url=audio_slice_url,
         )
         if comfy_err or not comfy_out:
             err_text = str(comfy_err or "comfy_remote_failed")
             code = "comfy_unreachable"
             status_code = 500
+            if err_text.startswith("capability_error:"):
+                parts = err_text.split(":", 2)
+                capability_code = parts[1] if len(parts) > 1 else "LTX_MODE_NOT_IMPLEMENTED"
+                capability_hint = parts[2] if len(parts) > 2 else "requested_ltx_mode_not_supported_by_comfy_remote"
+                return JSONResponse(
+                    status_code=422,
+                    content={"ok": False, "code": capability_code, "hint": capability_hint[:300]},
+                )
             if "upload_failed:upload_connect_timeout" in err_text:
                 code = "comfy_upload_connect_timeout"
                 status_code = 504

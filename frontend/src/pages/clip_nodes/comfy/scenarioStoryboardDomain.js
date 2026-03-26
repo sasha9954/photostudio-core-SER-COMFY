@@ -5,11 +5,19 @@ const SCENARIO_STORYBOARD_TRACE = false;
 const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 export const SCENARIO_LTX_WORKFLOW_MAP = {
-  i2v: "image-video.json",
-  i2v_as: "image-video-golos-zvuk.json",
-  f_l: "imag-imag-video-bz.json",
-  f_l_as: "imag-imag-video-zvuk.json",
-  lip_sync: "image-lipsink-video-music.json",
+  i2v: "i2v",
+  i2v_as: "i2v_as",
+  f_l: "f_l",
+  f_l_as: "f_l_as",
+  continuation: "continuation",
+  lip_sync: "lip_sync",
+};
+const SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY = {
+  "image-video.json": "i2v",
+  "image-video-golos-zvuk.json": "i2v_as",
+  "imag-imag-video-bz.json": "f_l",
+  "imag-imag-video-zvuk.json": "f_l_as",
+  "image-lipsink-video-music.json": "lip_sync",
 };
 const DEFAULT_GLOBAL_VISUAL_LOCK = {
   captureStyle: "cinematic commercial realism",
@@ -201,6 +209,7 @@ export function resolveScenarioExplicitWorkflowKey(scene = {}) {
   const modelAssignments = source?.modelAssignments && typeof source.modelAssignments === "object" ? source.modelAssignments : {};
   const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
   const candidates = [
+    source.resolvedWorkflowKey,
     source.videoWorkflowKey,
     source.workflowKey,
     source.workflow_key,
@@ -214,8 +223,10 @@ export function resolveScenarioExplicitWorkflowKey(scene = {}) {
     providerHints.workflow,
   ];
   for (const candidate of candidates) {
-    const normalized = normalizeText(candidate);
-    if (normalized) return normalized;
+    const normalized = normalizeText(candidate).toLowerCase();
+    if (!normalized) continue;
+    if (SCENARIO_LTX_WORKFLOW_MAP[normalized]) return normalized;
+    if (SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY[normalized]) return SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY[normalized];
   }
   return "";
 }
@@ -250,6 +261,34 @@ export function resolveScenarioWorkflowKey(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
   return SCENARIO_LTX_WORKFLOW_MAP[ltxMode] || SCENARIO_LTX_WORKFLOW_MAP.i2v;
+}
+
+function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
+  const providerHints = source?.providerHints && typeof source.providerHints === "object" ? source.providerHints : {};
+  const packageHints = scenarioPackage?.providerHints && typeof scenarioPackage.providerHints === "object" ? scenarioPackage.providerHints : {};
+  const providerCandidates = [
+    source.sceneRenderProvider,
+    source.provider,
+    providerHints.provider,
+    providerHints.videoProvider,
+    packageHints.provider,
+    packageHints.videoProvider,
+  ];
+  for (const candidate of providerCandidates) {
+    const normalized = normalizeText(candidate).toLowerCase();
+    if (normalized) return normalized;
+  }
+  const hasScenarioLtxContract = Boolean(
+    normalizeText(source.ltxMode ?? source.ltx_mode)
+    || normalizeText(source.resolvedWorkflowKey)
+    || source.continuation
+    || source.continuationFromPrevious
+    || source.continuation_from_previous
+    || source.needsTwoFrames
+    || source.needs_two_frames
+  );
+  if (hasScenarioLtxContract) return "comfy_remote";
+  return "";
 }
 
 function resolveScenarioGlobalMusicPrompt(storyboardOut = {}, directorOutput = {}) {
@@ -343,6 +382,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const explicitWorkflowKey = resolveScenarioExplicitWorkflowKey(source);
   const resolvedWorkflowKey = explicitWorkflowKey || resolveScenarioWorkflowKey(source);
   const resolvedModelKey = resolveScenarioExplicitModelKey(source);
+  const sceneRenderProvider = resolveScenarioRenderProvider(source, scenarioPackage);
   const requestedDurationSec = normalizeDurationFromScene(source, durationSec);
 
   const summaryDual = normalizeDualField({
@@ -416,8 +456,9 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     requiresTwoFrames,
     requiresContinuation,
     requiresAudioSensitiveVideo,
-    resolvedWorkflowKey: normalizeText(source.resolvedWorkflowKey) || resolvedWorkflowKey,
-    resolvedModelKey: normalizeText(source.resolvedModelKey) || resolvedModelKey,
+    resolvedWorkflowKey: resolveScenarioExplicitWorkflowKey(source) || resolvedWorkflowKey,
+    resolvedModelKey: resolvedModelKey || normalizeText(source.resolvedModelKey),
+    sceneRenderProvider: sceneRenderProvider || normalizeText(source.sceneRenderProvider),
     requestedDurationSec,
     narrationMode: normalizeText(source.narrationMode ?? source.narration_mode) || "full",
     localPhrase: normalizeText(source.localPhrase ?? source.local_phrase),

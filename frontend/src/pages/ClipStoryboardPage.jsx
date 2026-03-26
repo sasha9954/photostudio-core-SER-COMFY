@@ -371,6 +371,20 @@ function buildScenarioSceneContractPayload(scene = {}) {
   };
 }
 
+function resolveScenarioSceneVideoProvider(scene = {}) {
+  const rawProvider = String(scene?.sceneRenderProvider || "").trim().toLowerCase();
+  if (rawProvider) return rawProvider;
+  const hasLtxContract = Boolean(
+    String(scene?.ltxMode || "").trim()
+    || String(scene?.resolvedWorkflowKey || "").trim()
+    || scene?.continuation
+    || scene?.continuationFromPrevious
+    || scene?.needsTwoFrames
+  );
+  if (hasLtxContract) return "comfy_remote";
+  return "kie";
+}
+
 function normalizeScenarioRoleName(value = "") {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
@@ -8962,7 +8976,7 @@ Aspect ratio: ${imageFormat}`,
     if (!hasImageForVideo) return;
     const effectiveLipSync = isLipSyncScene(targetScene);
     const effectiveRenderMode = targetScene?.renderMode || (effectiveLipSync ? "avatar_lipsync" : "standard_video");
-    const effectiveVideoProvider = String(targetScene?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
+    const effectiveVideoProvider = resolveScenarioSceneVideoProvider(targetScene);
 
     if (effectiveLipSync && !targetScene?.audioSliceUrl) {
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
@@ -9013,6 +9027,7 @@ Aspect ratio: ${imageFormat}`,
     console.debug("[SCENE VIDEO ROUTE]", {
       sceneId,
       ltxMode: String(targetScene?.ltxMode || ""),
+      provider: effectiveVideoProvider,
       imageStrategy,
       explicitWorkflow,
       resolvedWorkflowKey,
@@ -9201,7 +9216,7 @@ Aspect ratio: ${imageFormat}`,
     const videoSourceImageUrl = transitionType === "continuous"
       ? String(scenarioSelectedEffectiveStartImageUrl || scenarioSelected?.endImageUrl || scenarioSelected?.imageUrl || "")
       : String(scenarioSelected?.imageUrl || "");
-    const effectiveVideoProvider = String(scenarioSelected?.sceneRenderProvider || "kie").trim().toLowerCase() === "comfy_remote" ? "comfy_remote" : "kie";
+    const effectiveVideoProvider = resolveScenarioSceneVideoProvider(scenarioSelected);
 
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
@@ -10261,7 +10276,7 @@ onClipSec: (nodeId, value) => {
                         isLipSync: !!(s.isLipSync ?? s.lipSync),
                         lipSync: !!(s.lipSync ?? s.isLipSync),
                         renderMode: s.renderMode || (s.isLipSync || s.lipSync ? "avatar_lipsync" : "standard_video"),
-                        sceneRenderProvider: s.provider || "kie",
+                        sceneRenderProvider: resolveScenarioSceneVideoProvider(s),
                         sceneRenderModel: s.model || "",
                         requestedDurationSec: normalizeDurationSec(s.requestedDurationSec ?? Math.max(0, t1 - t0)),
                         mouthVisible: s.mouthVisible ?? null,
