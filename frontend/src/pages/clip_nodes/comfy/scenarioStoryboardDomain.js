@@ -19,6 +19,38 @@ const SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY = {
   "imag-imag-video-zvuk.json": "f_l_as",
   "image-lipsink-video-music.json": "lip_sync",
 };
+export const SCENARIO_MODEL_KEY_TO_SPEC = {
+  ltx23_dev_fp8: {
+    key: "ltx23_dev_fp8",
+    ckpt_name: "ltx-2.3-22b-dev-fp8.safetensors",
+    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+  },
+  ltx23_distilled_fp8: {
+    key: "ltx23_distilled_fp8",
+    ckpt_name: "ltx-2.3-22b-distilled-fp8.safetensors",
+    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+  },
+  ltx23_dev_fp16: {
+    key: "ltx23_dev_fp16",
+    ckpt_name: "ltx-2.3-22b-dev-fp16.safetensors",
+    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+  },
+  ltx23_distilled_fp16: {
+    key: "ltx23_distilled_fp16",
+    ckpt_name: "ltx-2.3-22b-distilled-fp16.safetensors",
+    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+  },
+  ltx23_13b_dev_fp8: {
+    key: "ltx23_13b_dev_fp8",
+    ckpt_name: "ltx-2.3-13b-dev-fp8.safetensors",
+    compatible_workflow_keys: ["i2v", "f_l"],
+  },
+  ltx23_13b_distilled_fp8: {
+    key: "ltx23_13b_distilled_fp8",
+    ckpt_name: "ltx-2.3-13b-distilled-fp8.safetensors",
+    compatible_workflow_keys: ["i2v", "f_l"],
+  },
+};
 const SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY = {
   i2v: "ltx23_dev_fp8",
   i2v_as: "ltx23_dev_fp8",
@@ -34,6 +66,18 @@ const SCENARIO_MODEL_KEY_ALIASES = {
   "ltx23-distilled-fp8": "ltx23_distilled_fp8",
   "ltx23_distilled_fp8": "ltx23_distilled_fp8",
   "ltx-2.3-22b-distilled-fp8.safetensors": "ltx23_distilled_fp8",
+  "ltx23_dev_fp16": "ltx23_dev_fp16",
+  "ltx23-dev-fp16": "ltx23_dev_fp16",
+  "ltx-2.3-22b-dev-fp16.safetensors": "ltx23_dev_fp16",
+  "ltx23_distilled_fp16": "ltx23_distilled_fp16",
+  "ltx23-distilled-fp16": "ltx23_distilled_fp16",
+  "ltx-2.3-22b-distilled-fp16.safetensors": "ltx23_distilled_fp16",
+  "ltx23_13b_dev_fp8": "ltx23_13b_dev_fp8",
+  "ltx23-13b-dev-fp8": "ltx23_13b_dev_fp8",
+  "ltx-2.3-13b-dev-fp8.safetensors": "ltx23_13b_dev_fp8",
+  "ltx23_13b_distilled_fp8": "ltx23_13b_distilled_fp8",
+  "ltx23-13b-distilled-fp8": "ltx23_13b_distilled_fp8",
+  "ltx-2.3-13b-distilled-fp8.safetensors": "ltx23_13b_distilled_fp8",
 };
 const DEFAULT_GLOBAL_VISUAL_LOCK = {
   captureStyle: "cinematic commercial realism",

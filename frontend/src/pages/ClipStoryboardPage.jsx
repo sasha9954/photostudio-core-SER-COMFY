@@ -373,6 +373,13 @@ function buildScenarioSceneContractPayload(scene = {}) {
 
 function resolveScenarioSceneVideoProvider(scene = {}) {
   const rawProvider = String(scene?.sceneRenderProvider || "").trim().toLowerCase();
+  const resolvedWorkflowKey = String(
+    scene?.resolvedWorkflowKey
+    || resolveScenarioExplicitWorkflowKey(scene)
+    || resolveScenarioWorkflowKey(scene)
+    || ""
+  ).trim().toLowerCase();
+  const isLipSyncWorkflow = resolvedWorkflowKey === "lip_sync";
   const hasLtxContract = Boolean(
     String(scene?.ltxMode || "").trim()
     || String(scene?.resolvedWorkflowKey || "").trim()
@@ -383,8 +390,12 @@ function resolveScenarioSceneVideoProvider(scene = {}) {
     || scene?.requiresContinuation
     || scene?.requiresAudioSensitiveVideo
   );
-  if (hasLtxContract && rawProvider === "kie") return "comfy_remote";
-  if (rawProvider) return rawProvider;
+  if (rawProvider) {
+    if (isLipSyncWorkflow) return rawProvider;
+    if (hasLtxContract && rawProvider === "kie") return "comfy_remote";
+    return rawProvider;
+  }
+  if (isLipSyncWorkflow) return "kie";
   if (hasLtxContract) return "comfy_remote";
   return "kie";
 }
@@ -6862,9 +6873,13 @@ const comfyShowVideoSection = Boolean(
     const now = Date.now();
     const staleTimeoutMs = 20 * 60 * 1000;
     const notFoundRetryLimit = 3;
+    const sceneSnapshot = scenarioScenes.find((scene) => String(scene?.sceneId || "") === sceneId) || null;
     const startMeta = {
       ...jobMeta,
       sceneId,
+      provider: String(jobMeta?.provider || sceneSnapshot?.sceneRenderProvider || "comfy_remote").trim() || "comfy_remote",
+      workflowKey: String(jobMeta?.workflowKey || sceneSnapshot?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneSnapshot || {}) || "").trim(),
+      modelKey: String(jobMeta?.modelKey || sceneSnapshot?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneSnapshot || {}) || "").trim(),
       startedAt: Number(jobMeta?.startedAt) || now,
       updatedAt: Number(jobMeta?.updatedAt) || now,
       status: String(jobMeta?.status || "queued").toLowerCase(),
@@ -6891,6 +6906,8 @@ const comfyShowVideoSection = Boolean(
       sceneId,
       jobId: String(startMeta.jobId || ""),
       provider: String(startMeta.provider || ""),
+      workflowKey: String(startMeta.workflowKey || ""),
+      modelKey: String(startMeta.modelKey || ""),
     });
 
     const scheduleScenarioPoll = (delayMs, reason) => {
@@ -7132,7 +7149,13 @@ const comfyShowVideoSection = Boolean(
           sceneId: normalizedSceneId,
           jobId: persistedJobId,
         });
-        startScenarioVideoPolling({ ...meta, sceneId: normalizedSceneId });
+        startScenarioVideoPolling({
+          ...meta,
+          sceneId: normalizedSceneId,
+          workflowKey: String(meta?.workflowKey || sceneNow?.resolvedWorkflowKey || resolveScenarioWorkflowKey(sceneNow || {}) || ""),
+          modelKey: String(meta?.modelKey || sceneNow?.resolvedModelKey || resolveScenarioExplicitModelKey(sceneNow || {}) || ""),
+          provider: String(meta?.provider || sceneNow?.sceneRenderProvider || "comfy_remote"),
+        });
       });
       persistActiveVideoJob(nextPersisted);
     } catch {
@@ -7510,6 +7533,8 @@ const comfyShowVideoSection = Boolean(
       sceneId,
       jobId: String(startMeta.jobId || ""),
       provider: String(startMeta.provider || ""),
+      workflowKey: String(startMeta.workflowKey || ""),
+      modelKey: String(startMeta.modelKey || ""),
     });
 
     const scheduleComfyPoll = (delayMs, reason) => {
@@ -9159,6 +9184,8 @@ Aspect ratio: ${imageFormat}`,
           providerJobId: String(out.providerJobId || ""),
           provider: String(out?.provider || effectiveVideoProvider),
           sceneId,
+          workflowKey: resolvedWorkflowKey,
+          modelKey: resolvedModelKey,
           status: "queued",
         });
         return;

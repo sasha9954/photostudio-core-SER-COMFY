@@ -570,12 +570,34 @@ LTX_MODE_TO_WORKFLOW_KEY = {
 }
 LTX_MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
+        "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "lip_sync"},
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
     },
     "ltx23_distilled_fp8": {
+        "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+    },
+    "ltx23_dev_fp16": {
+        "key": "ltx23_dev_fp16",
+        "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+    },
+    "ltx23_distilled_fp16": {
+        "key": "ltx23_distilled_fp16",
+        "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+    },
+    "ltx23_13b_dev_fp8": {
+        "key": "ltx23_13b_dev_fp8",
+        "ckpt_name": "ltx-2.3-13b-dev-fp8.safetensors",
+        "compatible_workflow_keys": {"i2v", "f_l"},
+    },
+    "ltx23_13b_distilled_fp8": {
+        "key": "ltx23_13b_distilled_fp8",
+        "ckpt_name": "ltx-2.3-13b-distilled-fp8.safetensors",
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
 }
 LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
@@ -690,7 +712,7 @@ def _validate_ltx_workflow_strategy(
         if normalized_strategy and normalized_strategy != "first_last":
             return "LTX_IMAGE_STRATEGY_MISMATCH", "first_last_workflow_requires_imageStrategy_first_last"
         if not (has_start and has_end):
-            return "LTX_FIRST_LAST_IMAGES_REQUIRED", "startImageUrl_and_endImageUrl_required_for_first_last_workflow"
+            return "LTX_SECOND_FRAME_REQUIRED", "startImageUrl_and_endImageUrl_required_for_first_last_workflow"
     elif workflow_key in LTX_SINGLE_IMAGE_WORKFLOW_KEYS:
         if normalized_strategy == "first_last":
             return "LTX_IMAGE_STRATEGY_MISMATCH", "single_image_workflow_not_compatible_with_first_last_strategy"
@@ -698,7 +720,7 @@ def _validate_ltx_workflow_strategy(
             return "VIDEO_SOURCE_IMAGE_REQUIRED", "imageUrl_or_startImageUrl_required"
 
     if workflow_key in LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS and not has_audio:
-        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "audio_input_required_for_audio_sensitive_workflow"
+        return "LTX_AUDIO_REQUIRED", "audio_input_required_for_audio_sensitive_workflow"
 
     if workflow_key == "lip_sync" and not has_audio:
         return "LTX_LIPSYNC_NOT_IMPLEMENTED", "audio_input_required_for_lip_sync_workflow"
@@ -9148,10 +9170,17 @@ def clip_video(payload: ClipVideoIn):
     else:
         mode = "single"
 
-    provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
+    requested_provider = str(payload.provider or "").strip().lower()
+    provider = requested_provider or str(settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
+    provider_reason = "payload_or_default"
+    if final_workflow_key == "lip_sync":
+        provider = requested_provider or "kie"
+        provider_reason = "dedicated_lipsync_provider_strategy"
     print(
         "[CLIP VIDEO PROVIDER] "
-        f"sceneId={scene_id} provider={provider} mode={mode} transitionType={transition_type} format={output_format}"
+        f"sceneId={scene_id} ltxMode={str(payload.ltxMode or '').strip()} "
+        f"provider={provider} reason={provider_reason} mode={mode} transitionType={transition_type} format={output_format} "
+        f"resolvedWorkflowKey={final_workflow_key} resolvedModelKey={resolved_model_key}"
     )
     print(
         "[LTX ROUTER] "
@@ -9184,6 +9213,24 @@ def clip_video(payload: ClipVideoIn):
                 "ok": False,
                 "code": "LTX_MODEL_WORKFLOW_INCOMPATIBLE",
                 "hint": f"model={resolved_model_key} is not compatible with workflow={final_workflow_key}",
+            },
+        )
+    if provider != "comfy_remote" and final_workflow_key in (LTX_FIRST_LAST_WORKFLOW_KEYS | LTX_CONTINUATION_WORKFLOW_KEYS):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "code": "LTX_PROVIDER_MODE_INCOMPATIBLE",
+                "hint": f"provider={provider} is not compatible with workflow={final_workflow_key}",
+            },
+        )
+    if provider == "comfy_remote" and final_workflow_key == "lip_sync":
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "code": "LTX_PROVIDER_MODE_INCOMPATIBLE",
+                "hint": "provider=comfy_remote is not compatible with workflow=lip_sync",
             },
         )
 
@@ -9221,6 +9268,31 @@ def clip_video(payload: ClipVideoIn):
                 content={"ok": False, "code": "comfy_upload_failed", "hint": f"image_download_failed:{str(exc)[:240]}"},
             )
 
+        start_image_bytes = None
+        end_image_bytes = None
+        if final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS:
+            if not end_image_url:
+                return JSONResponse(
+                    status_code=422,
+                    content={"ok": False, "code": "LTX_SECOND_FRAME_REQUIRED", "hint": "endImageUrl_required_for_first_last_workflow"},
+                )
+            try:
+                if start_image_url:
+                    start_image_bytes, _ = _download_image_from_source(start_image_url)
+                else:
+                    start_image_bytes = image_bytes
+                end_image_bytes, _ = _download_image_from_source(end_image_url)
+            except Exception as exc:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "code": "VIDEO_SOURCE_IMAGE_REQUIRED", "hint": f"first_last_image_download_failed:{str(exc)[:240]}"},
+                )
+        if final_workflow_key in LTX_AUDIO_SENSITIVE_WORKFLOW_KEYS and not audio_slice_url:
+            return JSONResponse(
+                status_code=422,
+                content={"ok": False, "code": "LTX_AUDIO_REQUIRED", "hint": "audioSliceUrl_required_for_audio_sensitive_workflow"},
+            )
+
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
         print(
             "[COMFY REMOTE] "
@@ -9238,8 +9310,9 @@ def clip_video(payload: ClipVideoIn):
             workflow_key=final_workflow_key,
             model_key=resolved_model_key,
             model_spec=resolved_model_spec,
-            start_image_bytes=None,
-            end_image_bytes=None,
+            scene_id=scene_id,
+            start_image_bytes=start_image_bytes,
+            end_image_bytes=end_image_bytes,
             audio_url=audio_slice_url,
         )
         if comfy_err or not comfy_out:
