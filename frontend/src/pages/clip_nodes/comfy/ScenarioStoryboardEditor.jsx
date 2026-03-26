@@ -57,7 +57,7 @@ function renderContractWarnings(scene = {}) {
 function ContractField({ label, value }) {
   const printable = Array.isArray(value) ? value.join(", ") : String(value || "").trim();
   return (
-    <div className="clipSB_storyboardKv">
+    <div className="clipSB_storyboardKv clipSB_copySelectable">
       <span>{label}</span>
       <strong>{printable || "—"}</strong>
     </div>
@@ -79,6 +79,12 @@ function resolveMusicSource(audioData = {}) {
   if (String(audioData?.fileName || "").trim()) return "uploaded";
   if (String(audioData?.musicUrl || "").trim()) return "generated";
   return "none";
+}
+
+function toPrintable(value) {
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
+  const text = String(value ?? "").trim();
+  return text || "—";
 }
 
 export default function ScenarioStoryboardEditor({
@@ -358,21 +364,98 @@ export default function ScenarioStoryboardEditor({
     event.target.value = "";
   };
 
+  const copyTextToClipboard = async (text) => {
+    const payload = String(text || "");
+    if (!payload.trim()) return;
+    try {
+      await navigator.clipboard.writeText(payload);
+      return;
+    } catch (error) {
+      const fallback = document.createElement("textarea");
+      fallback.value = payload;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.top = "-1000px";
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand("copy");
+      document.body.removeChild(fallback);
+    }
+  };
+
+  const formatSceneForCopy = (scene = {}, idx = 0) => {
+    const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
+    const t0 = Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0);
+    const t1 = Number(scene?.audioSliceEndSec ?? scene?.t1 ?? t0);
+    const duration = safeSceneDuration(scene);
+    const warnings = Array.isArray(scene?.contractWarnings)
+      ? scene.contractWarnings.map((warning) => String(warning?.label || warning?.code || "").trim()).filter(Boolean)
+      : [];
+    return [
+      `SCENE ${sceneId}`,
+      `t0: ${fmtSec(t0)} / t1: ${fmtSec(t1)} / duration: ${fmtSec(duration)}s`,
+      `lyric: ${toPrintable(scene?.localPhrase || scene?.lyricText)}`,
+      `summary: ${toPrintable(scene?.summaryRu || scene?.summaryEn)}`,
+      `sceneGoal: ${toPrintable(scene?.sceneGoalRu || scene?.sceneGoalEn)}`,
+      `sceneMeaning: ${toPrintable(scene?.sceneMeaningRu || scene?.sceneMeaningEn || scene?.sceneMeaning)}`,
+      `actors: ${toPrintable(scene?.actors)}`,
+      `primaryRole: ${toPrintable(scene?.primaryRole)}`,
+      `secondaryRoles: ${toPrintable(scene?.secondaryRoles)}`,
+      `mustAppear: ${toPrintable(scene?.mustAppear)}`,
+      `lipSync: ${String(Boolean(scene?.lipSync))}`,
+      `audioSliceUrl: ${toPrintable(scene?.audioSliceUrl)}`,
+      `imagePromptRu: ${toPrintable(scene?.imagePromptRu || scene?.imagePromptEn)}`,
+      `videoPromptRu: ${toPrintable(scene?.videoPromptRu || scene?.videoPromptEn)}`,
+      `warnings: ${warnings.length ? warnings.join("; ") : "—"}`,
+    ].join("\n");
+  };
+
+  const formatAllScenesForCopy = () => safeScenes.map((scene, idx) => formatSceneForCopy(scene, idx)).join("\n\n");
+
+  const formatPromptsForCopy = () => safeScenes.map((scene, idx) => {
+    const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
+    return [
+      `SCENE ${sceneId}`,
+      `imagePromptRu: ${toPrintable(scene?.imagePromptRu || scene?.imagePromptEn)}`,
+      `videoPromptRu: ${toPrintable(scene?.videoPromptRu || scene?.videoPromptEn)}`,
+    ].join("\n");
+  }).join("\n\n");
+
+  const formatRawForCopy = () => JSON.stringify({
+    scenes: safeScenes,
+    selectedSceneId,
+    selectedSceneRuntime: selectedRuntime,
+    audioData: safeAudioData,
+  }, null, 2);
+
   const tabContent = (() => {
     if (activeTab === "scenario") {
       return (
         <div className="clipSB_scenarioEditorTabBody">
+          <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorCopyRow">
+            <button
+              className="clipSB_btn clipSB_btnSecondary"
+              type="button"
+              onClick={() => copyTextToClipboard(formatSceneForCopy(selectedScene || safeScenes[0] || {}, safeIndex >= 0 ? safeIndex : 0))}
+            >
+              Копировать сцену
+            </button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatAllScenesForCopy())}>Копировать весь сценарий</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatPromptsForCopy())}>Копировать prompts</button>
+          </div>
           <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{safeScenes.length}</strong></div>
           {safeScenes.map((scene, idx) => {
             const sceneId = String(scene?.sceneId || `S${idx + 1}`);
             return (
               <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
-                <summary>{sceneId} · {fmtSec(scene?.t0)}–{fmtSec(scene?.t1)}</summary>
+                <summary className="clipSB_copySelectable">{sceneId} · {fmtSec(scene?.t0)}–{fmtSec(scene?.t1)}</summary>
                 <ContractField label="sceneId" value={sceneId} />
                 <ContractField label="t0/t1" value={`${fmtSec(scene?.t0)} / ${fmtSec(scene?.t1)}`} />
                 <ContractField label="lyric text" value={scene?.localPhrase || scene?.lyricText} />
                 <ContractField label="summary" value={scene?.summaryRu || scene?.summaryEn} />
                 <ContractField label="sceneGoal" value={scene?.sceneGoalRu || scene?.sceneGoalEn} />
+                <ContractField label="sceneMeaning" value={scene?.sceneMeaningRu || scene?.sceneMeaningEn || scene?.sceneMeaning} />
                 <ContractField label="actors" value={scene?.actors || []} />
                 <ContractField label="primaryRole" value={scene?.primaryRole} />
                 <ContractField label="secondaryRoles" value={scene?.secondaryRoles || []} />
@@ -452,7 +535,10 @@ export default function ScenarioStoryboardEditor({
     }
     return (
       <div className="clipSB_scenarioEditorTabBody">
-        <pre className="clipSB_scenarioEditorDebug">{JSON.stringify({
+        <div className="clipSB_scenarioEditorBtnRow clipSB_scenarioEditorCopyRow">
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => copyTextToClipboard(formatRawForCopy())}>Копировать raw JSON</button>
+        </div>
+        <pre className="clipSB_scenarioEditorDebug clipSB_copySelectable">{JSON.stringify({
           sceneId: selectedSceneId,
           sceneRuntime: selectedRuntime,
           videoPromptDebug: {
@@ -462,6 +548,8 @@ export default function ScenarioStoryboardEditor({
             promptPatchedNodeIds: Array.isArray(selectedScene?.videoPromptPatchedNodeIds) ? selectedScene.videoPromptPatchedNodeIds : [],
           },
           musicStatus: safeAudioData?.musicStatus || "idle",
+          scenes: safeScenes,
+          audioData: safeAudioData,
         }, null, 2)}</pre>
       </div>
     );
