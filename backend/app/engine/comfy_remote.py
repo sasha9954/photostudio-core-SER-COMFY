@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 COMFY_LTX_CAPABILITIES = {
     "single_image": True,
-    "first_last": False,
+    "first_last": True,
     "audio_sensitive": False,
     "lip_sync": False,
     "continuation": False,
@@ -33,12 +33,34 @@ COMFY_LTX_WORKFLOW_REQUIREMENTS = {
 }
 MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
+        "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_as", "lip_sync"},
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
     },
     "ltx23_distilled_fp8": {
+        "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"f_l", "f_l_as"},
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+    },
+    "ltx23_dev_fp16": {
+        "key": "ltx23_dev_fp16",
+        "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+    },
+    "ltx23_distilled_fp16": {
+        "key": "ltx23_distilled_fp16",
+        "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
+        "compatible_workflow_keys": {"i2v", "i2v_as", "f_l", "f_l_as"},
+    },
+    "ltx23_13b_dev_fp8": {
+        "key": "ltx23_13b_dev_fp8",
+        "ckpt_name": "ltx-2.3-13b-dev-fp8.safetensors",
+        "compatible_workflow_keys": {"i2v", "f_l"},
+    },
+    "ltx23_13b_distilled_fp8": {
+        "key": "ltx23_13b_distilled_fp8",
+        "ckpt_name": "ltx-2.3-13b-distilled-fp8.safetensors",
+        "compatible_workflow_keys": {"i2v", "f_l"},
     },
 }
 MODEL_PATCH_NODE_TYPES = {"CheckpointLoaderSimple", "LTXAVTextEncoderLoader", "LTXVAudioVAELoader"}
@@ -69,9 +91,9 @@ def _validate_comfy_ltx_request(
         return "LTX_MODE_NOT_IMPLEMENTED", "single_image_mode_not_implemented_for_comfy_remote"
 
     if requirements["first_last"] and not (start_image_bytes and end_image_bytes):
-        return "LTX_FIRST_LAST_NOT_IMPLEMENTED", "start_image_and_end_image_required_for_first_last_mode"
+        return "LTX_SECOND_FRAME_REQUIRED", "start_image_and_end_image_required_for_first_last_mode"
     if requirements["audio_sensitive"] and not (audio_bytes or str(audio_url or "").strip()):
-        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "audio_input_required_for_audio_sensitive_mode"
+        return "LTX_AUDIO_REQUIRED", "audio_input_required_for_audio_sensitive_mode"
 
     return None, None
 
@@ -569,6 +591,43 @@ def _patch_audio_frames(workflow: dict, frames: int) -> None:
         inputs["frames_number"] = int(frames)
 
 
+def _patch_first_last_images(workflow: dict, *, start_image_name: str, end_image_name: str) -> tuple[bool, list[str], list[str]]:
+    start_node_ids: list[str] = []
+    end_node_ids: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if "image" not in inputs:
+            continue
+        label_blob = " ".join(
+            [
+                class_type,
+                str(node.get("_meta", {}).get("title") or ""),
+                str(node.get("title") or ""),
+                str(node_id),
+            ]
+        ).lower()
+        if "end" in label_blob or "last" in label_blob or "second" in label_blob:
+            inputs["image"] = end_image_name
+            end_node_ids.append(str(node_id))
+            continue
+        if "start" in label_blob or "first" in label_blob:
+            inputs["image"] = start_image_name
+            start_node_ids.append(str(node_id))
+            continue
+
+    if not start_node_ids:
+        image_node_id, image_input_key = FIXED_IMAGE_VIDEO_NODES["image"]
+        ok, _ = _set_node_input(workflow, image_node_id, image_input_key, start_image_name)
+        if ok:
+            start_node_ids.append(str(image_node_id))
+    return bool(start_node_ids and end_node_ids), start_node_ids, end_node_ids
+
+
 def _patch_workflow_inputs(
     workflow: dict,
     *,
@@ -636,6 +695,7 @@ def _apply_model_spec_to_workflow(workflow: dict, *, model_spec: dict) -> tuple[
 
 def run_comfy_image_to_video(
     *,
+    scene_id: str | None = None,
     image_bytes: bytes,
     image_filename: str,
     prompt: str,
@@ -671,7 +731,8 @@ def run_comfy_image_to_video(
         return None, f"capability_error:{capability_code}:{capability_hint or ''}"
 
     logger.info(
-        "[COMFY REMOTE] enter run_comfy_image_to_video workflow_key=%s filename=%s size_bytes=%s width=%s height=%s requested_duration_sec=%s seed=%s",
+        "[COMFY REMOTE] enter run_comfy_image_to_video scene_id=%s workflow_key=%s filename=%s size_bytes=%s width=%s height=%s requested_duration_sec=%s seed=%s",
+        str(scene_id or "").strip(),
         normalized_workflow_key,
         str(image_filename or "").strip() or "source.jpg",
         len(image_bytes or b""),
@@ -701,6 +762,16 @@ def run_comfy_image_to_video(
         return None, f"upload_failed:{upload_err or 'unknown_upload_error'}"
 
     effective_prompt = str(prompt or "").strip()
+    uploaded_start_name = uploaded_name
+    uploaded_end_name = ""
+    if start_image_bytes and normalized_workflow_key in {"f_l", "f_l_as"}:
+        uploaded_start_name, start_upload_err = upload_image_to_comfy(start_image_bytes, f"{Path(image_filename).stem}_start.jpg")
+        if start_upload_err or not uploaded_start_name:
+            return None, f"upload_failed:{start_upload_err or 'start_image_upload_failed'}"
+    if end_image_bytes and normalized_workflow_key in {"f_l", "f_l_as"}:
+        uploaded_end_name, end_upload_err = upload_image_to_comfy(end_image_bytes, f"{Path(image_filename).stem}_end.jpg")
+        if end_upload_err or not uploaded_end_name:
+            return None, f"upload_failed:{end_upload_err or 'end_image_upload_failed'}"
 
     patched_workflow, patch_err, frame_count, fps = _patch_workflow_inputs(
         workflow,
@@ -719,6 +790,21 @@ def run_comfy_image_to_video(
     )
     if model_patch_err:
         return None, f"workflow_model_patch_failed:{model_patch_err}"
+    first_last_applied = False
+    first_last_start_node_ids: list[str] = []
+    first_last_end_node_ids: list[str] = []
+    if normalized_workflow_key in {"f_l", "f_l_as"}:
+        if not uploaded_end_name:
+            return None, "capability_error:LTX_SECOND_FRAME_REQUIRED:end_image_missing_for_first_last_workflow"
+        first_last_applied, first_last_start_node_ids, first_last_end_node_ids = _patch_first_last_images(
+            patched_workflow,
+            start_image_name=uploaded_start_name,
+            end_image_name=uploaded_end_name,
+        )
+        if not first_last_applied:
+            return None, "capability_error:LTX_FIRST_LAST_NOT_IMPLEMENTED:second_frame_patch_not_applied"
+    if normalized_workflow_key in {"i2v_as", "f_l_as"}:
+        return None, "capability_error:LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED:audio_sensitive_workflow_not_patched_to_audio_nodes"
 
     logger.info(
         "[COMFY REMOTE] patched workflow values %s",
@@ -772,6 +858,7 @@ def run_comfy_image_to_video(
         "requestedDurationSec": round(float(requested_duration_sec), 3),
         "taskId": prompt_id,
         "debug": {
+            "scene_id": str(scene_id or "").strip(),
             "workflow_key": normalized_workflow_key,
             "workflow_file": Path(str(workflow_source)).name,
             "workflow": workflow_source,
@@ -779,6 +866,11 @@ def run_comfy_image_to_video(
             "model_key": normalized_model_key,
             "model_ckpt_applied": str(effective_model_spec.get("ckpt_name") or ""),
             "patched_node_ids": patched_model_node_ids,
+            "first_last_start_node_ids": first_last_start_node_ids,
+            "first_last_end_node_ids": first_last_end_node_ids,
+            "start_image_used": bool(first_last_start_node_ids),
+            "end_image_used": bool(first_last_end_node_ids),
+            "audio_used": False,
             "capabilities": COMFY_LTX_CAPABILITIES,
             "inputsUsed": {
                 "image": True,
