@@ -1902,6 +1902,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "- Never include unselected actors in a scene.\n"
         "- If a role is not selected for the scene, do not bring it into frame.\n"
         "- Never replace a selected actor with a generic invented version.\n"
+        "- TWO-CHARACTER CONTRACT: if mustAppear contains both character_1 and character_2, sceneGoal, sceneMeaning, and visualDescription must explicitly describe their interaction in one frame (action + reaction partner). Avoid one-actor wording in such scenes.\n"
         "- HARD NO-CHARACTERS RULE: if there are no character refs and the transcript/text does not explicitly require people, charactersAllowed=false and you must not invent humans, women, men, crowds, portraits, or lifestyle extras. Use environment-only, infrastructure-only, archive-only, map-only, machinery-only, or object-only visuals instead.\n"
         "- Style references define visual language only and cannot cancel identity contracts.\n"
         "- Location references define world/environment identity anchors for the scene.\n"
@@ -1911,6 +1912,7 @@ def build_comfy_planner_prompt(payload: dict[str, Any]) -> str:
         "heroEntityId,supportEntityIds,mustAppear,mustNotAppear,environmentLock,styleLock,identityLock,roleSelectionReason,intent.\n"
         "For speech_narrative scenes also include: sceneText,sceneMeaning,visualDescription,cameraPlan,motionPlan,sfxPlan.\n"
         "LANGUAGE CONTRACT (MANDATORY): imagePromptRu MUST be Russian; imagePromptEn MUST be English; videoPromptRu MUST be Russian; videoPromptEn MUST be English. Non-compliance is an error.\n"
+        "VIDEO PROMPT CONTRACT (MANDATORY): videoPromptRu/videoPromptEn must be temporal and cannot be a copy of image prompts. They must explicitly include (1) motion over time, (2) camera move over time, (3) micro-actions over time, and (4) continuity from previous moment.\n"
         "Treat every scene as a narrative beat, not a generic landscape description. Specify the focal subject, the exact action/event happening now, the visual clue that carries narration meaning, and the camera intent.\n"
         "Avoid generic establishing-shot filler unless the scene is explicitly an establishing scene.\n"
         "Do not invent dominant unexplained foreground props. Do not introduce oversized machines, devices, or artifacts unless the narration meaning or explicit refs require them. If no prop is required, keep the frame clean and semantically grounded.\n"
@@ -3287,6 +3289,42 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
     elif transition_type in {"justified_cut", "perspective_shift", "match_cut"}:
         continuity_parts.append(f"{transition_type} must be narratively justified")
     continuity_text = "; ".join([part for part in continuity_parts if part]).strip("; ")
+    requires_dual_character_interaction = "character_1" in must_appear and "character_2" in must_appear
+    if requires_dual_character_interaction:
+        scene_goal_value = _enforce_two_character_interaction_text(str(src.get("sceneGoal") or ""), is_ru=False)
+        scene_meaning_value = _ensure_genre_pressure(
+            _enforce_two_character_interaction_text(str(src.get("sceneMeaning") or ""), is_ru=False),
+            scene_genre,
+            language="en",
+        )
+        visual_description_value = _ensure_genre_pressure(
+            _enforce_two_character_interaction_text(str(src.get("visualDescription") or ""), is_ru=False),
+            scene_genre,
+            language="en",
+        )
+    else:
+        scene_goal_value = str(src.get("sceneGoal") or "")
+        scene_meaning_value = _ensure_genre_pressure(str(src.get("sceneMeaning") or ""), scene_genre, language="en")
+        visual_description_value = _ensure_genre_pressure(str(src.get("visualDescription") or ""), scene_genre, language="en")
+
+    if _looks_like_prompt_copy(image_prompt_en, video_prompt_en):
+        video_prompt_en = _build_temporal_video_prompt(
+            base_prompt=video_prompt_en,
+            image_prompt=image_prompt_en,
+            camera_plan=camera_plan,
+            scene_action=scene_action,
+            continuity=continuity_text,
+            is_ru=False,
+        )
+    if _looks_like_prompt_copy(image_prompt_ru, video_prompt_ru):
+        video_prompt_ru = _build_temporal_video_prompt(
+            base_prompt=video_prompt_ru,
+            image_prompt=image_prompt_ru,
+            camera_plan=camera_plan,
+            scene_action=scene_action,
+            continuity=continuity_text,
+            is_ru=True,
+        )
 
     image_missing_langs: list[str] = []
     video_missing_langs: list[str] = []
@@ -3331,8 +3369,8 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "endSec": end_n,
         "durationSec": duration_n,
         "sceneText": str(src.get("sceneText") or ""),
-        "sceneMeaning": _ensure_genre_pressure(str(src.get("sceneMeaning") or ""), scene_genre, language="en"),
-        "visualDescription": _ensure_genre_pressure(str(src.get("visualDescription") or ""), scene_genre, language="en"),
+        "sceneMeaning": scene_meaning_value,
+        "visualDescription": visual_description_value,
         "cameraPlan": camera_plan,
         "cameraType": camera_type,
         "cameraMovement": camera_movement,
@@ -3350,7 +3388,7 @@ def _normalize_scene(scene: dict[str, Any], idx: int, available_refs_by_role: di
         "environmentMotion": environment_motion,
         "sfxSuggestion": str(src.get("sfxSuggestion") or src.get("sfxPlan") or "").strip(),
         "sceneNarrativeStep": str(src.get("sceneNarrativeStep") or ""),
-        "sceneGoal": str(src.get("sceneGoal") or ""),
+        "sceneGoal": scene_goal_value,
         "storyMission": str(src.get("storyMission") or ""),
         "sceneOutputRule": str(src.get("sceneOutputRule") or "scene image first"),
         "primaryRole": primary_role,
@@ -3470,6 +3508,60 @@ def _build_director_debug(scenes: list[dict[str, Any]]) -> dict[str, Any]:
         "continuationChainCount": continuation_chain_count,
         "randomCutRisk": random_cut_risk,
     }
+
+
+def _looks_like_prompt_copy(image_prompt: str, video_prompt: str) -> bool:
+    image_norm = " ".join(str(image_prompt or "").lower().split())
+    video_norm = " ".join(str(video_prompt or "").lower().split())
+    if not image_norm or not video_norm:
+        return True
+    if image_norm == video_norm:
+        return True
+    if image_norm in video_norm or video_norm in image_norm:
+        return True
+    image_tokens = set(image_norm.split(" "))
+    video_tokens = set(video_norm.split(" "))
+    if not image_tokens or not video_tokens:
+        return True
+    overlap = len(image_tokens.intersection(video_tokens)) / max(len(image_tokens), len(video_tokens))
+    return overlap >= 0.88
+
+
+def _build_temporal_video_prompt(
+    *,
+    base_prompt: str,
+    image_prompt: str,
+    camera_plan: str,
+    scene_action: str,
+    continuity: str,
+    is_ru: bool,
+) -> str:
+    if is_ru:
+        timeline_line = "Видео-промпт обязан описывать развитие во времени: начало → середина → конец."
+        motion_line = f"Микродвижения: {scene_action or 'взгляды, дыхание, жесты, перенос веса, реакция партнёра'}."
+        camera_line = f"Движение камеры: {camera_plan or 'плавный dolly/панорама с удержанием субъекта в фокусе'}."
+        continuity_line = f"Непрерывность с предыдущим моментом: {continuity or 'сохраняй ту же локацию, свет и пространственную геометрию'}."
+    else:
+        timeline_line = "Video prompt must describe motion over time: start -> middle -> end."
+        motion_line = f"Micro-actions over time: {scene_action or 'eyes shift, breathing changes, hand and posture reactions'}."
+        camera_line = f"Camera progression over time: {camera_plan or 'slow dolly/pan while keeping the subjects readable'}."
+        continuity_line = f"Continuity from previous moment: {continuity or 'preserve location layout, light logic and spatial continuity'}."
+    return " ".join([part for part in [base_prompt or image_prompt, timeline_line, motion_line, camera_line, continuity_line] if part]).strip()
+
+
+def _enforce_two_character_interaction_text(value: str, *, is_ru: bool) -> str:
+    base = str(value or "").strip()
+    normalized = base.lower()
+    has_char_1 = "character_1" in normalized
+    has_char_2 = "character_2" in normalized
+    if has_char_1 and has_char_2:
+        return base
+    suffix = (
+        "В кадре одновременно character_1 и character_2; они явно взаимодействуют действием и реакцией друг на друга."
+        if is_ru
+        else "character_1 and character_2 are in the same frame and explicitly interact through action and reaction."
+    )
+    return f"{base} {suffix}".strip()
 
 
 def _build_segmentation_debug(scenes: list[dict[str, Any]], audio_story_mode: str, timing_debug: dict[str, Any]) -> dict[str, Any]:
