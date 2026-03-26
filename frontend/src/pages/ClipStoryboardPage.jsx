@@ -6089,6 +6089,8 @@ export default function ClipStoryboardPage() {
   const scenarioVideoScrollRafRef = useRef(0);
   const scenarioVideoPollTimersRef = useRef(new Map());
   const scenarioVideoJobsBySceneRef = useRef(new Map());
+  const scenarioActivePollingJobIdsRef = useRef(new Set());
+  const restoredScenarioVideoJobsRef = useRef(new Set());
   const comfyVideoPollTimersRef = useRef(new Map());
   const comfyVideoJobsBySceneRef = useRef(new Map());
   const comfyPromptSyncTimersRef = useRef(new Map());
@@ -6875,12 +6877,14 @@ const comfyShowVideoSection = Boolean(
     const key = String(sceneId || "").trim();
     if (!key) return;
     const activeMeta = scenarioVideoJobsBySceneRef.current.get(key) || null;
+    const activeJobId = String(meta?.jobId || activeMeta?.jobId || "").trim();
+    if (activeJobId) scenarioActivePollingJobIdsRef.current.delete(`${key}:${activeJobId}`);
     scenarioVideoJobsBySceneRef.current.delete(key);
     persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
     stopScenarioVideoPolling(key);
     const terminalStatus = String(meta?.status || "").toLowerCase();
     if (terminalStatus) {
-      console.info("[CLIP TRACE] active job cleared after terminal status", {
+      console.info("[SCENARIO VIDEO ACTIVE JOB CLEARED]", {
         scope: "scenario",
         sceneId: key,
         jobId: String(meta?.jobId || activeMeta?.jobId || ""),
@@ -6923,8 +6927,28 @@ const comfyShowVideoSection = Boolean(
       updatedAt: Number(jobMeta?.updatedAt) || now,
       status: String(jobMeta?.status || "queued").toLowerCase(),
     };
+    const pollingKey = `${sceneId}:${String(startMeta.jobId || "")}`;
+    if (scenarioActivePollingJobIdsRef.current.has(pollingKey)) {
+      console.info("[SCENARIO VIDEO RESTORE SKIPPED DUPLICATE]", {
+        reason: "polling_already_active",
+        sceneId,
+        jobId: String(startMeta.jobId || ""),
+      });
+      return;
+    }
     const prevMeta = scenarioVideoJobsBySceneRef.current.get(sceneId);
+    const existingTimerId = scenarioVideoPollTimersRef.current.get(sceneId);
+    if (prevMeta?.jobId && String(prevMeta.jobId) === String(startMeta.jobId) && existingTimerId) {
+      console.info("[SCENARIO VIDEO RESTORE SKIPPED DUPLICATE]", {
+        reason: "same_scene_job_with_timer",
+        sceneId,
+        jobId: String(startMeta.jobId || ""),
+      });
+      scenarioActivePollingJobIdsRef.current.add(pollingKey);
+      return;
+    }
     if (prevMeta?.jobId && String(prevMeta.jobId) !== String(startMeta.jobId)) {
+      scenarioActivePollingJobIdsRef.current.delete(`${sceneId}:${String(prevMeta.jobId || "")}`);
       console.info("[CLIP TRACE] active job replaced", {
         scope: "scenario",
         sceneId,
@@ -6932,6 +6956,7 @@ const comfyShowVideoSection = Boolean(
         newJobId: String(startMeta.jobId || ""),
       });
     }
+    scenarioActivePollingJobIdsRef.current.add(pollingKey);
     scenarioVideoJobsBySceneRef.current.set(sceneId, startMeta);
     persistActiveVideoJob(Object.fromEntries(scenarioVideoJobsBySceneRef.current.entries()));
     updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
@@ -6988,7 +7013,20 @@ const comfyShowVideoSection = Boolean(
       try {
         const activeMeta = scenarioVideoJobsBySceneRef.current.get(sceneId);
         if (!activeMeta?.jobId) return;
+        console.info("[SCENARIO VIDEO POLL REQUEST]", {
+          sceneId,
+          jobId: String(activeMeta.jobId || ""),
+          endpoint: `/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`,
+        });
         const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(activeMeta.jobId)}`, { method: "GET" });
+        console.info("[SCENARIO VIDEO POLL RESPONSE]", {
+          sceneId,
+          jobId: String(activeMeta.jobId || ""),
+          ok: Boolean(out?.ok),
+          status: String(out?.status || ""),
+          hasVideoUrl: Boolean(String(out?.videoUrl || "").trim()),
+          error: String(out?.error || out?.hint || out?.code || ""),
+        });
         const status = String(out?.status || "").toLowerCase() || "running";
         const nextMeta = {
           ...activeMeta,
@@ -7058,7 +7096,7 @@ const comfyShowVideoSection = Boolean(
           videoJobId: settledMeta.jobId,
           videoError: status === "error" || status === "stopped" ? String(out?.error || out?.hint || "video_job_failed") : "",
         });
-        console.info("[CLIP VIDEO STATUS APPLIED]", {
+        console.info("[SCENARIO VIDEO STATUS APPLIED]", {
           sceneId,
           jobId: String(settledMeta?.jobId || ""),
           status,
@@ -7147,18 +7185,26 @@ const comfyShowVideoSection = Boolean(
     scheduleScenarioPoll(250, "initial_after_start");
   }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
 
-  useEffect(() => () => stopScenarioVideoPolling(), [stopScenarioVideoPolling]);
+  useEffect(() => () => {
+    scenarioActivePollingJobIdsRef.current.clear();
+    stopScenarioVideoPolling();
+  }, [stopScenarioVideoPolling]);
 
   useEffect(() => {
+    const restoreToken = `${accountKey}:${VIDEO_JOB_STORE_KEY}`;
+    if (restoredScenarioVideoJobsRef.current.has(restoreToken)) return;
     const raw = safeGet(VIDEO_JOB_STORE_KEY);
-    if (!raw) return;
+    if (!raw) {
+      restoredScenarioVideoJobsRef.current.add(restoreToken);
+      return;
+    }
     try {
       const parsed = JSON.parse(raw);
       const entries = parsed?.jobId
         ? [[String(parsed?.sceneId || ""), parsed]]
         : (parsed && typeof parsed === "object" ? Object.entries(parsed) : []);
       const staleTimeoutMs = 20 * 60 * 1000;
-      console.info("[CLIP STORAGE] restore scenario video jobs", {
+      console.info("[SCENARIO VIDEO RESTORE]", {
         accountKey,
         VIDEO_JOB_STORE_KEY,
         restoredSceneIds: entries.map(([sceneId]) => String(sceneId || "")).filter(Boolean),
@@ -7172,10 +7218,28 @@ const comfyShowVideoSection = Boolean(
         const sceneNow = idx >= 0 ? scenarioScenes[idx] : null;
         const sceneVideoUrl = String(sceneNow?.videoUrl || "").trim();
         const sceneVideoJobId = String(sceneNow?.videoJobId || "").trim();
+        const sceneVideoStatus = String(sceneNow?.videoStatus || "").toLowerCase();
         const persistedJobId = String(meta?.jobId || "").trim();
-        if (sceneVideoUrl || (sceneVideoJobId && sceneVideoJobId !== persistedJobId)) {
-          console.info("[CLIP TRACE] stale persisted job ignored", {
-            scope: "scenario",
+        const persistedStatus = String(meta?.status || "").toLowerCase();
+        const isSceneTerminal = sceneVideoStatus === "done" || sceneVideoStatus === "error" || sceneVideoStatus === "stopped" || sceneVideoStatus === "not_found";
+        const isPersistedTerminal = persistedStatus === "done" || persistedStatus === "error" || persistedStatus === "stopped" || persistedStatus === "not_found";
+        const activeKey = `${normalizedSceneId}:${persistedJobId}`;
+        const existingMeta = scenarioVideoJobsBySceneRef.current.get(normalizedSceneId);
+        if (
+          scenarioActivePollingJobIdsRef.current.has(activeKey)
+          || (existingMeta?.jobId && String(existingMeta.jobId) === persistedJobId)
+        ) {
+          console.info("[SCENARIO VIDEO RESTORE SKIPPED DUPLICATE]", {
+            reason: "already_attached",
+            sceneId: normalizedSceneId,
+            jobId: persistedJobId,
+          });
+          nextPersisted[normalizedSceneId] = existingMeta || meta;
+          return;
+        }
+        if (isPersistedTerminal || isSceneTerminal || sceneVideoUrl || (sceneVideoJobId && sceneVideoJobId !== persistedJobId)) {
+          console.info("[SCENARIO VIDEO RESTORE SKIPPED DUPLICATE]", {
+            reason: isPersistedTerminal ? "persisted_terminal" : (isSceneTerminal ? "scene_terminal" : "stale_snapshot"),
             sceneId: normalizedSceneId,
             jobId: persistedJobId,
           });
@@ -7187,7 +7251,8 @@ const comfyShowVideoSection = Boolean(
           return;
         }
         nextPersisted[normalizedSceneId] = meta;
-        console.info("[CLIP TRACE] active job restored", {
+        console.info("[SCENARIO VIDEO RESTORE]", {
+          event: "active_job_restored",
           scope: "scenario",
           sceneId: normalizedSceneId,
           jobId: persistedJobId,
@@ -7209,6 +7274,8 @@ const comfyShowVideoSection = Boolean(
       persistActiveVideoJob(nextPersisted);
     } catch {
       safeDel(VIDEO_JOB_STORE_KEY);
+    } finally {
+      restoredScenarioVideoJobsRef.current.add(restoreToken);
     }
   }, [VIDEO_JOB_STORE_KEY, accountKey, persistActiveVideoJob, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
