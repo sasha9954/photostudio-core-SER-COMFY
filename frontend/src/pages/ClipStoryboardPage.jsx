@@ -180,6 +180,13 @@ const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = false;
 const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
+const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "";
+
+function shouldTraceRoleContractScene(sceneId = "") {
+  const needle = String(CLIP_TRACE_ROLE_CONTRACT_SCENE_ID || "").trim();
+  if (!needle) return false;
+  return String(sceneId || "").trim() === needle;
+}
 const SCENARIO_DIRECTOR_TIMEOUT_MS = 90_000;
 const GLOBAL_FORBIDDEN_CHANGES_GUARDS = [
   "no change in lighting style",
@@ -615,6 +622,7 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
 
 function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {}) {
   const castRoles = ["character_1", "character_2", "character_3", "animal", "group"];
+  const sceneId = String(scene?.sceneId || "").trim();
   const orderedRoleWithRefs = ["character_1", "character_2", "character_3", "animal", "group"]
     .filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0);
   const roleWithRefs = [...new Set([...orderedRoleWithRefs, ...castRoles.filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0)])];
@@ -661,37 +669,67 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     ...(shouldForceTwoPerson ? ["character_1", "character_2"] : healedActive),
   ]).filter((role) => healedActive.includes(role));
   const healedRefsUsed = normalizeRoleList([...refsUsed, ...healedActive]);
+  if (shouldTraceRoleContractScene(sceneId)) {
+    console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.input", {
+      sceneId,
+      incomingPrimaryRole: primaryRole,
+      incomingSecondaryRoles: secondaryRoles,
+      incomingSceneActiveRoles: sceneActiveRoles,
+      incomingRefsUsed: refsUsed,
+      incomingMustAppear: mustAppear,
+      refsByRoleCounts: summarizeRefsByRole(refsByRole),
+      hasExplicitContract,
+      shouldForceTwoPerson,
+      semanticTwoPersonSignal,
+    });
+  }
   if (hasExplicitContract) {
-    return {
+    const explicitContract = {
       primaryRole: healedPrimary,
       secondaryRoles: healedSecondary,
       sceneActiveRoles: healedActive,
       refsUsed: healedRefsUsed,
       mustAppear: healedMustAppear.length ? healedMustAppear : healedActive,
     };
+    if (shouldTraceRoleContractScene(sceneId)) {
+      console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.explicit", explicitContract);
+    }
+    return explicitContract;
   }
   if (roleWithRefs.length >= 2) {
     const fallbackPrimary = primaryRole || roleWithRefs[0];
     const fallbackSecondary = roleWithRefs.filter((role) => role !== fallbackPrimary);
     const fallbackActive = [fallbackPrimary, ...fallbackSecondary];
-    return {
+    const fallbackContract = {
       primaryRole: fallbackPrimary,
       secondaryRoles: fallbackSecondary,
       sceneActiveRoles: fallbackActive,
       refsUsed: fallbackActive,
       mustAppear: fallbackActive,
     };
+    if (shouldTraceRoleContractScene(sceneId)) {
+      console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.fallback_multi", fallbackContract);
+    }
+    return fallbackContract;
   }
   if (roleWithRefs.length === 1) {
-    return {
+    const fallbackSingle = {
       primaryRole: roleWithRefs[0],
       secondaryRoles: [],
       sceneActiveRoles: [roleWithRefs[0]],
       refsUsed: [roleWithRefs[0]],
       mustAppear: [roleWithRefs[0]],
     };
+    if (shouldTraceRoleContractScene(sceneId)) {
+      console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.fallback_single", fallbackSingle);
+    }
+    return fallbackSingle;
   }
-  return { primaryRole: "", secondaryRoles: [], sceneActiveRoles: [], refsUsed: [], mustAppear: [] };
+  const emptyContract = { primaryRole: "", secondaryRoles: [], sceneActiveRoles: [], refsUsed: [], mustAppear: [] };
+  if (shouldTraceRoleContractScene(sceneId)) {
+    console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.empty", emptyContract);
+  }
+  return emptyContract;
 }
 
 function buildScenarioTransferLogData(scene = {}, contractPayload = {}) {
@@ -8682,6 +8720,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
     const sceneId = String(targetScene?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
+    const shouldTraceSelectedScene = shouldTraceRoleContractScene(sceneId);
     const sceneText = String(targetScene.sceneText || targetScene.visualDescription || "").trim();
     const previousScene = targetSceneIndex > 0 ? scenarioScenes[targetSceneIndex - 1] : null;
     const previousSceneImageUrl = String(
@@ -8746,6 +8785,23 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scene: targetScene,
         refsByRole: refsByRoleForImage,
       });
+      if (shouldTraceSelectedScene) {
+        console.debug("[SCENARIO ROLE TRACE] targetScene.before_buildScenarioRoleContractForImage", {
+          sceneId,
+          primaryRole: targetScene?.primaryRole || "",
+          secondaryRoles: Array.isArray(targetScene?.secondaryRoles) ? targetScene.secondaryRoles : [],
+          sceneActiveRoles: Array.isArray(targetScene?.sceneActiveRoles) ? targetScene.sceneActiveRoles : [],
+          refsUsed: Array.isArray(targetScene?.refsUsed) ? targetScene.refsUsed : [],
+          mustAppear: Array.isArray(targetScene?.mustAppear) ? targetScene.mustAppear : [],
+          refsUsedByRoleKeys: Object.keys((targetScene?.refsUsedByRole && typeof targetScene.refsUsedByRole === "object") ? targetScene.refsUsedByRole : {}),
+          refsByRoleCounts: summarizeRefsByRole(refsByRoleForImage),
+        });
+        console.debug("[SCENARIO ROLE TRACE] resolvedRoleContract.after_buildScenarioRoleContractForImage", {
+          sceneId,
+          ...derivedRoleContract,
+          hasCharacter2InSceneActiveRoles: Array.isArray(derivedRoleContract?.sceneActiveRoles) && derivedRoleContract.sceneActiveRoles.includes("character_2"),
+        });
+      }
       const refsForImageRequest = normalizeClipImageRefsPayload({
         ...scenarioBrainRefs,
         refsByRole: refsByRoleForImage,
@@ -8844,6 +8900,19 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           mustAppear: refsForImageRequest?.mustAppear || [],
         });
       }
+      if (shouldTraceSelectedScene) {
+        console.debug("[SCENARIO ROLE TRACE] refs_payload.before_api_clip_image", {
+          sceneId,
+          primaryRole: refsForImageRequest?.primaryRole || "",
+          secondaryRoles: refsForImageRequest?.secondaryRoles || [],
+          sceneActiveRoles: refsForImageRequest?.sceneActiveRoles || [],
+          refsUsed: refsForImageRequest?.refsUsed || [],
+          mustAppear: refsForImageRequest?.mustAppear || [],
+          refsByRoleCounts: summarizeRefsByRole(refsForImageRequest?.refsByRole || {}),
+          hasCharacter2InRefsPayload: Array.isArray(refsForImageRequest?.sceneActiveRoles) && refsForImageRequest.sceneActiveRoles.includes("character_2"),
+          hasCharacter2Refs: Number(summarizeRefsByRole(refsForImageRequest?.refsByRole || {})?.character_2 || 0) > 0,
+        });
+      }
       console.debug("[SCENE IMAGE STRATEGY]", {
         sceneId,
         ltxMode: String(targetScene?.ltxMode || ""),
@@ -8869,6 +8938,28 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       }
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
+      }
+      if (shouldTraceSelectedScene) {
+        const finalTargetSceneForImage = {
+          primaryRole: scenarioContractPayload?.primaryRole || refsForImageRequest?.primaryRole || "",
+          secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
+            ? scenarioContractPayload.secondaryRoles
+            : (refsForImageRequest?.secondaryRoles || []),
+          sceneActiveRoles: (Array.isArray(scenarioContractPayload?.sceneActiveRoles) && scenarioContractPayload.sceneActiveRoles.length)
+            ? scenarioContractPayload.sceneActiveRoles
+            : (refsForImageRequest?.sceneActiveRoles || []),
+          refsUsed: (Array.isArray(scenarioContractPayload?.refsUsed) && scenarioContractPayload.refsUsed.length)
+            ? scenarioContractPayload.refsUsed
+            : (refsForImageRequest?.refsUsed || []),
+          mustAppear: (Array.isArray(scenarioContractPayload?.mustAppear) && scenarioContractPayload.mustAppear.length)
+            ? scenarioContractPayload.mustAppear
+            : (refsForImageRequest?.mustAppear || []),
+        };
+        console.debug("[SCENARIO ROLE TRACE] targetScene.final_before_api_clip_image", {
+          sceneId,
+          ...finalTargetSceneForImage,
+          hasCharacter2InSceneActiveRoles: Array.isArray(finalTargetSceneForImage.sceneActiveRoles) && finalTargetSceneForImage.sceneActiveRoles.includes("character_2"),
+        });
       }
       const out = await fetchJson(`/api/clip/image`, {
         method: "POST",
