@@ -14,6 +14,7 @@ import "@xyflow/react/dist/style.css";
 import "./ClipStoryboardPage.css";
 
 import { API_BASE, fetchJson } from "../services/api";
+import { getScenarioMusicApiConfig, requestScenarioBackgroundMusic } from "../services/scenarioMusicApi";
 import { useAuth } from "../app/AuthContext";
 import { useNavigate } from "react-router-dom";
 import {
@@ -6761,6 +6762,30 @@ const comfyShowVideoSection = Boolean(
     }));
   }, [scenarioFlowSourceNode?.id, scenarioScenes, setNodes]);
 
+  const updateScenarioSceneGenerationRuntime = useCallback((sceneIdRaw, patch = {}) => {
+    const sceneId = String(sceneIdRaw || "").trim();
+    if (!scenarioFlowSourceNode?.id || !sceneId || !patch || typeof patch !== "object") return;
+    setNodes((prev) => prev.map((n) => {
+      if (n.id !== scenarioFlowSourceNode.id) return n;
+      const currentMap = n?.data?.sceneGeneration && typeof n.data.sceneGeneration === "object" ? n.data.sceneGeneration : {};
+      const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          sceneGeneration: {
+            ...currentMap,
+            [sceneId]: {
+              ...currentRuntime,
+              ...patch,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        },
+      };
+    }));
+  }, [scenarioFlowSourceNode?.id, setNodes]);
+
   const stopScenarioVideoPolling = useCallback((sceneId = "") => {
     const key = String(sceneId || "").trim();
     if (!key) {
@@ -8649,6 +8674,7 @@ Aspect ratio: ${imageFormat}`,
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
       const generatedImageUrl = String(out.imageUrl || "");
+      let runtimeImagePatch = {};
       if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
           startImageUrl: generatedImageUrl,
@@ -8660,6 +8686,7 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         });
+        runtimeImagePatch = { startFrameStatus: "done", startFrameError: "" };
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         updateScenarioScene(sceneId, {
           endImageUrl: generatedImageUrl,
@@ -8671,6 +8698,7 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         });
+        runtimeImagePatch = { endFrameStatus: "done", endFrameError: "" };
       } else {
         updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
@@ -8682,7 +8710,16 @@ Aspect ratio: ${imageFormat}`,
           videoSourceImageUrl: "",
           videoPanelActivated: false,
         });
+        runtimeImagePatch = { imageStatus: "done", imageError: "" };
       }
+      updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch);
+      console.debug("[SCENARIO IMAGE STATUS SYNC]", {
+        sceneId,
+        slot: normalizedSlot,
+        status: "done",
+        hasImageUrl: !!generatedImageUrl,
+        error: "",
+      });
       clearActiveVideoJob(sceneId);
       setScenarioVideoOpen(false);
       console.log("[StoryboardVideo] image_generated_reset_video_stage", {
@@ -8694,11 +8731,25 @@ Aspect ratio: ${imageFormat}`,
       }
     } catch (e) {
       console.error(e);
-      setScenarioImageError(String(e?.message || e));
+      const imageErrorMessage = String(e?.message || e);
+      const runtimeErrorPatch = normalizedSlot === "start"
+        ? { startFrameStatus: "error", startFrameError: imageErrorMessage }
+        : normalizedSlot === "end"
+          ? { endFrameStatus: "error", endFrameError: imageErrorMessage }
+          : { imageStatus: "error", imageError: imageErrorMessage };
+      updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch);
+      console.debug("[SCENARIO IMAGE STATUS SYNC]", {
+        sceneId,
+        slot: normalizedSlot,
+        status: "error",
+        hasImageUrl: false,
+        error: imageErrorMessage,
+      });
+      setScenarioImageError(imageErrorMessage);
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [clearActiveVideoJob, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioScenes, scenarioBrainRefs, updateScenarioScene]);
+  }, [clearActiveVideoJob, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioScenes, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
@@ -11050,7 +11101,7 @@ onClipSec: (nodeId, value) => {
                   };
                 })));
               },
-              onScenarioMusicGenerate: (nodeId) => {
+              onScenarioMusicGenerate: async (nodeId) => {
                 const targetNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId && nodeItem.type === "scenarioStoryboard");
                 const audioDataNow = targetNode?.data?.audioData && typeof targetNode.data.audioData === "object" ? targetNode.data.audioData : {};
                 const selectedMusicPromptKind = String(audioDataNow?.musicPromptSourceKind || "empty").trim().toLowerCase() || "empty";
@@ -11103,15 +11154,45 @@ onClipSec: (nodeId, value) => {
                   })));
                   return;
                 }
+                const musicApiConfig = getScenarioMusicApiConfig();
+                console.debug("[SCENARIO MUSIC API]", {
+                  configured: musicApiConfig.configured,
+                  endpoint: musicApiConfig.endpoint,
+                  hasApiKey: musicApiConfig.hasApiKey,
+                  willSend: willSendMusicGenerate && musicApiConfig.configured,
+                  promptKind: selectedMusicPromptKind,
+                  promptLength: selectedMusicPromptText.length,
+                  status: musicApiConfig.configured ? "ready" : "error",
+                });
+                if (!musicApiConfig.configured) {
+                  notify({
+                    type: "warning",
+                    title: "Music API not configured",
+                    message: "Добавьте VITE_SCENARIO_MUSIC_API_URL и VITE_SCENARIO_MUSIC_API_KEY.",
+                  });
+                  setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                    if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                    const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        audioData: {
+                          ...audioDataCurrent,
+                          musicStatus: "error",
+                          musicError: "music_api_not_configured",
+                        },
+                      },
+                    };
+                  })));
+                  return;
+                }
                 const musicPayload = {
                   nodeId,
                   prompt: selectedMusicPromptText,
                   promptKind: selectedMusicPromptKind,
+                  durationSec: Number(audioDataNow?.durationSec || 0) || undefined,
                 };
-                console.debug("[SCENARIO MUSIC GENERATE REQUEST]", {
-                  hasEndpoint: false,
-                  payload: musicPayload,
-                });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
                   const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
@@ -11127,24 +11208,75 @@ onClipSec: (nodeId, value) => {
                     },
                   };
                 })));
-                window.setTimeout(() => {
+                try {
+                  const musicResponse = await requestScenarioBackgroundMusic(musicPayload, { config: musicApiConfig });
+                  const musicUrl = String(
+                    musicResponse?.musicUrl
+                    || musicResponse?.url
+                    || musicResponse?.audioUrl
+                    || ""
+                  ).trim();
+                  if (!musicUrl) throw new Error("music_url_missing");
+                  const musicSource = String(musicResponse?.musicSource || musicResponse?.source || "api").trim() || "api";
+                  const musicTaskId = String(musicResponse?.musicTaskId || musicResponse?.taskId || "").trim();
+                  const musicPreviewUrl = String(musicResponse?.musicPreviewUrl || musicResponse?.previewUrl || "").trim();
+                  const musicFileName = String(musicResponse?.musicFileName || musicResponse?.fileName || "").trim();
+                  console.debug("[SCENARIO MUSIC API]", {
+                    configured: musicApiConfig.configured,
+                    endpoint: musicApiConfig.endpoint,
+                    hasApiKey: musicApiConfig.hasApiKey,
+                    willSend: true,
+                    promptKind: selectedMusicPromptKind,
+                    promptLength: selectedMusicPromptText.length,
+                    status: "done",
+                  });
                   setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                     if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
                     const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
-                    const fallbackMusic = String(audioDataCurrent?.audioUrl || "").trim();
                     return {
                       ...nodeItem,
                       data: {
                         ...nodeItem.data,
                         audioData: {
                           ...audioDataCurrent,
-                          musicStatus: fallbackMusic ? "done" : "error",
-                          musicUrl: fallbackMusic,
+                          musicStatus: "done",
+                          musicError: "",
+                          musicUrl,
+                          musicSource,
+                          musicTaskId,
+                          musicPreviewUrl,
+                          musicFileName,
                         },
                       },
                     };
                   })));
-                }, 1100);
+                } catch (musicError) {
+                  const message = String(musicError?.message || musicError || "music_generate_failed");
+                  console.debug("[SCENARIO MUSIC API]", {
+                    configured: musicApiConfig.configured,
+                    endpoint: musicApiConfig.endpoint,
+                    hasApiKey: musicApiConfig.hasApiKey,
+                    willSend: true,
+                    promptKind: selectedMusicPromptKind,
+                    promptLength: selectedMusicPromptText.length,
+                    status: "error",
+                  });
+                  setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                    if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                    const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        audioData: {
+                          ...audioDataCurrent,
+                          musicStatus: "error",
+                          musicError: message,
+                        },
+                      },
+                    };
+                  })));
+                }
               },
             },
           };
