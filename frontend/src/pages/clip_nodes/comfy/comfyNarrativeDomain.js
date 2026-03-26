@@ -684,6 +684,10 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     return result;
   };
   const firstNonEmptyText = (...values) => values.map((item) => normalizeText(item)).find(Boolean) || "";
+  const mergeUniqueList = (existingList, nextList) => {
+    const mergedList = toUniqueGenericList(existingList, nextList);
+    return mergedList.length ? mergedList : Array.isArray(existingList) ? existingList : [];
+  };
   const mergeMapField = (field) => {
     const merged = {};
     [response, storyboardOut, directorOutputFromResponse].forEach((source) => {
@@ -691,7 +695,9 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
       if (!value || typeof value !== "object" || Array.isArray(value)) return;
       Object.entries(value).forEach(([key, mapValue]) => {
         if (Array.isArray(mapValue)) {
-          if (mapValue.length) merged[key] = mapValue;
+          if (!mapValue.length) return;
+          const existing = Array.isArray(merged[key]) ? merged[key] : [];
+          merged[key] = mergeUniqueList(existing, mapValue);
           return;
         }
         if (isNonEmptyObject(mapValue)) {
