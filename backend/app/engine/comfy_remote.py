@@ -23,8 +23,7 @@ COMFY_LTX_CAPABILITIES = {
     "continuation": False,
 }
 COMFY_AUDIO_WORKFLOW_FILES = {
-    "i2v_as": "image-video-golos-zvuk.json",
-    "f_l_as": "imag-imag-video-zvuk.json",
+    # production audio-sensitive workflow key
     "lip_sync": "image-lipsink-video-music.json",
 }
 COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {

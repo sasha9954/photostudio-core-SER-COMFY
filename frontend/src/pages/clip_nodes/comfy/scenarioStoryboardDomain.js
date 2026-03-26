@@ -6,11 +6,13 @@ const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 export const SCENARIO_LTX_WORKFLOW_MAP = {
   i2v: "i2v",
-  i2v_as: "i2v",
   f_l: "f_l",
-  f_l_as: "f_l",
   continuation: "continuation",
   lip_sync: "lip_sync",
+};
+const SCENARIO_LEGACY_WORKFLOW_ALIASES = {
+  i2v_as: "i2v",
+  f_l_as: "f_l",
 };
 const SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY = {
   "image-video.json": "i2v",
@@ -23,22 +25,22 @@ export const SCENARIO_MODEL_KEY_TO_SPEC = {
   ltx23_dev_fp8: {
     key: "ltx23_dev_fp8",
     ckpt_name: "ltx-2.3-22b-dev-fp8.safetensors",
-    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+    compatible_workflow_keys: ["i2v", "f_l"],
   },
   ltx23_distilled_fp8: {
     key: "ltx23_distilled_fp8",
     ckpt_name: "ltx-2.3-22b-distilled-fp8.safetensors",
-    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+    compatible_workflow_keys: ["i2v", "f_l"],
   },
   ltx23_dev_fp16: {
     key: "ltx23_dev_fp16",
     ckpt_name: "ltx-2.3-22b-dev-fp16.safetensors",
-    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+    compatible_workflow_keys: ["i2v", "f_l"],
   },
   ltx23_distilled_fp16: {
     key: "ltx23_distilled_fp16",
     ckpt_name: "ltx-2.3-22b-distilled-fp16.safetensors",
-    compatible_workflow_keys: ["i2v", "i2v_as", "f_l", "f_l_as"],
+    compatible_workflow_keys: ["i2v", "f_l"],
   },
   ltx23_13b_dev_fp8: {
     key: "ltx23_13b_dev_fp8",
@@ -243,6 +245,13 @@ function resolveFormatAlias(...candidates) {
   return "";
 }
 
+function normalizeScenarioWorkflowKeyCandidate(candidate) {
+  const normalized = normalizeText(candidate).toLowerCase();
+  if (!normalized) return "";
+  const canonical = SCENARIO_LEGACY_WORKFLOW_ALIASES[normalized] || normalized;
+  return SCENARIO_LTX_WORKFLOW_MAP[canonical] ? canonical : "";
+}
+
 function normalizeDurationFromScene(source = {}, fallback = 0) {
   const explicitDuration = toNumber(source.durationSec ?? source.duration, Number(fallback) || 0);
   const t0 = toNumber(source.t0 ?? source.time_start ?? source.timeStart, 0);
@@ -272,7 +281,7 @@ export function detectScenarioAssetType({ url = "", mime = "", extension = "", p
 export function deriveScenarioImageStrategy(scene = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
   const ltxModeRaw = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
-  const ltxMode = SCENARIO_LTX_WORKFLOW_MAP[ltxModeRaw] || ltxModeRaw;
+  const ltxMode = normalizeScenarioWorkflowKeyCandidate(ltxModeRaw) || ltxModeRaw;
   const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l"].includes(ltxMode);
   const requiresContinuation = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous) || ltxMode === "continuation";
   if (requiresTwoFrames) return "first_last";
@@ -301,7 +310,8 @@ export function resolveScenarioExplicitWorkflowKey(scene = {}) {
   for (const candidate of candidates) {
     const normalized = normalizeText(candidate).toLowerCase();
     if (!normalized) continue;
-    if (SCENARIO_LTX_WORKFLOW_MAP[normalized]) return normalized;
+    const workflowKey = normalizeScenarioWorkflowKeyCandidate(normalized);
+    if (workflowKey) return workflowKey;
     if (SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY[normalized]) return SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY[normalized];
   }
   return "";
@@ -331,7 +341,8 @@ export function resolveScenarioExplicitModelKey(scene = {}) {
     const normalized = normalizeText(candidate).toLowerCase();
     if (!normalized) continue;
     if (SCENARIO_MODEL_KEY_ALIASES[normalized]) return SCENARIO_MODEL_KEY_ALIASES[normalized];
-    if (SCENARIO_LTX_WORKFLOW_MAP[normalized]) return SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[normalized] || "";
+    const workflowKey = normalizeScenarioWorkflowKeyCandidate(normalized);
+    if (workflowKey) return SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[workflowKey] || "";
     if (SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY[normalized]) {
       const workflowKey = SCENARIO_LEGACY_WORKFLOW_FILENAME_TO_KEY[normalized];
       return SCENARIO_WORKFLOW_DEFAULT_MODEL_KEY[workflowKey] || "";
@@ -353,7 +364,7 @@ export function resolveScenarioWorkflowKey(scene = {}) {
   );
   if (continuationRequested) return SCENARIO_LTX_WORKFLOW_MAP.continuation;
   const ltxMode = normalizeText(source.ltxMode ?? source.ltx_mode).toLowerCase();
-  return SCENARIO_LTX_WORKFLOW_MAP[ltxMode] || SCENARIO_LTX_WORKFLOW_MAP.i2v;
+  return normalizeScenarioWorkflowKeyCandidate(ltxMode) || SCENARIO_LTX_WORKFLOW_MAP.i2v;
 }
 
 function resolveScenarioRenderProvider(source = {}, scenarioPackage = null) {
@@ -471,7 +482,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const explicitWorkflowKey = resolveScenarioExplicitWorkflowKey(source);
   const continuationRequested = Boolean(source.continuation ?? source.continuationFromPrevious ?? source.continuation_from_previous);
   const ltxModeFromSource = normalizeText(source.ltxMode ?? source.ltx_mode);
-  const ltxMode = SCENARIO_LTX_WORKFLOW_MAP[ltxModeFromSource.toLowerCase()] || ltxModeFromSource || (continuationRequested ? "continuation" : "i2v");
+  const ltxMode = normalizeScenarioWorkflowKeyCandidate(ltxModeFromSource) || (ltxModeFromSource.toLowerCase() || (continuationRequested ? "continuation" : "i2v"));
   const ltxModeNormalized = ltxMode.toLowerCase();
   const renderMode = normalizeText(source.renderMode)
     || (["f_l"].includes(ltxMode) ? "first_last" : "image_to_video");
