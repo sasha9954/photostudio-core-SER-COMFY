@@ -257,17 +257,20 @@ export default function ScenarioStoryboardEditor({
   const hasSceneVideo = Boolean(sceneVideoUrl);
   const bgMusicSource = resolveMusicSource(safeAudioData);
   const musicPromptSourceKind = String(safeAudioData?.musicPromptSourceKind || "").trim().toLowerCase() || "empty";
-  const musicPromptSourceText = String(
-    safeAudioData?.musicPromptSourceText
-    || safeAudioData?.globalMusicPrompt
+  const realMusicPromptText = String(
+    safeAudioData?.globalMusicPrompt
+    || safeAudioData?.musicPromptSourceText
     || safeAudioData?.musicPromptRu
     || safeAudioData?.musicPromptEn
     || "",
   ).trim();
   const fallbackMusicPrompt = String(safeAudioData?.fallbackMusicPrompt || "").trim();
-  const globalMusicPrompt = String(
-    musicPromptSourceText
-  ).trim();
+  const musicPromptSourceText = musicPromptSourceKind === "real"
+    ? realMusicPromptText
+    : musicPromptSourceKind === "fallback"
+      ? fallbackMusicPrompt
+      : "";
+  const globalMusicPrompt = String(musicPromptSourceText).trim();
   const hasBgMusicPrompt = Boolean(globalMusicPrompt);
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
   const usesBgMusicInMontage = hasBgMusic && Boolean(safeAudioData?.useInMontage);

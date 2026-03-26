@@ -9333,12 +9333,14 @@ Aspect ratio: ${imageFormat}`,
   const lastAssemblyPayloadSignatureRef = useRef("");
   const assemblyAbortControllerRef = useRef(null);
   const narrativeAbortControllersRef = useRef(new Map());
+  const narrativeGenerateInFlightRef = useRef(new Map());
   const assemblyPollTimerRef = useRef(null);
   const assemblyPollingActiveRef = useRef(false);
 
   useEffect(() => () => {
     narrativeAbortControllersRef.current.forEach((controller) => controller?.abort());
     narrativeAbortControllersRef.current.clear();
+    narrativeGenerateInFlightRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -10712,13 +10714,13 @@ onClipSec: (nodeId, value) => {
           const packageFallbackMusicPrompt = String(normalizedPackage?.fallbackMusicPrompt || "").trim();
           const packageResolvedMusicPromptSourceKind = packageMusicPromptSourceKindRaw === "real" && packageMusicPromptSourceText
             ? "real"
-            : (packageMusicPromptSourceText || packageFallbackMusicPrompt)
+            : packageFallbackMusicPrompt
               ? "fallback"
               : "empty";
           const packageResolvedMusicPromptSourceText = packageResolvedMusicPromptSourceKind === "real"
             ? packageMusicPromptSourceText
             : packageResolvedMusicPromptSourceKind === "fallback"
-              ? (packageMusicPromptSourceText || packageFallbackMusicPrompt)
+              ? packageFallbackMusicPrompt
               : "";
           const phraseBreakdown = scenes.map((scene, idx) => ({
             sceneId: String(scene?.sceneId || `S${idx + 1}`),
@@ -10736,10 +10738,10 @@ onClipSec: (nodeId, value) => {
             packageGlobalMusicPrompt: String(normalizedPackage?.musicPromptSourceText || normalizedPackage?.globalMusicPrompt || "").trim(),
             globalMusicPrompt: String(
               revisionChanged
-                ? packageResolvedMusicPromptSourceText
+                ? (packageResolvedMusicPromptSourceKind === "real" ? packageResolvedMusicPromptSourceText : "")
                 : (
                   currentAudioData.globalMusicPrompt
-                  || packageResolvedMusicPromptSourceText
+                  || (packageResolvedMusicPromptSourceKind === "real" ? packageResolvedMusicPromptSourceText : "")
                   || ""
                 )
             ).trim(),
@@ -10751,7 +10753,12 @@ onClipSec: (nodeId, value) => {
             musicPromptSourceText: String(
               revisionChanged
                 ? packageResolvedMusicPromptSourceText
-                : (currentAudioData.musicPromptSourceText || normalizedPackage?.musicPromptSourceText || "")
+                : (
+                  currentAudioData.musicPromptSourceText
+                  || (packageResolvedMusicPromptSourceKind === "real" ? normalizedPackage?.musicPromptSourceText : "")
+                  || (packageResolvedMusicPromptSourceKind === "fallback" ? packageFallbackMusicPrompt : "")
+                  || ""
+                )
             ).trim(),
             fallbackMusicPrompt: String(
               revisionChanged
@@ -10816,18 +10823,25 @@ onClipSec: (nodeId, value) => {
           const selectedMusicPromptLength = (
             selectedMusicPromptSource === "real"
               ? String(audioData?.globalMusicPrompt || "").trim().length
-              : selectedMusicPromptSource === "fallback"
+            : selectedMusicPromptSource === "fallback"
                 ? String(audioData?.musicPromptSourceText || "").trim().length
                 : 0
           );
-          console.debug("[SCENARIO MUSIC PROMPT SOURCE]", {
+          console.debug("[SCENARIO MUSIC PROMPT PAYLOAD]", {
             revisionChanged,
             storyboardMusicPromptLength: storyboardMusicPrompt.length,
             packageGlobalMusicPromptLength: packageGlobalMusicPrompt.length,
             fallbackMusicPromptLength: fallbackMusicPrompt.length,
-            selectedMusicPromptSource,
+            selectedMusicPromptKind: selectedMusicPromptSource,
             selectedMusicPromptLength,
-            uiMusicPromptSource: selectedMusicPromptSource,
+            selectedMusicPromptPreview: String(
+              selectedMusicPromptSource === "real"
+                ? (audioData?.globalMusicPrompt || "")
+                : selectedMusicPromptSource === "fallback"
+                  ? (audioData?.musicPromptSourceText || "")
+                  : ""
+            ).slice(0, 120),
+            willSendMusicGenerate: selectedMusicPromptSource === "real" && selectedMusicPromptLength > 0,
           });
           const musicPromptSource = revisionChanged
             ? "package"
@@ -11037,16 +11051,78 @@ onClipSec: (nodeId, value) => {
                 })));
               },
               onScenarioMusicGenerate: (nodeId) => {
+                const targetNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId && nodeItem.type === "scenarioStoryboard");
+                const audioDataNow = targetNode?.data?.audioData && typeof targetNode.data.audioData === "object" ? targetNode.data.audioData : {};
+                const selectedMusicPromptKind = String(audioDataNow?.musicPromptSourceKind || "empty").trim().toLowerCase() || "empty";
+                const selectedMusicPromptText = String(
+                  selectedMusicPromptKind === "real"
+                    ? (audioDataNow?.globalMusicPrompt || audioDataNow?.musicPromptSourceText || audioDataNow?.musicPromptRu || audioDataNow?.musicPromptEn || "")
+                    : selectedMusicPromptKind === "fallback"
+                      ? (audioDataNow?.musicPromptSourceText || audioDataNow?.fallbackMusicPrompt || "")
+                      : ""
+                ).trim();
+                const willSendMusicGenerate = selectedMusicPromptKind === "real" && !!selectedMusicPromptText;
+                console.debug("[SCENARIO MUSIC PROMPT PAYLOAD]", {
+                  revisionChanged: false,
+                  storyboardMusicPromptLength: String(targetNode?.data?.storyboardOut?.music_prompt || "").trim().length,
+                  packageGlobalMusicPromptLength: String(targetNode?.data?.scenarioPackage?.globalMusicPrompt || "").trim().length,
+                  fallbackMusicPromptLength: String(audioDataNow?.fallbackMusicPrompt || "").trim().length,
+                  selectedMusicPromptKind,
+                  selectedMusicPromptLength: selectedMusicPromptText.length,
+                  selectedMusicPromptPreview: selectedMusicPromptText.slice(0, 120),
+                  willSendMusicGenerate,
+                });
+                if (!willSendMusicGenerate) {
+                  const reason = selectedMusicPromptKind === "fallback"
+                    ? "fallback_only"
+                    : selectedMusicPromptKind === "empty"
+                      ? "empty_prompt"
+                      : "no_real_music_prompt";
+                  console.debug("[SCENARIO MUSIC PROMPT BLOCKED]", { reason });
+                  notify({
+                    type: "warning",
+                    title: "Music prompt unavailable",
+                    message: reason === "fallback_only"
+                      ? "Сценарный music prompt отсутствует: доступен только fallback mood/style/pacing."
+                      : "Сценарный music prompt не предоставлен.",
+                  });
+                  setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                    if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
+                    const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                    return {
+                      ...nodeItem,
+                      data: {
+                        ...nodeItem.data,
+                        audioData: {
+                          ...audioDataCurrent,
+                          musicStatus: "error",
+                          musicError: reason,
+                        },
+                      },
+                    };
+                  })));
+                  return;
+                }
+                const musicPayload = {
+                  nodeId,
+                  prompt: selectedMusicPromptText,
+                  promptKind: selectedMusicPromptKind,
+                };
+                console.debug("[SCENARIO MUSIC GENERATE REQUEST]", {
+                  hasEndpoint: false,
+                  payload: musicPayload,
+                });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
-                  const audioDataNow = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                  const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
                   return {
                     ...nodeItem,
                     data: {
                       ...nodeItem.data,
                       audioData: {
-                        ...audioDataNow,
+                        ...audioDataCurrent,
                         musicStatus: "loading",
+                        musicError: "",
                       },
                     },
                   };
@@ -11054,14 +11130,14 @@ onClipSec: (nodeId, value) => {
                 window.setTimeout(() => {
                   setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                     if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
-                    const audioDataNow = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
-                    const fallbackMusic = String(audioDataNow?.audioUrl || "").trim();
+                    const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
+                    const fallbackMusic = String(audioDataCurrent?.audioUrl || "").trim();
                     return {
                       ...nodeItem,
                       data: {
                         ...nodeItem.data,
                         audioData: {
-                          ...audioDataNow,
+                          ...audioDataCurrent,
                           musicStatus: fallbackMusic ? "done" : "error",
                           musicUrl: fallbackMusic,
                         },
@@ -11208,9 +11284,39 @@ onClipSec: (nodeId, value) => {
                 const currentEdges = edgesRef.current || [];
                 const currentNodes = nodesRef.current || [];
                 const activeNode = currentNodes.find((nodeItem) => nodeItem.id === nodeId);
-                if (activeNode?.data?.isGenerating === true) {
+                const requestKey = `scenario-generate:${String(nodeId || "")}`;
+                const wasInFlight = narrativeGenerateInFlightRef.current.get(requestKey) === true;
+                if (wasInFlight) {
+                  console.debug("[SCENARIO GENERATE REQUEST]", {
+                    requestKey,
+                    inFlight: true,
+                    retryAllowed: false,
+                    attempt: 0,
+                    httpStatus: null,
+                    duplicateBlocked: true,
+                  });
                   return;
                 }
+                if (activeNode?.data?.isGenerating === true) {
+                  console.debug("[SCENARIO GENERATE REQUEST]", {
+                    requestKey,
+                    inFlight: true,
+                    retryAllowed: false,
+                    attempt: 0,
+                    httpStatus: null,
+                    duplicateBlocked: true,
+                  });
+                  return;
+                }
+                narrativeGenerateInFlightRef.current.set(requestKey, true);
+                console.debug("[SCENARIO GENERATE REQUEST]", {
+                  requestKey,
+                  inFlight: false,
+                  retryAllowed: false,
+                  attempt: 1,
+                  httpStatus: null,
+                  duplicateBlocked: false,
+                });
 
                 narrativeAbortControllersRef.current.get(nodeId)?.abort();
                 const controller = new AbortController();
@@ -11238,39 +11344,46 @@ onClipSec: (nodeId, value) => {
                 }
 
                 try {
-                  let response = null;
-                  for (let attempt = 0; attempt < 2; attempt += 1) {
-                    try {
-                      response = await new Promise((resolve, reject) => {
-                        const timeoutId = window.setTimeout(() => {
-                          controller.abort();
-                          reject(buildScenarioDirectorTimeoutError());
-                        }, SCENARIO_DIRECTOR_TIMEOUT_MS);
-                        controller.signal.addEventListener("abort", () => {
-                          window.clearTimeout(timeoutId);
-                        }, { once: true });
+                  const response = await new Promise((resolve, reject) => {
+                    const timeoutId = window.setTimeout(() => {
+                      controller.abort();
+                      reject(buildScenarioDirectorTimeoutError());
+                    }, SCENARIO_DIRECTOR_TIMEOUT_MS);
+                    controller.signal.addEventListener("abort", () => {
+                      window.clearTimeout(timeoutId);
+                    }, { once: true });
 
-                        Promise.resolve(fetchJson('/api/clip/comfy/scenario-director/generate', {
-                          method: 'POST',
-                          body: requestPayload,
-                          signal: controller.signal,
-                        }))
-                          .then((result) => {
-                            window.clearTimeout(timeoutId);
-                            resolve(result);
-                          })
-                          .catch((requestError) => {
-                            window.clearTimeout(timeoutId);
-                            reject(requestError);
-                          });
+                    Promise.resolve(fetchJson('/api/clip/comfy/scenario-director/generate', {
+                      method: 'POST',
+                      body: requestPayload,
+                      signal: controller.signal,
+                    }))
+                      .then((result) => {
+                        window.clearTimeout(timeoutId);
+                        console.debug("[SCENARIO GENERATE REQUEST]", {
+                          requestKey,
+                          inFlight: true,
+                          retryAllowed: false,
+                          attempt: 1,
+                          httpStatus: 200,
+                          duplicateBlocked: false,
+                        });
+                        resolve(result);
+                      })
+                      .catch((requestError) => {
+                        window.clearTimeout(timeoutId);
+                        const httpStatus = Number(requestError?.status || requestError?.httpStatus || requestError?.response?.status || 0) || null;
+                        console.debug("[SCENARIO GENERATE REQUEST]", {
+                          requestKey,
+                          inFlight: true,
+                          retryAllowed: false,
+                          attempt: 1,
+                          httpStatus,
+                          duplicateBlocked: false,
+                        });
+                        reject(requestError);
                       });
-                      break;
-                    } catch (requestError) {
-                      if (isAbortLikeError(requestError) || requestError?.name === "TimeoutError" || attempt === 1) {
-                        throw requestError;
-                      }
-                    }
-                  }
+                  });
 
                   const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId);
                   const normalizedOutputs = normalizeScenarioDirectorApiResponse(response, refreshedNode?.data || {});
@@ -11327,6 +11440,7 @@ onClipSec: (nodeId, value) => {
                   if (narrativeAbortControllersRef.current.get(nodeId) === controller) {
                     narrativeAbortControllersRef.current.delete(nodeId);
                   }
+                  narrativeGenerateInFlightRef.current.delete(requestKey);
                 }
               },
               onConfirmScenario: async (nodeId) => {
