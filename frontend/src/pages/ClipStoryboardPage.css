@@ -4251,6 +4251,23 @@ body.ps_clip_fullscreen .mainCol {
   gap: 8px;
 }
 
+.clipSB_scenarioEditorCopyRow {
+  flex-wrap: wrap;
+}
+
+.clipSB_copySelectable,
+.clipSB_scenarioEditorInfoModalBody,
+.clipSB_scenarioEditorTabBody,
+.clipSB_storyboardKv,
+.clipSB_scenarioEditorSimpleRow,
+.clipSB_scenarioEditorDebug,
+.clipSB_scenarioEditorBadgeRow,
+.clipSB_scenarioEditorPhraseText {
+  user-select: text;
+  -webkit-user-select: text;
+  pointer-events: auto;
+}
+
 .clipSB_scenarioEditorSimpleRow {
   padding: 6px 8px;
   border-radius: 8px;
@@ -4274,6 +4291,7 @@ body.ps_clip_fullscreen .mainCol {
   display: grid;
   place-items: center;
   padding: 20px;
+  pointer-events: auto;
 }
 
 .clipSB_scenarioEditorInfoModal {
@@ -4285,6 +4303,7 @@ body.ps_clip_fullscreen .mainCol {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  pointer-events: auto;
 }
 
 .clipSB_scenarioEditorInfoModalHeader {
