@@ -15,6 +15,55 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+COMFY_LTX_CAPABILITIES = {
+    "single_image": True,
+    "first_last": False,
+    "audio_sensitive": False,
+    "lip_sync": False,
+    "continuation": False,
+}
+
+COMFY_LTX_WORKFLOW_REQUIREMENTS = {
+    "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
+    "i2v_as": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": False, "continuation": False},
+    "f_l": {"single_image": False, "first_last": True, "audio_sensitive": False, "lip_sync": False, "continuation": False},
+    "f_l_as": {"single_image": False, "first_last": True, "audio_sensitive": True, "lip_sync": False, "continuation": False},
+    "continuation": {"single_image": False, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": True},
+    "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
+}
+
+
+def _validate_comfy_ltx_request(
+    *,
+    workflow_key: str,
+    start_image_bytes: bytes | None,
+    end_image_bytes: bytes | None,
+    audio_bytes: bytes | None,
+    audio_url: str | None,
+) -> tuple[str | None, str | None]:
+    key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    requirements = COMFY_LTX_WORKFLOW_REQUIREMENTS.get(key)
+    if not requirements:
+        return "LTX_MODE_NOT_IMPLEMENTED", f"workflow_key_not_supported:{key}"
+
+    if requirements["continuation"] and not COMFY_LTX_CAPABILITIES["continuation"]:
+        return "LTX_CONTINUATION_NOT_IMPLEMENTED", "continuation_mode_not_implemented_for_comfy_remote"
+    if requirements["lip_sync"] and not COMFY_LTX_CAPABILITIES["lip_sync"]:
+        return "LTX_LIPSYNC_NOT_IMPLEMENTED", "lip_sync_mode_not_implemented_for_comfy_remote"
+    if requirements["first_last"] and not COMFY_LTX_CAPABILITIES["first_last"]:
+        return "LTX_FIRST_LAST_NOT_IMPLEMENTED", "first_last_mode_not_implemented_for_comfy_remote"
+    if requirements["audio_sensitive"] and not COMFY_LTX_CAPABILITIES["audio_sensitive"]:
+        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "audio_sensitive_mode_not_implemented_for_comfy_remote"
+    if requirements["single_image"] and not COMFY_LTX_CAPABILITIES["single_image"]:
+        return "LTX_MODE_NOT_IMPLEMENTED", "single_image_mode_not_implemented_for_comfy_remote"
+
+    if requirements["first_last"] and not (start_image_bytes and end_image_bytes):
+        return "LTX_FIRST_LAST_NOT_IMPLEMENTED", "start_image_and_end_image_required_for_first_last_mode"
+    if requirements["audio_sensitive"] and not (audio_bytes or str(audio_url or "").strip()):
+        return "LTX_AUDIO_REACTIVE_NOT_IMPLEMENTED", "audio_input_required_for_audio_sensitive_mode"
+
+    return None, None
+
 
 def load_workflow_json(path: str) -> dict:
     raw_path = str(path or "").strip()
@@ -561,10 +610,27 @@ def run_comfy_image_to_video(
     height: int,
     requested_duration_sec: float,
     workflow_path: str | None = None,
+    workflow_key: str | None = None,
+    start_image_bytes: bytes | None = None,
+    end_image_bytes: bytes | None = None,
+    audio_bytes: bytes | None = None,
+    audio_url: str | None = None,
     seed: int | None = None,
 ) -> tuple[dict | None, str | None]:
+    normalized_workflow_key = str(workflow_key or "i2v").strip().lower() or "i2v"
+    capability_code, capability_hint = _validate_comfy_ltx_request(
+        workflow_key=normalized_workflow_key,
+        start_image_bytes=start_image_bytes,
+        end_image_bytes=end_image_bytes,
+        audio_bytes=audio_bytes,
+        audio_url=audio_url,
+    )
+    if capability_code:
+        return None, f"capability_error:{capability_code}:{capability_hint or ''}"
+
     logger.info(
-        "[COMFY REMOTE] enter run_comfy_image_to_video filename=%s size_bytes=%s width=%s height=%s requested_duration_sec=%s seed=%s",
+        "[COMFY REMOTE] enter run_comfy_image_to_video workflow_key=%s filename=%s size_bytes=%s width=%s height=%s requested_duration_sec=%s seed=%s",
+        normalized_workflow_key,
         str(image_filename or "").strip() or "source.jpg",
         len(image_bytes or b""),
         int(width),
@@ -658,7 +724,22 @@ def run_comfy_image_to_video(
         "requestedDurationSec": round(float(requested_duration_sec), 3),
         "taskId": prompt_id,
         "debug": {
+            "workflow_key": normalized_workflow_key,
             "workflow": workflow_source,
+            "workflow_path": workflow_source,
+            "capabilities": COMFY_LTX_CAPABILITIES,
+            "inputsUsed": {
+                "image": True,
+                "startImage": False,
+                "endImage": False,
+                "audio": False,
+            },
+            "inputsProvided": {
+                "startImage": bool(start_image_bytes),
+                "endImage": bool(end_image_bytes),
+                "audioBytes": bool(audio_bytes),
+                "audioUrl": bool(str(audio_url or "").strip()),
+            },
             "usedNodeIds": {
                 "image": FIXED_IMAGE_VIDEO_NODES["image"][0],
                 "promptSource": FIXED_IMAGE_VIDEO_NODES["prompt"][0],
