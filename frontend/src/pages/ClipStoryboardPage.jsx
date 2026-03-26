@@ -11104,6 +11104,14 @@ onClipSec: (nodeId, value) => {
               onScenarioMusicGenerate: async (nodeId) => {
                 const targetNode = (nodesRef.current || []).find((nodeItem) => nodeItem.id === nodeId && nodeItem.type === "scenarioStoryboard");
                 const audioDataNow = targetNode?.data?.audioData && typeof targetNode.data.audioData === "object" ? targetNode.data.audioData : {};
+                const emptyMusicResultPatch = {
+                  musicUrl: "",
+                  musicTaskId: "",
+                  musicPreviewUrl: "",
+                  musicFileName: "",
+                  musicSource: "",
+                  musicDuration: 0,
+                };
                 const selectedMusicPromptKind = String(audioDataNow?.musicPromptSourceKind || "empty").trim().toLowerCase() || "empty";
                 const selectedMusicPromptText = String(
                   selectedMusicPromptKind === "real"
@@ -11179,20 +11187,46 @@ onClipSec: (nodeId, value) => {
                         ...nodeItem.data,
                         audioData: {
                           ...audioDataCurrent,
+                          ...emptyMusicResultPatch,
                           musicStatus: "error",
                           musicError: "music_api_not_configured",
                         },
                       },
                     };
                   })));
+                  console.debug("[SCENARIO MUSIC RESULT SYNC]", {
+                    status: "error",
+                    resultFieldsCleared: true,
+                    hasMusicUrl: false,
+                    hasMusicTaskId: false,
+                    hasMusicPreviewUrl: false,
+                    musicError: "music_api_not_configured",
+                  });
                   return;
                 }
+                const durationCandidates = [
+                  { source: "durationSec", value: audioDataNow?.durationSec },
+                  { source: "audioDurationSec", value: audioDataNow?.audioDurationSec },
+                  { source: "nodeData", value: targetNode?.data?.audioDurationSec },
+                  { source: "nodeData", value: targetNode?.data?.audioData?.durationSec },
+                  { source: "nodeData", value: targetNode?.data?.audioData?.audioDurationSec },
+                ];
+                const pickedDuration = durationCandidates.find((candidate) => Number(candidate?.value) > 0);
+                const resolvedDurationSec = pickedDuration ? Number(pickedDuration.value) : undefined;
+                const durationSource = pickedDuration?.source || "none";
                 const musicPayload = {
                   nodeId,
                   prompt: selectedMusicPromptText,
                   promptKind: selectedMusicPromptKind,
-                  durationSec: Number(audioDataNow?.durationSec || 0) || undefined,
+                  durationSec: resolvedDurationSec,
                 };
+                console.debug("[SCENARIO MUSIC PAYLOAD]", {
+                  durationSec: resolvedDurationSec,
+                  durationSource,
+                  configured: musicApiConfig.configured,
+                  willSend: willSendMusicGenerate && musicApiConfig.configured,
+                  promptKind: selectedMusicPromptKind,
+                });
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
                   const audioDataCurrent = nodeItem?.data?.audioData && typeof nodeItem.data.audioData === "object" ? nodeItem.data.audioData : {};
@@ -11202,12 +11236,21 @@ onClipSec: (nodeId, value) => {
                       ...nodeItem.data,
                       audioData: {
                         ...audioDataCurrent,
+                        ...emptyMusicResultPatch,
                         musicStatus: "loading",
                         musicError: "",
                       },
                     },
                   };
                 })));
+                console.debug("[SCENARIO MUSIC RESULT SYNC]", {
+                  status: "loading",
+                  resultFieldsCleared: true,
+                  hasMusicUrl: false,
+                  hasMusicTaskId: false,
+                  hasMusicPreviewUrl: false,
+                  musicError: "",
+                });
                 try {
                   const musicResponse = await requestScenarioBackgroundMusic(musicPayload, { config: musicApiConfig });
                   const musicUrl = String(
@@ -11250,6 +11293,14 @@ onClipSec: (nodeId, value) => {
                       },
                     };
                   })));
+                  console.debug("[SCENARIO MUSIC RESULT SYNC]", {
+                    status: "done",
+                    resultFieldsCleared: false,
+                    hasMusicUrl: !!musicUrl,
+                    hasMusicTaskId: !!musicTaskId,
+                    hasMusicPreviewUrl: !!musicPreviewUrl,
+                    musicError: "",
+                  });
                 } catch (musicError) {
                   const message = String(musicError?.message || musicError || "music_generate_failed");
                   console.debug("[SCENARIO MUSIC API]", {
@@ -11270,12 +11321,21 @@ onClipSec: (nodeId, value) => {
                         ...nodeItem.data,
                         audioData: {
                           ...audioDataCurrent,
+                          ...emptyMusicResultPatch,
                           musicStatus: "error",
                           musicError: message,
                         },
                       },
                     };
                   })));
+                  console.debug("[SCENARIO MUSIC RESULT SYNC]", {
+                    status: "error",
+                    resultFieldsCleared: true,
+                    hasMusicUrl: false,
+                    hasMusicTaskId: false,
+                    hasMusicPreviewUrl: false,
+                    musicError: message,
+                  });
                 }
               },
             },
