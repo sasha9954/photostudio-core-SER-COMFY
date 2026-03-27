@@ -2971,6 +2971,135 @@ def _infer_scene_performer_presentation(scene: ScenarioDirectorScene, payload: d
     return next(iter(normalized))
 
 
+def _role_has_explicit_refs(payload: dict[str, Any], role: str) -> bool:
+    normalized_role = _normalize_scenario_role(role)
+    if not normalized_role:
+        return False
+    refs_by_role = payload.get("refsByRole") if isinstance(payload.get("refsByRole"), dict) else {}
+    connected_refs_by_role = payload.get("connectedRefsByRole") if isinstance(payload.get("connectedRefsByRole"), dict) else {}
+    context_refs = payload.get("context_refs") if isinstance(payload.get("context_refs"), dict) else {}
+    connected_summary = payload.get("connected_context_summary") if isinstance(payload.get("connected_context_summary"), dict) else {}
+    connected_summary_refs = connected_summary.get("refsByRole") if isinstance(connected_summary.get("refsByRole"), dict) else {}
+    for source_map in (refs_by_role, connected_refs_by_role, connected_summary_refs):
+        refs = source_map.get(normalized_role)
+        if isinstance(refs, list) and any(str(item or "").strip() for item in refs):
+            return True
+    context_item = context_refs.get(normalized_role) if isinstance(context_refs.get(normalized_role), dict) else {}
+    if isinstance(context_item.get("refs"), list) and any(str(item or "").strip() for item in context_item.get("refs")):
+        return True
+    try:
+        if int(context_item.get("count") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    meta = context_item.get("meta") if isinstance(context_item.get("meta"), dict) else {}
+    return _coerce_bool(meta.get("connected"), False)
+
+
+def _build_music_video_cast_identity_lock(payload: dict[str, Any]) -> dict[str, Any]:
+    locked_role_presentations: dict[str, str] = {}
+    for role in ("character_1", "character_2", "character_3"):
+        if not _role_has_explicit_refs(payload, role):
+            continue
+        texts = _collect_role_hint_texts(role, payload, {})
+        presentation = _infer_presentations_from_texts(
+            texts,
+            male_hints=PERFORMER_MALE_HINTS,
+            female_hints=PERFORMER_FEMALE_HINTS,
+        )
+        if presentation in {"male", "female", "mixed"}:
+            locked_role_presentations[role] = presentation
+    locked_roles = list(locked_role_presentations.keys())
+    unique_presentations = {value for value in locked_role_presentations.values() if value in {"male", "female", "mixed"}}
+    cast_identity_locked = bool(locked_roles)
+    return {
+        "enabled": cast_identity_locked,
+        "lockedRoles": locked_roles,
+        "lockedRolePresentationByRole": locked_role_presentations,
+        "lockReason": (
+            "explicit_character_refs_with_identity_hints"
+            if cast_identity_locked
+            else "no_explicit_character_refs_with_identity_hints"
+        ),
+        "globalPresentation": ("mixed" if "mixed" in unique_presentations or len(unique_presentations) > 1 else next(iter(unique_presentations), "unknown")),
+    }
+
+
+def _sanitize_cast_identity_text(text: str, *, preserve_presentation: str) -> tuple[str, bool]:
+    cleaned = str(text or "")
+    if not cleaned:
+        return "", False
+    if preserve_presentation == "female":
+        patterns = (
+            (r"\bman\b", "person"),
+            (r"\bmen\b", "people"),
+            (r"\bmale\b", "person"),
+            (r"\bboy\b", "person"),
+            (r"\bguy\b", "person"),
+            (r"\bмужчина\b", "человек"),
+            (r"\bпарень\b", "человек"),
+            (r"\bмальчик\b", "человек"),
+        )
+    elif preserve_presentation == "male":
+        patterns = (
+            (r"\bwoman\b", "person"),
+            (r"\bwomen\b", "people"),
+            (r"\bfemale\b", "person"),
+            (r"\bgirl\b", "person"),
+            (r"\blady\b", "person"),
+            (r"\bженщина\b", "человек"),
+            (r"\bдевушка\b", "человек"),
+            (r"\bдевочка\b", "человек"),
+        )
+    else:
+        return cleaned, False
+    changed = False
+    for pattern, replacement in patterns:
+        updated = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+        if updated != cleaned:
+            changed = True
+            cleaned = updated
+    return cleaned, changed
+
+
+def _enforce_music_video_cast_identity_lock(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> tuple[ScenarioDirectorStoryboardOut, dict[str, Any]]:
+    lock = _build_music_video_cast_identity_lock(payload)
+    if not lock.get("enabled"):
+        return storyboard_out, lock
+    locked_by_role = lock.get("lockedRolePresentationByRole") if isinstance(lock.get("lockedRolePresentationByRole"), dict) else {}
+
+    def _scene_target_presentation(scene: ScenarioDirectorScene) -> str:
+        actor_presentations = [locked_by_role.get(role) for role in (scene.actors or []) if locked_by_role.get(role) in {"female", "male", "mixed"}]
+        if not actor_presentations:
+            actor_presentations = [value for value in locked_by_role.values() if value in {"female", "male", "mixed"}]
+        normalized = set(actor_presentations)
+        if not normalized:
+            return "unknown"
+        if "mixed" in normalized or len(normalized) > 1:
+            return "mixed"
+        return next(iter(normalized))
+
+    total_rewrites = 0
+    top_level_fields = ("story_summary", "director_summary", "full_scenario")
+    global_presentation = str(lock.get("globalPresentation") or "unknown")
+    for field_name in top_level_fields:
+        value = str(getattr(storyboard_out, field_name, "") or "")
+        rewritten, changed = _sanitize_cast_identity_text(value, preserve_presentation=global_presentation)
+        if changed:
+            setattr(storyboard_out, field_name, rewritten)
+            total_rewrites += 1
+    for scene in storyboard_out.scenes:
+        target_presentation = _scene_target_presentation(scene)
+        for field_name in ("frame_description", "action_in_frame", "image_prompt", "video_prompt", "scene_goal"):
+            value = str(getattr(scene, field_name, "") or "")
+            rewritten, changed = _sanitize_cast_identity_text(value, preserve_presentation=target_presentation)
+            if changed:
+                setattr(scene, field_name, rewritten)
+                total_rewrites += 1
+    lock["textRewritesApplied"] = total_rewrites
+    return storyboard_out, lock
+
+
 def _infer_performance_framing(
     scene: ScenarioDirectorScene,
     *,
@@ -3889,6 +4018,7 @@ def _build_request_text(
     rhythm_source = "audio" if is_music_video_mode else ""
     story_frame_source_reason = "director_note_present" if is_music_video_mode and director_note_text else "director_note_empty_use_source_truth"
     rhythm_source_reason = "audio_drives_pacing_and_transitions" if is_music_video_mode else ""
+    cast_identity_lock = _build_music_video_cast_identity_lock(payload) if is_music_video_mode else {"enabled": False}
     story_core_reason = (
         "music_video_with_director_note_story_frame_plus_audio_rhythm_driver"
         if story_core_source == "director_note"
@@ -3916,6 +4046,7 @@ def _build_request_text(
             "while audio remains mandatory for rhythm, emotion, scene timing, energy progression, and transition timing.\n"
             "- If storyCoreSource=source_of_truth: derive story frame from source/audio semantics and transcript.\n"
             "- Refs remain identity/world anchors: character refs define cast; location/style/props refs define world and must not be replaced by text.\n"
+            "- CAST IDENTITY LOCK: if explicit character refs already imply role identity/presentation, director note must not rewrite gender presentation or pair composition.\n"
         )
         if is_music_video_mode
         else (
@@ -4044,6 +4175,7 @@ def _build_request_text(
         "ANTI-DRIFT LOCKS:\n"
         "- Preserve the exact count of core characters implied by the source and refs.\n"
         "- If two connected refs imply two women, keep two women unless the user explicitly changes that.\n"
+        "- If castIdentityLocked=true in runtime payload, NEVER rewrite locked role presentation or pairing type.\n"
         "- Do not collapse connected characters into generic operative/target/action archetypes.\n"
         "- Preserve relationship tension, emotional roles, gender presentation, and visual identity anchors from the refs.\n"
         "- Preserve implied genre: horror, claustrophobic tension, industrial dread, surreal unease, emotional darkness, intimacy, mystery.\n"
@@ -4176,7 +4308,7 @@ def _build_request_text(
         '    "howDirectorNoteWasIntegrated": ""\n'
         "  }\n"
         "}\n\n"
-        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'contentType': content_type_policy.get('value'), 'storyCoreSource': story_core_source, 'storyCoreSourceReason': story_core_reason, 'storyFrameSource': story_frame_source if is_music_video_mode else None, 'storyFrameSourceReason': story_frame_source_reason if is_music_video_mode else None, 'rhythmSource': rhythm_source if is_music_video_mode else None, 'rhythmSourceReason': rhythm_source_reason if is_music_video_mode else None, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
+        f"Runtime payload:\n{json.dumps({'source': source, 'context_refs': context_refs, 'director_controls': director_controls, 'connected_context_summary': connected_context_summary, 'metadata': metadata, 'audioDurationSec': audio_duration_sec if audio_duration_sec > 0 else None, 'audioDurationSource': audio_duration_source, 'sourceMode': source_mode, 'sourceOrigin': source_origin, 'audioConnected': audio_connected, 'preferAudioOverText': prefer_audio_over_text, 'contentType': content_type_policy.get('value'), 'storyCoreSource': story_core_source, 'storyCoreSourceReason': story_core_reason, 'storyFrameSource': story_frame_source if is_music_video_mode else None, 'storyFrameSourceReason': story_frame_source_reason if is_music_video_mode else None, 'rhythmSource': rhythm_source if is_music_video_mode else None, 'rhythmSourceReason': rhythm_source_reason if is_music_video_mode else None, 'castIdentityLocked': _coerce_bool(cast_identity_lock.get('enabled'), False) if is_music_video_mode else None, 'castIdentityLockReason': str(cast_identity_lock.get('lockReason') or '') if is_music_video_mode else None, 'lockedRolePresentationByRole': cast_identity_lock.get('lockedRolePresentationByRole') if is_music_video_mode else {}, 'roleTypeByRole': role_type_by_role, 'audioContext': normalized_audio, 'audioAnalysis': {'ok': runtime_analysis.get('ok'), 'audioDurationSec': runtime_analysis.get('audioDurationSec'), 'phraseCount': len(runtime_analysis.get('phrases') or []), 'pauseCount': len(runtime_analysis.get('pauseWindows') or []), 'energyTransitionCount': len(runtime_analysis.get('energyTransitions') or []), 'sectionCount': len(runtime_analysis.get('sections') or [])}, 'audioSemantics': {'ok': runtime_semantics.get('ok'), 'transcript': str(runtime_semantics.get('transcript') or '')[:2000], 'semanticSummary': str(runtime_semantics.get('semanticSummary') or '')[:1200], 'narrativeCore': str(runtime_semantics.get('narrativeCore') or '')[:600], 'worldContext': str(runtime_semantics.get('worldContext') or '')[:600], 'entities': [str(item).strip() for item in (runtime_semantics.get('entities') or []) if str(item).strip()][:20], 'impliedEvents': [str(item).strip() for item in (runtime_semantics.get('impliedEvents') or []) if str(item).strip()][:20], 'tone': str(runtime_semantics.get('tone') or '')[:200], 'confidence': runtime_semantics.get('confidence'), 'hint': str(runtime_semantics.get('hint') or '')[:120]}, 'segmentationGuidance': runtime_guidance}, ensure_ascii=False, indent=2)}"
     )
     if strict_json_retry:
         request_text += JSON_ONLY_RETRY_SUFFIX
@@ -4947,6 +5079,23 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         if story_core_source == "director_note"
         else "story_frame_from_source_truth_audio_semantics_refs_anchor_cast_and_world"
     )
+    cast_identity_lock_info = {"enabled": False, "lockReason": "not_music_video", "textRewritesApplied": 0}
+    if is_music_video_mode:
+        storyboard_out, cast_identity_lock_info = _enforce_music_video_cast_identity_lock(storyboard_out, payload)
+        storyboard_out.narrative_strategy.story_core_source = story_core_source
+        storyboard_out.narrative_strategy.story_frame_source = story_frame_source
+        storyboard_out.narrative_strategy.rhythm_source = rhythm_source
+        storyboard_out.narrative_strategy.story_frame_source_reason = story_frame_source_reason
+        storyboard_out.narrative_strategy.rhythm_source_reason = rhythm_source_reason
+        if not str(storyboard_out.narrative_strategy.why or "").strip():
+            storyboard_out.narrative_strategy.why = story_core_source_reason
+        planner_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
+        planner_strategy["storyCoreSource"] = story_core_source
+        planner_strategy["storyFrameSource"] = story_frame_source
+        planner_strategy["rhythmSource"] = rhythm_source
+        planner_strategy["storyFrameSourceReason"] = story_frame_source_reason
+        planner_strategy["rhythmSourceReason"] = rhythm_source_reason
+        structured_planner_diagnostics["narrativeStrategy"] = planner_strategy
     effective_role_type_by_role, role_assignment_source, role_override_applied = _resolve_effective_role_type_by_role(payload)
     coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
     coverage_warnings: list[str] = list(coverage.get("warnings") or [])
@@ -5173,6 +5322,10 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             "rhythmSource": rhythm_source if is_music_video_mode else None,
             "storyFrameSourceReason": story_frame_source_reason if is_music_video_mode else None,
             "rhythmSourceReason": rhythm_source_reason if is_music_video_mode else None,
+            "castIdentityLocked": _coerce_bool(cast_identity_lock_info.get("enabled"), False) if is_music_video_mode else False,
+            "castIdentityLockReason": cast_identity_lock_info.get("lockReason") if is_music_video_mode else "not_music_video",
+            "castIdentityLockRewritesApplied": cast_identity_lock_info.get("textRewritesApplied") if is_music_video_mode else 0,
+            "lockedRolePresentationByRole": cast_identity_lock_info.get("lockedRolePresentationByRole") if is_music_video_mode else {},
             "textHintInfluence": text_hint_influence,
             "audioInfluence": audio_influence,
             "narrativeBiasEstimate": narrative_bias_estimate,
