@@ -737,6 +737,12 @@
   background: #171b26;
 }
 
+.clipSB_select option:disabled,
+.clipSB_select option.clipSB_selectOptionDisabled {
+  color: rgba(170, 176, 194, 0.48);
+  background: #0f131d;
+}
+
 
 .clipSB_selectScenario {
   border-radius: 8px;

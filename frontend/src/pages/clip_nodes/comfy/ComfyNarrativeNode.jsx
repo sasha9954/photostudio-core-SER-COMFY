@@ -379,12 +379,16 @@ export default function ComfyNarrativeNode({ id, data }) {
                   }}
                 >
                   {NARRATIVE_CONTENT_TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value} disabled={!option.isEnabled}>
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={!option.isEnabled}
+                      className={!option.isEnabled ? "clipSB_selectOptionDisabled" : undefined}
+                    >
                       {option.isEnabled ? option.labelRu : `${option.labelRu} (soon)`}
                     </option>
                   ))}
                 </select>
-                <div className="clipSB_selectHint">Доступно сейчас: История, Клип, Реклама. Остальные режимы скоро.</div>
               </label>
 
               <label className="clipSB_narrativeField clipSB_narrativeField--compact">
