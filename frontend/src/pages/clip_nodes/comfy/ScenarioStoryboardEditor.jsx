@@ -159,10 +159,19 @@ export default function ScenarioStoryboardEditor({
   );
   const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
   const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
+  const hasBgAudioAvailable = Boolean(String(safeAudioData?.audioUrl || safeAudioData?.musicUrl || "").trim());
 
   useEffect(() => {
     if (!open) return;
     const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
+    const selectedSceneStillExists = normalizedScenes.some((scene) => String(scene?.sceneId || "").trim() === String(activeSelectionId || "").trim());
+    if (activeSelectionType === "bg_audio" && hasBgAudioAvailable) {
+      setActiveSelectionId(BG_AUDIO_ITEM_ID);
+      return;
+    }
+    if (activeSelectionType === "scene" && selectedSceneStillExists) {
+      return;
+    }
     if (firstSceneId) {
       setActiveSelectionType("scene");
       setActiveSelectionId(firstSceneId);
@@ -170,7 +179,7 @@ export default function ScenarioStoryboardEditor({
       setActiveSelectionType("bg_audio");
       setActiveSelectionId(BG_AUDIO_ITEM_ID);
     }
-  }, [nodeId, normalizedScenes, open]);
+  }, [activeSelectionId, activeSelectionType, hasBgAudioAvailable, nodeId, normalizedScenes, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -179,8 +188,12 @@ export default function ScenarioStoryboardEditor({
     const revisionChanged = Boolean(nextRevision) && previousRevision !== nextRevision;
     const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
     const hasSelectedScene = normalizedScenes.some((scene) => String(scene?.sceneId || "").trim() === String(activeSelectionId || "").trim());
+    const isBgAudioSelectedNow = activeSelectionType === "bg_audio";
     if (revisionChanged) {
-      if (hasSelectedScene) {
+      if (isBgAudioSelectedNow && hasBgAudioAvailable) {
+        setActiveSelectionType("bg_audio");
+        setActiveSelectionId(BG_AUDIO_ITEM_ID);
+      } else if (hasSelectedScene) {
         setActiveSelectionType("scene");
       } else if (firstSceneId) {
         setActiveSelectionType("scene");
@@ -196,23 +209,30 @@ export default function ScenarioStoryboardEditor({
       usingNewPackage: revisionChanged,
       scenesCount: normalizedScenes.length,
       preservedSelectedScene: hasSelectedScene,
+      selectionType: activeSelectionType,
+      selectionId: activeSelectionId,
+      isBgAudioSelected: isBgAudioSelectedNow,
     });
-  }, [activeSelectionId, normalizedScenes, open, storyboardRevision]);
+  }, [activeSelectionId, activeSelectionType, hasBgAudioAvailable, normalizedScenes, open, storyboardRevision]);
 
   useEffect(() => {
     if (!open) return;
     const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
-    if (Array.isArray(normalizedScenes) && normalizedScenes.length === 1 && firstSceneId && activeSelectionId !== firstSceneId) {
+    const isBgAudioSelectedNow = activeSelectionType === "bg_audio";
+    if (isBgAudioSelectedNow && hasBgAudioAvailable) {
+      return;
+    }
+    const hasSelectedScene = Array.isArray(normalizedScenes) && normalizedScenes.some((scene) => String(scene?.sceneId || "") === activeSelectionId);
+    if (!hasSelectedScene && !isBgAudioSelectedNow && firstSceneId) {
       setActiveSelectionType("scene");
       setActiveSelectionId(firstSceneId);
       return;
     }
-    const hasSelectedScene = Array.isArray(normalizedScenes) && normalizedScenes.some((scene) => String(scene?.sceneId || "") === activeSelectionId);
-    if (!hasSelectedScene && firstSceneId) {
-      setActiveSelectionType("scene");
-      setActiveSelectionId(firstSceneId);
+    if (!hasSelectedScene && !firstSceneId) {
+      setActiveSelectionType("bg_audio");
+      setActiveSelectionId(BG_AUDIO_ITEM_ID);
     }
-  }, [activeSelectionId, normalizedScenes, open]);
+  }, [activeSelectionId, activeSelectionType, hasBgAudioAvailable, normalizedScenes, open]);
 
   useEffect(() => {
     if (!open || !infoModalOpen) return undefined;
@@ -261,22 +281,23 @@ export default function ScenarioStoryboardEditor({
     masterAudioRef.current.play().catch(() => {});
   };
 
-  const resolveExtractedAudioStatus = (scene) => {
-    const rawStatus = String(scene?.extractedAudioStatus || "").trim().toLowerCase();
+  const resolveSceneAudioSliceStatus = (scene) => {
+    const rawStatus = String(scene?.audioSliceStatus || scene?.extractedAudioStatus || "").trim().toLowerCase();
+    if (["loading", "queued", "running"].includes(rawStatus)) return "extracting";
     if (["not_extracted", "extracting", "ready", "error"].includes(rawStatus)) return rawStatus;
-    if (String(scene?.extractedAudioUrl || "").trim()) return "ready";
+    if (String(scene?.audioSliceUrl || scene?.extractedAudioUrl || "").trim()) return "ready";
     return "not_extracted";
   };
 
   const resolveAudioHeaderBadge = (scene) => {
-    const status = resolveExtractedAudioStatus(scene);
+    const status = resolveSceneAudioSliceStatus(scene);
     if (status === "ready") return "ready";
     if (status === "extracting") return "audio attached";
     return "not extracted";
   };
 
   const resolveExtractedAudioStatusTone = (scene) => {
-    const status = resolveExtractedAudioStatus(scene);
+    const status = resolveSceneAudioSliceStatus(scene);
     if (status === "ready") return "done";
     if (status === "extracting") return "loading";
     if (status === "error") return "error";
@@ -290,35 +311,42 @@ export default function ScenarioStoryboardEditor({
     const endSec = Number(scene?.audioSliceEndSec ?? scene?.t1 ?? startSec);
     const durationSec = Math.max(0, endSec - startSec);
     onUpdateScene?.(nodeId, sceneId, {
-      extractedAudioStatus: "extracting",
-      extractedAudioDurationSec: durationSec,
-      extractedAudioError: "",
+      audioSliceStatus: "loading",
+      audioSliceDurationSec: durationSec,
+      audioSliceExpectedDurationSec: durationSec,
+      audioSliceError: "",
+      audioSliceLoadError: "",
     });
     try {
       const result = await onExtractSceneAudio?.(nodeId, sceneId);
-      const extractedAudioUrl = String(
-        result?.extractedAudioUrl
+      const audioSliceUrl = String(
+        result?.audioSliceUrl
+        || result?.extractedAudioUrl
         || scene?.audioSliceUrl
         || safeAudioData?.audioUrl
         || "",
       ).trim();
-      if (!extractedAudioUrl) {
+      if (!audioSliceUrl) {
         onUpdateScene?.(nodeId, sceneId, {
-          extractedAudioStatus: "error",
-          extractedAudioError: "Не найден источник для audio slice",
+          audioSliceStatus: "error",
+          audioSliceError: "Не найден источник для audio slice",
+          audioSliceLoadError: "Не найден источник для audio slice",
         });
         return;
       }
       onUpdateScene?.(nodeId, sceneId, {
-        extractedAudioUrl,
-        extractedAudioStatus: "ready",
-        extractedAudioDurationSec: Number(result?.extractedAudioDurationSec ?? durationSec),
-        extractedAudioError: "",
+        audioSliceUrl,
+        audioSliceStatus: "ready",
+        audioSliceDurationSec: Number(result?.audioSliceDurationSec ?? result?.extractedAudioDurationSec ?? durationSec),
+        audioSliceExpectedDurationSec: durationSec,
+        audioSliceError: "",
+        audioSliceLoadError: "",
       });
     } catch (error) {
       onUpdateScene?.(nodeId, sceneId, {
-        extractedAudioStatus: "error",
-        extractedAudioError: String(error?.message || "Не удалось изъять аудио"),
+        audioSliceStatus: "error",
+        audioSliceError: String(error?.message || "Не удалось изъять аудио"),
+        audioSliceLoadError: String(error?.message || "Не удалось изъять аудио"),
       });
     }
   };
@@ -340,17 +368,19 @@ export default function ScenarioStoryboardEditor({
   const sourceImageUrl = String(selectedScene?.imageUrl || "").trim();
   const startFrameSourceUrl = String(selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl || "").trim();
   const endFrameSourceUrl = String(selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl || "").trim();
-  const sourceFrameFirstUrl = String(
-    selectedScene?.startFrameImageUrl
-    || selectedScene?.startImageUrl
-    || selectedScene?.imageUrl
-    || selectedScene?.imagePreviewUrl
-    || "",
-  ).trim();
-  const sourceFrameLastUrl = String(selectedScene?.endImageUrl || selectedScene?.endFrameImageUrl || "").trim();
-  const sourceFrameLastPlaceholder = isFirstLastVideoMode ? "Последний кадр не создан" : "Последний кадр не требуется";
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);
+  const sceneAudioSliceUrl = String(selectedScene?.audioSliceUrl || selectedScene?.extractedAudioUrl || "").trim();
+  const sceneAudioSliceStatus = resolveSceneAudioSliceStatus(selectedScene);
+  const sceneAudioDurationSec = Number(
+    selectedScene?.audioSliceDurationSec
+    ?? selectedScene?.audioSliceActualDurationSec
+    ?? selectedScene?.audioSliceExpectedDurationSec
+    ?? selectedScene?.extractedAudioDurationSec
+    ?? Math.max(0, Number(selectedScene?.audioSliceEndSec ?? selectedScene?.t1 ?? 0) - Number(selectedScene?.audioSliceStartSec ?? selectedScene?.t0 ?? 0))
+  );
+  const sceneLipSync = Boolean(selectedScene?.lipSync);
+  const lipSyncAudioMissing = sceneLipSync && !sceneAudioSliceUrl;
   const bgMusicSource = resolveMusicSource(safeAudioData);
   const musicPromptSourceKind = String(safeAudioData?.musicPromptSourceKind || "").trim().toLowerCase() || "empty";
   const realMusicPromptText = String(
@@ -388,13 +418,16 @@ export default function ScenarioStoryboardEditor({
       : "music prompt not provided";
 
   useEffect(() => {
-    if (!CLIP_TRACE_SCENARIO_GLOBAL_MUSIC) return;
-    console.debug("[SCENARIO STORYBOARD MUSIC]", {
-      packageHasGlobalMusicPrompt: !!String(safeAudioData?.packageGlobalMusicPrompt || "").trim(),
-      audioDataHasGlobalMusicPrompt: !!String(safeAudioData?.globalMusicPrompt || "").trim(),
-      editorPromptVisible,
+    console.debug("[SCENARIO EDITOR DEBUG]", {
+      selectionType: activeSelectionType,
+      selectionId: activeSelectionId,
+      isBgAudioSelected,
+      selectedSceneId,
+      sceneNeedsTwoFrames,
+      lipSync: sceneLipSync,
+      audioSlicePresent: Boolean(sceneAudioSliceUrl),
     });
-  }, [safeAudioData?.packageGlobalMusicPrompt, safeAudioData?.globalMusicPrompt, editorPromptVisible]);
+  }, [activeSelectionId, activeSelectionType, isBgAudioSelected, sceneAudioSliceUrl, sceneLipSync, sceneNeedsTwoFrames, selectedSceneId]);
 
   const handleUploadBgMusicClick = () => {
     bgMusicUploadRef.current?.click();
@@ -916,88 +949,53 @@ export default function ScenarioStoryboardEditor({
                       </div>
                     </>
                   ) : (
-                    <>
-                      <div className="clipSB_scenarioEditorImageSubBlock">
-                        <div className="clipSB_scenarioEditorBlockHead">
-                          <h4>ПЕРВЫЙ КАДР</h4>
-                          <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${startFrameStatus}`}>{startFrameStatus}</span>
-                        </div>
-                        <div className="clipSB_scenarioEditorImageBody">
-                          <div className="clipSB_scenarioEditorImageLeft">
-                            <textarea
-                              className="clipSB_textarea"
-                              rows={3}
-                              value={String(selectedScene?.startFramePromptRu || "")}
-                              onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptRu: event.target.value })}
-                              placeholder="startFramePromptRu"
-                            />
-                            <details>
-                              <summary>EN</summary>
-                              <textarea
-                                className="clipSB_textarea"
-                                rows={2}
-                                value={String(selectedScene?.startFramePromptEn || "")}
-                                onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptEn: event.target.value })}
-                                placeholder="startFramePromptEn"
-                              />
-                            </details>
+                    <div className="clipSB_scenarioEditorImageSubBlock clipSB_scenarioEditorFrameBlock">
+                      <div className="clipSB_scenarioEditorBlockHead">
+                        <h4>КАДРЫ СЦЕНЫ</h4>
+                      </div>
+                      <div className="clipSB_scenarioEditorFrameCards">
+                        <div className="clipSB_scenarioEditorFrameCard">
+                          <div className="clipSB_scenarioEditorBlockHead">
+                            <h5>ПЕРВЫЙ КАДР</h5>
+                            <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${startFrameStatus}`}>{startFrameStatus}</span>
                           </div>
-                          <div className="clipSB_scenarioEditorImageRight">
+                          <textarea className="clipSB_textarea" rows={3} value={String(selectedScene?.startFramePromptRu || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptRu: event.target.value })} placeholder="startFramePromptRu" />
+                          <details>
+                            <summary>EN</summary>
+                            <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.startFramePromptEn || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { startFramePromptEn: event.target.value })} placeholder="startFramePromptEn" />
+                          </details>
+                          <div className="clipSB_scenarioEditorFramePreviewWrap">
                             {selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl ? (
-                              <img
-                                className="clipSB_scenarioEditorImagePreview"
-                                src={selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl}
-                                alt={`scene-${selectedSceneId}-start-frame`}
-                              />
+                              <img className="clipSB_scenarioEditorImagePreview" src={selectedScene?.startFrameImageUrl || selectedScene?.startFramePreviewUrl || selectedScene?.imageUrl} alt={`scene-${selectedSceneId}-start-frame`} />
                             ) : <div className="clipSB_hint">preview первого кадра отсутствует</div>}
                           </div>
-                        </div>
-                        <div className="clipSB_scenarioEditorBtnRow">
-                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame", generateMeta)} disabled={startFrameStatus === "loading"}>Создать изображение</button>
-                          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
-                        </div>
-                      </div>
-                      <div className="clipSB_scenarioEditorImageSubBlock">
-                        <div className="clipSB_scenarioEditorBlockHead">
-                          <h4>ПОСЛЕДНИЙ КАДР</h4>
-                          <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${endFrameStatus}`}>{endFrameStatus}</span>
-                        </div>
-                        <div className="clipSB_scenarioEditorImageBody">
-                          <div className="clipSB_scenarioEditorImageLeft">
-                            <textarea
-                              className="clipSB_textarea"
-                              rows={3}
-                              value={String(selectedScene?.endFramePromptRu || "")}
-                              onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptRu: event.target.value })}
-                              placeholder="endFramePromptRu"
-                            />
-                            <details>
-                              <summary>EN</summary>
-                              <textarea
-                                className="clipSB_textarea"
-                                rows={2}
-                                value={String(selectedScene?.endFramePromptEn || "")}
-                                onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptEn: event.target.value })}
-                                placeholder="endFramePromptEn"
-                              />
-                            </details>
+                          <div className="clipSB_scenarioEditorBtnRow">
+                            <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame", generateMeta)} disabled={startFrameStatus === "loading"}>Создать изображение</button>
+                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
                           </div>
-                          <div className="clipSB_scenarioEditorImageRight">
+                        </div>
+                        <div className="clipSB_scenarioEditorFrameCard">
+                          <div className="clipSB_scenarioEditorBlockHead">
+                            <h5>ПОСЛЕДНИЙ КАДР</h5>
+                            <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${endFrameStatus}`}>{endFrameStatus}</span>
+                          </div>
+                          <textarea className="clipSB_textarea" rows={3} value={String(selectedScene?.endFramePromptRu || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptRu: event.target.value })} placeholder="endFramePromptRu" />
+                          <details>
+                            <summary>EN</summary>
+                            <textarea className="clipSB_textarea" rows={2} value={String(selectedScene?.endFramePromptEn || "")} onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { endFramePromptEn: event.target.value })} placeholder="endFramePromptEn" />
+                          </details>
+                          <div className="clipSB_scenarioEditorFramePreviewWrap">
                             {selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl ? (
-                              <img
-                                className="clipSB_scenarioEditorImagePreview"
-                                src={selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl}
-                                alt={`scene-${selectedSceneId}-end-frame`}
-                              />
-                            ) : <div className="clipSB_hint">preview последнего кадра отсутствует</div>}
+                              <img className="clipSB_scenarioEditorImagePreview" src={selectedScene?.endFrameImageUrl || selectedScene?.endFramePreviewUrl} alt={`scene-${selectedSceneId}-end-frame`} />
+                            ) : <div className="clipSB_hint">{isFirstLastVideoMode ? "Последний кадр отсутствует" : "Последний кадр не требуется"}</div>}
+                          </div>
+                          <div className="clipSB_scenarioEditorBtnRow">
+                            <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame", generateMeta)} disabled={endFrameStatus === "loading" || !isFirstLastVideoMode}>Создать изображение</button>
+                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })} disabled={!isFirstLastVideoMode}>Удалить</button>
                           </div>
                         </div>
-                        <div className="clipSB_scenarioEditorBtnRow">
-                          <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame", generateMeta)} disabled={endFrameStatus === "loading"}>Создать изображение</button>
-                          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })}>Удалить</button>
-                        </div>
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
 
@@ -1042,25 +1040,25 @@ export default function ScenarioStoryboardEditor({
                             className="clipSB_btn"
                             type="button"
                             onClick={() => handleExtractSceneAudio(selectedScene)}
-                            disabled={resolveExtractedAudioStatus(selectedScene) === "extracting"}
+                            disabled={resolveSceneAudioSliceStatus(selectedScene) === "extracting"}
                           >
-                            {resolveExtractedAudioStatus(selectedScene) === "extracting" ? "Извлекаем..." : "Изъять аудио"}
+                            {resolveSceneAudioSliceStatus(selectedScene) === "extracting" ? "Извлекаем..." : "Изъять аудио"}
                           </button>
                         </div>
-                        {resolveExtractedAudioStatus(selectedScene) === "ready" && selectedScene?.extractedAudioUrl ? (
+                        {sceneAudioSliceStatus === "ready" && sceneAudioSliceUrl ? (
                           <div className="clipSB_sceneAudioReadyBox">
-                            <audio controls className="clipSB_audioPlayer" src={selectedScene.extractedAudioUrl} />
+                            <audio controls className="clipSB_audioPlayer" src={sceneAudioSliceUrl} />
                             <div className="clipSB_sceneAudioReadyMeta">
-                              <span className="clipSB_tag clipSB_tagStatus clipSB_tagStatus--done">extracted / ready</span>
-                              <span className="clipSB_small">Длительность: {fmtSec(selectedScene?.extractedAudioDurationSec ?? Math.max(0, Number(selectedScene.audioSliceEndSec ?? selectedScene?.t1 ?? 0) - Number(selectedScene.audioSliceStartSec ?? selectedScene?.t0 ?? 0)))} c</span>
+                              <span className="clipSB_tag clipSB_tagStatus clipSB_tagStatus--done">audioSlice / ready</span>
+                              <span className="clipSB_small">Длительность: {fmtSec(sceneAudioDurationSec)} c</span>
                             </div>
                             <div className="clipSB_sceneAudioLipSyncReady">Готово для lip-sync и sound-enabled scene.</div>
                           </div>
                         ) : (
                           <div className="clipSB_sceneAudioPlaceholder">Аудио-кусок сцены ещё не подготовлен</div>
                         )}
-                        {resolveExtractedAudioStatus(selectedScene) === "error" ? (
-                          <div className="clipSB_hint" style={{ color: "#ff8a8a" }}>{String(selectedScene?.extractedAudioError || "Ошибка извлечения аудио")}</div>
+                        {sceneAudioSliceStatus === "error" ? (
+                          <div className="clipSB_hint" style={{ color: "#ff8a8a" }}>{String(selectedScene?.audioSliceError || selectedScene?.extractedAudioError || "Ошибка извлечения аудио")}</div>
                         ) : null}
                       </div>
                     </div>
@@ -1091,39 +1089,38 @@ export default function ScenarioStoryboardEditor({
                           placeholder="videoPromptEn"
                         />
                       </details>
-                      <div className="clipSB_sourceFramesBlock">
-                        <div className="clipSB_brainLabel">source кадры</div>
-                        <div className="clipSB_sourceFramesGrid">
-                          <div className="clipSB_sourceFrameTile">
-                            <div className="clipSB_sourceFrameTileLabel">Первый кадр</div>
-                            {sourceFrameFirstUrl ? (
-                              <img
-                                className="clipSB_sourceFramePreview"
-                                src={sourceFrameFirstUrl}
-                                alt={`scene-${selectedSceneId}-source-first-frame`}
-                              />
-                            ) : (
-                              <div className="clipSB_sourceFramePlaceholder">Первый кадр не создан</div>
-                            )}
-                          </div>
-                          <div className="clipSB_sourceFrameTile">
-                            <div className="clipSB_sourceFrameTileLabel">Последний кадр</div>
-                            {sourceFrameLastUrl ? (
-                              <img
-                                className="clipSB_sourceFramePreview"
-                                src={sourceFrameLastUrl}
-                                alt={`scene-${selectedSceneId}-source-last-frame`}
-                              />
-                            ) : (
-                              <div className="clipSB_sourceFramePlaceholder">{sourceFrameLastPlaceholder}</div>
-                            )}
-                          </div>
-                        </div>
+                      <div className="clipSB_sceneVideoMeta">
+                        <div className="clipSB_storyboardKv"><span>renderMode</span><strong>{selectedScene?.renderMode || "—"}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>workflow</span><strong>{selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "—"}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>lipSync</span><strong>{sceneLipSync ? "да" : "нет"}</strong></div>
+                        <div className="clipSB_storyboardKv"><span>audioSlice</span><strong>{sceneAudioSliceUrl ? "present" : "missing"}</strong></div>
+                        {sceneLipSync ? <div className="clipSB_hint clipSB_sceneVideoAudioHint">{sceneAudioSliceUrl ? "Этот audioSlice будет отправлен в video generation." : "Для lipSync сначала подготовьте audioSlice в блоке AUDIO (СЦЕНА)."}</div> : null}
+                        {sceneAudioSliceUrl ? <audio controls className="clipSB_audioPlayer" src={sceneAudioSliceUrl} /> : null}
                       </div>
                       <div className="clipSB_scenarioEditorBtnRow">
-                        <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "video")} disabled={videoStatus === "loading"}>Создать видео</button>
+                        <button
+                          className="clipSB_btn"
+                          type="button"
+                          onClick={() => {
+                            console.debug("[SCENARIO EDITOR VIDEO SEND]", {
+                              videoSendRouteTriggered: true,
+                              selectedSceneId,
+                              lipSync: sceneLipSync,
+                              audioSlicePresent: Boolean(sceneAudioSliceUrl),
+                              renderMode: String(selectedScene?.renderMode || ""),
+                              workflow: String(selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || ""),
+                            });
+                            if (lipSyncAudioMissing) return;
+                            onGenerateScene?.(nodeId, selectedSceneId, "video", generateMeta);
+                          }}
+                          disabled={videoStatus === "loading" || lipSyncAudioMissing}
+                          title={lipSyncAudioMissing ? "Для lipSync нужен audioSlice" : ""}
+                        >
+                          Создать видео
+                        </button>
                         <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { videoUrl: "", videoStatus: "idle", videoError: "", videoJobId: "" })}>Удалить</button>
                       </div>
+                      {lipSyncAudioMissing ? <div className="clipSB_hint" style={{ color: "#ffb066" }}>Для lipSync сцены отсутствует audioSliceUrl — сначала нажмите «Изъять аудио».</div> : null}
                     </div>
                     <div className="clipSB_scenarioEditorVideoRight clipSB_scenarioEditorVideoPreviewCol">
                       <div className={`clipSB_scenarioEditorImagePreviewWrap clipSB_scenarioEditorVideoPreviewBox${hasSceneVideo || isFirstLastVideoMode ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
