@@ -7557,7 +7557,9 @@ const comfyShowVideoSection = Boolean(
             videoStatus: "not_found",
             videoError: String(out?.hint || out?.code || "video_job_not_found"),
             videoJobId: toleratedMeta.jobId,
+            videoPanelActivated: false,
           });
+          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -7585,7 +7587,9 @@ const comfyShowVideoSection = Boolean(
             videoStatus: "not_found",
             videoJobId: toleratedMeta.jobId,
             videoError: String(out?.error || out?.hint || "video_job_not_found"),
+            videoPanelActivated: false,
           });
+          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -7643,7 +7647,9 @@ const comfyShowVideoSection = Boolean(
               videoStatus: "done",
               videoError: "",
               videoJobId: settledMeta.jobId,
+              videoPanelActivated: false,
             });
+            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
             console.info("[CLIP TRACE] scene updated after done", {
               scope: "scenario",
               sceneId,
@@ -7658,6 +7664,10 @@ const comfyShowVideoSection = Boolean(
         }
 
         if (status === "error" || status === "stopped" || status === "not_found") {
+          if (idx >= 0) {
+            updateScenarioScene(idx, { videoPanelActivated: false });
+            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status, videoPanelActivatedAfterApply: false });
+          }
           clearActiveVideoJob(sceneId, { status, jobId: settledMeta.jobId });
           return;
         }
@@ -7685,7 +7695,9 @@ const comfyShowVideoSection = Boolean(
             videoStatus: "not_found",
             videoError: String(e?.message || e),
             videoJobId: String(toleratedMeta?.jobId || ""),
+            videoPanelActivated: false,
           });
+          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -9410,14 +9422,18 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           hasCharacter2InSceneActiveRoles: Array.isArray(derivedRoleContract?.sceneActiveRoles) && derivedRoleContract.sceneActiveRoles.includes("character_2"),
         });
       }
-      const firstFrameReferenceUrlForEnd = applyFirstLastContinuityContract
+      const currentSceneForEndReference = applyFirstLastContinuityContract
+        ? (resolveScenarioLiveBinding(sceneId, { nodeId: targetNodeId })?.scene || targetScene)
+        : targetScene;
+      const currentSceneStartImageUrl = applyFirstLastContinuityContract
         ? String(
-          targetScene?.startImageUrl
-          || targetScene?.startFrameImageUrl
-          || targetScene?.imageUrl
+          currentSceneForEndReference?.startImageUrl
+          || currentSceneForEndReference?.startFrameImageUrl
+          || currentSceneForEndReference?.imageUrl
           || ""
         ).trim()
         : "";
+      const firstFrameReferenceUrlForEnd = currentSceneStartImageUrl;
       const refsForImageRequest = normalizeClipImageRefsPayload({
         ...scenarioBrainRefs,
         refsByRole: refsByRoleForImage,
@@ -9434,8 +9450,20 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         previousContinuityMemory,
         previousSceneImageUrl,
         firstFrameReferenceUrl: firstFrameReferenceUrlForEnd,
-        currentSceneStartImageUrl: firstFrameReferenceUrlForEnd,
+        currentSceneStartImageUrl,
       });
+      if (applyFirstLastContinuityContract) {
+        console.info("[FIRST_LAST END REQUEST SOURCE]", {
+          sceneId,
+          slot: normalizedSlot,
+          startImageUrl: String(currentSceneForEndReference?.startImageUrl || "").trim(),
+          startFrameImageUrl: String(currentSceneForEndReference?.startFrameImageUrl || "").trim(),
+          fallbackImageUrl: String(currentSceneForEndReference?.imageUrl || "").trim(),
+          firstFrameReferenceUrlForEnd,
+          currentSceneStartImageUrl,
+          willAttachFirstFrameReference: Boolean(firstFrameReferenceUrlForEnd),
+        });
+      }
       if (applyFirstLastContinuityContract) {
         console.info("[FIRST_LAST CONSISTENCY CONTRACT]", {
           sceneId,
@@ -10561,12 +10589,15 @@ Aspect ratio: ${imageFormat}`,
         videoStatus: "done",
         videoError: "",
         videoJobId: "",
+        videoPanelActivated: false,
       });
+      console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
       openNextSceneWithoutVideo(targetSceneIndex);
     } catch (e) {
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
-      updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e) });
+      updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: false });
+      console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: false });
     }
   }, [openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 

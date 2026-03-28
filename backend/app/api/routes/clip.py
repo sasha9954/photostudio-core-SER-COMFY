@@ -3818,6 +3818,26 @@ def _load_reference_image_inline(url: str) -> dict | None:
         return None
 
 
+def _probe_reference_image_inline_failure(url: str) -> str:
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        return "empty_url"
+    try:
+        r = requests.get(clean_url, timeout=10)
+    except Exception as exc:
+        return f"request_exception:{exc.__class__.__name__}"
+    if r.status_code >= 400:
+        return f"http_status_{r.status_code}"
+    raw = r.content
+    if not raw:
+        return "empty_body"
+    try:
+        _guess_image_mime(clean_url, dict(r.headers), raw)
+    except Exception as exc:
+        return f"mime_detect_failed:{exc.__class__.__name__}"
+    return "unknown_inline_load_failure"
+
+
 class RefUrlItem(BaseModel):
     url: str
 
@@ -8076,6 +8096,22 @@ def clip_image(payload: ClipImageIn):
         or ""
     ).strip()
     first_frame_reference_inline = _load_reference_image_inline(first_frame_reference_url) if first_frame_reference_url else None
+    first_frame_reference_load_failure = ""
+    if first_frame_reference_url and not first_frame_reference_inline:
+        first_frame_reference_load_failure = _probe_reference_image_inline_failure(first_frame_reference_url)
+        logger.warning(
+            "[FIRST_LAST END REFERENCE LOAD FAILED] sceneId=%s firstFrameReferenceUrl=%s reason=%s",
+            scene_id,
+            first_frame_reference_url,
+            first_frame_reference_load_failure,
+        )
+    print("[FIRST_LAST END REFERENCE LOAD] " + json.dumps({
+        "sceneId": scene_id,
+        "firstFrameReferenceUrl": first_frame_reference_url,
+        "firstFrameReferencePresent": bool(first_frame_reference_url),
+        "firstFrameReferenceInlineLoaded": bool(first_frame_reference_inline),
+        "loadFailureReason": first_frame_reference_load_failure or "",
+    }, ensure_ascii=False))
     first_last_quality_contract = (
         "FIRST FRAME IS THE SOURCE OF TRUTH FOR CURRENT SCENE CONTINUITY.\n"
         "Do not redesign wardrobe, hair, location, or subject scale.\n"
@@ -8815,6 +8851,15 @@ def clip_image(payload: ClipImageIn):
             "sameIdentityLock": bool(first_frame_reference_inline),
             "sameCameraFamilyLock": bool(first_frame_reference_inline),
             "continuityContractInjected": continuity_contract_injected,
+        }, ensure_ascii=False))
+        print("[FIRST_LAST END QUALITY SUMMARY] " + json.dumps({
+            "sceneId": scene_id,
+            "hasFirstFrameReference": bool(first_frame_reference_inline),
+            "continuityContractInjected": continuity_contract_injected,
+            "firstFrameReferenceUrl": first_frame_reference_url,
+            "primaryRole": scene_primary_role,
+            "sceneActiveRoles": scene_active_roles,
+            "mustAppear": must_appear_roles,
         }, ensure_ascii=False))
         refs_debug["comfyAssemblyDebug"] = comfy_assembly_debug
         print("[COMFY IMAGE ASSEMBLY]", json.dumps(comfy_assembly_debug, ensure_ascii=False))
