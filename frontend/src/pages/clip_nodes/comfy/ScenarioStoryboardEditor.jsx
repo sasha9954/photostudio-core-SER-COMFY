@@ -118,6 +118,16 @@ function toPrintable(value) {
   return text || "—";
 }
 
+function resolveSceneId(scene = {}, idx = 0) {
+  const direct = String(scene?.sceneId || "").trim();
+  if (direct) return direct;
+  const snakeCase = String(scene?.scene_id || "").trim();
+  if (snakeCase) return snakeCase;
+  const legacy = String(scene?.id || "").trim();
+  if (legacy) return legacy;
+  return `S${idx + 1}`;
+}
+
 export default function ScenarioStoryboardEditor({
   open,
   nodeId,
@@ -142,9 +152,17 @@ export default function ScenarioStoryboardEditor({
   const prevStoryboardRevisionRef = useRef("");
   const stopNodeDragEvent = (event) => event.stopPropagation();
 
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+  const normalizedScenes = useMemo(
+    () => safeScenes.map((scene, idx) => ({ ...(scene || {}), sceneId: resolveSceneId(scene, idx) })),
+    [safeScenes]
+  );
+  const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
+  const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
+
   useEffect(() => {
     if (!open) return;
-    const firstSceneId = String(scenes?.[0]?.sceneId || "").trim();
+    const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
     if (firstSceneId) {
       setActiveSelectionType("scene");
       setActiveSelectionId(firstSceneId);
@@ -152,17 +170,19 @@ export default function ScenarioStoryboardEditor({
       setActiveSelectionType("bg_audio");
       setActiveSelectionId(BG_AUDIO_ITEM_ID);
     }
-  }, [open, nodeId]);
+  }, [nodeId, normalizedScenes, open]);
 
   useEffect(() => {
     if (!open) return;
     const previousRevision = String(prevStoryboardRevisionRef.current || "");
     const nextRevision = String(storyboardRevision || "");
     const revisionChanged = Boolean(nextRevision) && previousRevision !== nextRevision;
-    const safeScenes = Array.isArray(scenes) ? scenes : [];
-    const firstSceneId = String(safeScenes?.[0]?.sceneId || "").trim();
+    const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
+    const hasSelectedScene = normalizedScenes.some((scene) => String(scene?.sceneId || "").trim() === String(activeSelectionId || "").trim());
     if (revisionChanged) {
-      if (firstSceneId) {
+      if (hasSelectedScene) {
+        setActiveSelectionType("scene");
+      } else if (firstSceneId) {
         setActiveSelectionType("scene");
         setActiveSelectionId(firstSceneId);
       } else {
@@ -174,24 +194,25 @@ export default function ScenarioStoryboardEditor({
     console.debug("[SCENARIO EDITOR SYNC]", {
       revisionChanged,
       usingNewPackage: revisionChanged,
-      scenesCount: safeScenes.length,
+      scenesCount: normalizedScenes.length,
+      preservedSelectedScene: hasSelectedScene,
     });
-  }, [open, scenes, storyboardRevision]);
+  }, [activeSelectionId, normalizedScenes, open, storyboardRevision]);
 
   useEffect(() => {
     if (!open) return;
-    const firstSceneId = String(scenes?.[0]?.sceneId || "").trim();
-    if (Array.isArray(scenes) && scenes.length === 1 && firstSceneId && activeSelectionId !== firstSceneId) {
+    const firstSceneId = String(normalizedScenes?.[0]?.sceneId || "").trim();
+    if (Array.isArray(normalizedScenes) && normalizedScenes.length === 1 && firstSceneId && activeSelectionId !== firstSceneId) {
       setActiveSelectionType("scene");
       setActiveSelectionId(firstSceneId);
       return;
     }
-    const hasSelectedScene = Array.isArray(scenes) && scenes.some((scene, idx) => String(scene?.sceneId || `S${idx + 1}`) === activeSelectionId);
+    const hasSelectedScene = Array.isArray(normalizedScenes) && normalizedScenes.some((scene) => String(scene?.sceneId || "") === activeSelectionId);
     if (!hasSelectedScene && firstSceneId) {
       setActiveSelectionType("scene");
       setActiveSelectionId(firstSceneId);
     }
-  }, [activeSelectionId, open, scenes]);
+  }, [activeSelectionId, normalizedScenes, open]);
 
   useEffect(() => {
     if (!open || !infoModalOpen) return undefined;
@@ -202,27 +223,23 @@ export default function ScenarioStoryboardEditor({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, infoModalOpen]);
 
-  const safeScenes = Array.isArray(scenes) ? scenes : [];
-  const safeGeneration = sceneGeneration && typeof sceneGeneration === "object" ? sceneGeneration : {};
-  const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
-
   const phrases = useMemo(() => {
     if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) return safeAudioData.phrases;
-    return safeScenes.map((scene, idx) => ({
-      sceneId: String(scene?.sceneId || `S${idx + 1}`),
+    return normalizedScenes.map((scene, idx) => ({
+      sceneId: String(scene?.sceneId || resolveSceneId(scene, idx)),
       startSec: Number(scene?.audioSliceStartSec ?? scene?.t0 ?? 0),
       endSec: Number(scene?.audioSliceEndSec ?? scene?.t1 ?? scene?.t0 ?? 0),
       text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
       energy: String(scene?.emotionRu || "").trim(),
       context: String(scene?.locationRu || "").trim(),
     }));
-  }, [safeAudioData?.phrases, safeScenes]);
+  }, [normalizedScenes, safeAudioData?.phrases]);
 
-  const safeIndex = safeScenes.findIndex((scene, idx) => String(scene?.sceneId || `S${idx + 1}`) === activeSelectionId);
-  const selectedScene = safeIndex >= 0 ? safeScenes[safeIndex] : null;
+  const safeIndex = normalizedScenes.findIndex((scene) => String(scene?.sceneId || "") === activeSelectionId);
+  const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
   const selectedSceneId = String(selectedScene?.sceneId || "").trim();
   const selectedRuntime = safeGeneration[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object" ? safeGeneration[selectedSceneId] : {};
-  const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || safeScenes[idx]?.sceneId || "").trim();
+  const resolvePhraseSceneId = (phrase, idx) => String(phrase?.sceneId || normalizedScenes[idx]?.sceneId || "").trim();
   const selectedPhraseIndex = phrases.findIndex((phrase, idx) => resolvePhraseSceneId(phrase, idx) === selectedSceneId);
   const generateMeta = {
     activeTab,
@@ -451,9 +468,9 @@ export default function ScenarioStoryboardEditor({
     ].join("\n");
   };
 
-  const formatAllScenesForCopy = () => safeScenes.map((scene, idx) => formatSceneForCopy(scene, idx)).join("\n\n");
+  const formatAllScenesForCopy = () => normalizedScenes.map((scene, idx) => formatSceneForCopy(scene, idx)).join("\n\n");
 
-  const formatPromptsForCopy = () => safeScenes.map((scene, idx) => {
+  const formatPromptsForCopy = () => normalizedScenes.map((scene, idx) => {
     const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
     return [
       `SCENE ${sceneId}`,
@@ -463,7 +480,7 @@ export default function ScenarioStoryboardEditor({
   }).join("\n\n");
 
   const formatRawForCopy = () => JSON.stringify({
-    scenes: safeScenes,
+    scenes: normalizedScenes,
     selectedSceneId,
     selectedSceneRuntime: selectedRuntime,
     audioData: safeAudioData,
@@ -486,7 +503,7 @@ export default function ScenarioStoryboardEditor({
               type="button"
               onMouseDown={stopNodeDragEvent}
               onPointerDown={stopNodeDragEvent}
-              onClick={() => copyTextToClipboard(formatSceneForCopy(selectedScene || safeScenes[0] || {}, safeIndex >= 0 ? safeIndex : 0))}
+              onClick={() => copyTextToClipboard(formatSceneForCopy(selectedScene || normalizedScenes[0] || {}, safeIndex >= 0 ? safeIndex : 0))}
             >
               Копировать сцену
             </button>
@@ -494,8 +511,8 @@ export default function ScenarioStoryboardEditor({
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={handleCopyRawJson}>Копировать raw JSON</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onMouseDown={stopNodeDragEvent} onPointerDown={stopNodeDragEvent} onClick={() => copyTextToClipboard(formatPromptsForCopy())}>Копировать prompts</button>
           </div>
-          <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{safeScenes.length}</strong></div>
-          {safeScenes.map((scene, idx) => {
+          <div className="clipSB_storyboardKv"><span>Сцен</span><strong>{normalizedScenes.length}</strong></div>
+          {normalizedScenes.map((scene, idx) => {
             const sceneId = String(scene?.sceneId || `S${idx + 1}`);
             return (
               <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
@@ -640,7 +657,7 @@ export default function ScenarioStoryboardEditor({
         <div className="clipSB_scenarioHeader">
           <div>
             <div className="clipSB_scenarioTitle">Scenario Storyboard Editor</div>
-            <div className="clipSB_scenarioMeta">Сцен: {safeScenes.length}</div>
+            <div className="clipSB_scenarioMeta">Сцен: {normalizedScenes.length}</div>
           </div>
           <button className="clipSB_iconBtn" onClick={onClose} type="button">×</button>
         </div>
@@ -705,7 +722,7 @@ export default function ScenarioStoryboardEditor({
               <div className="clipSB_small clipSB_scenarioBgAudioMeta">глобальный слой</div>
             </button>
 
-            {safeScenes.map((scene, idx) => {
+            {normalizedScenes.map((scene, idx) => {
               const sceneId = String(scene?.sceneId || `S${idx + 1}`);
               const runtime = safeGeneration[sceneId] && typeof safeGeneration[sceneId] === "object" ? safeGeneration[sceneId] : {};
               const status = resolveBlockStatus({ runtimeStatus: runtime?.status || runtime?.videoStatus || runtime?.imageStatus, assetUrl: scene?.videoUrl || scene?.imageUrl });
