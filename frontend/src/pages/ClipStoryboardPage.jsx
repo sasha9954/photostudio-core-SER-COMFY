@@ -7171,45 +7171,47 @@ const comfyShowVideoSection = Boolean(
     const explicitTargetNodeId = String(options?.nodeId || "").trim();
     const targetNodeId = explicitTargetNodeId || String(scenarioFlowSourceNode?.id || "").trim();
     if (!targetNodeId) return;
-    const idx = typeof sceneRef === "string"
-      ? scenarioScenes.findIndex((scene) => String(scene?.sceneId || "") === String(sceneRef || ""))
-      : sceneRef;
-    if (!Number.isInteger(idx) || idx < 0) return;
-    if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
-      const sceneAtIdx = scenarioScenes[idx] || {};
-      console.debug("[SCENARIO SCENE PATCH TARGET]", {
-        targetNodeId,
-        scenarioFlowSourceNodeId: String(scenarioFlowSourceNode?.id || ""),
-        sceneRef,
-        resolvedIdx: idx,
-        actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
-        patchKeys: Object.keys(patch || {}),
-      });
-    }
     setNodes((prev) => prev.map((n) => {
       if (n.id !== targetNodeId) return n;
       const scenes = Array.isArray(n?.data?.scenes) ? n.data.scenes : [];
-      if (!scenes[idx]) return n;
-      const sceneAtIdx = scenes[idx] || {};
+      const resolvedIdx = typeof sceneRef === "string"
+        ? scenes.findIndex((scene) => String(scene?.sceneId || "") === String(sceneRef || ""))
+        : sceneRef;
+      if (!Number.isInteger(resolvedIdx) || resolvedIdx < 0 || !scenes[resolvedIdx]) return n;
+      const sceneAtIdx = scenes[resolvedIdx] || {};
+      console.debug("[SCENARIO SCENE PATCH TARGET RESOLVED]", {
+        targetNodeId,
+        sceneRef,
+        resolvedIdx,
+        resolvedSceneId: String(sceneAtIdx?.sceneId || ""),
+        patchKeys: Object.keys(patch || {}),
+      });
       if (CLIP_TRACE_SCENARIO_SCENE_ASSETS) {
         console.debug("[SCENARIO SCENE PATCH APPLIED]", {
           targetNodeId,
           sceneRef,
-          resolvedIdx: idx,
+          resolvedIdx,
           actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
           patchKeys: Object.keys(patch || {}),
         });
       }
-      const nextScenes = scenes.map((s, i) => (i === idx ? { ...s, ...patch } : s));
+      const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...patch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
-  }, [scenarioFlowSourceNode?.id, scenarioScenes, setNodes]);
+  }, [scenarioFlowSourceNode?.id, setNodes]);
 
-  const updateScenarioSceneGenerationRuntime = useCallback((sceneIdRaw, patch = {}) => {
+  const updateScenarioSceneGenerationRuntime = useCallback((sceneIdRaw, patch = {}, options = {}) => {
     const sceneId = String(sceneIdRaw || "").trim();
-    if (!scenarioFlowSourceNode?.id || !sceneId || !patch || typeof patch !== "object") return;
+    const targetNodeId = String(options?.nodeId || scenarioFlowSourceNode?.id || "").trim();
+    if (!targetNodeId || !sceneId || !patch || typeof patch !== "object") return;
+    console.debug("[SCENARIO RUNTIME PATCH TARGET]", {
+      targetNodeId,
+      sceneId,
+      patchKeys: Object.keys(patch || {}),
+      hasRuntimePatch: true,
+    });
     setNodes((prev) => prev.map((n) => {
-      if (n.id !== scenarioFlowSourceNode.id) return n;
+      if (n.id !== targetNodeId) return n;
       const currentMap = n?.data?.sceneGeneration && typeof n.data.sceneGeneration === "object" ? n.data.sceneGeneration : {};
       const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
       return {
@@ -9579,7 +9581,7 @@ Aspect ratio: ${imageFormat}`,
           : normalizedSlot === "end"
             ? { endFrameStatus: "idle", endFrameError: "" }
             : { imageStatus: "idle", imageError: "" };
-        updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch);
+        updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
         return;
       }
       let runtimeImagePatch = {};
@@ -9620,7 +9622,7 @@ Aspect ratio: ${imageFormat}`,
         }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
         runtimeImagePatch = { imageStatus: "done", imageError: "" };
       }
-      updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch);
+      updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
       console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
         sceneId,
         slot: normalizedSlot,
@@ -9651,7 +9653,7 @@ Aspect ratio: ${imageFormat}`,
         : normalizedSlot === "end"
           ? { endFrameStatus: "error", endFrameError: imageErrorMessage }
           : { imageStatus: "error", imageError: imageErrorMessage };
-      updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch);
+      updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
       console.debug("[SCENARIO IMAGE STATUS SYNC]", {
         sceneId,
         slot: normalizedSlot,
