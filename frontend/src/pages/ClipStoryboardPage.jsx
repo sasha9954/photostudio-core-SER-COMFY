@@ -1840,6 +1840,10 @@ function buildScenarioScenePackageSignature(scene = {}) {
   return JSON.stringify(signaturePayload);
 }
 
+function buildScenarioSceneStableSignature(scene = {}) {
+  return buildScenarioScenePackageSignature(stripScenarioGeneratedAssets(scene));
+}
+
 function collectSceneVideoStateStats(scenes, prefix = "scene") {
   return normalizeSceneCollectionWithSceneId(scenes, prefix).reduce((acc, scene) => {
     if (String(scene?.videoUrl || "").trim()) acc.videoUrlCount += 1;
@@ -9198,6 +9202,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       || ""
     ).trim();
     const requestSceneSignature = String(buildScenarioScenePackageSignature(targetScene || {}) || "").trim();
+    const requestSceneStableSignature = String(buildScenarioSceneStableSignature(targetScene || {}) || "").trim();
     const shouldTraceSelectedScene = shouldTraceRoleContractScene(sceneId);
     const sceneText = String(targetScene.sceneText || targetScene.visualDescription || "").trim();
     const previousScene = targetSceneIndex > 0 ? normalizedScenes[targetSceneIndex - 1] : null;
@@ -9500,10 +9505,13 @@ Aspect ratio: ${imageFormat}`,
       });
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
+      const generatedImageUrl = String(out?.imageUrl || "");
       const responseSceneId = String(out?.sceneId || "").trim();
       const liveBinding = resolveScenarioLiveBinding(sceneId);
+      const liveSceneStableSignature = String(buildScenarioSceneStableSignature(liveBinding?.scene || {}) || "").trim();
       const reasonIgnored = [];
       if (responseSceneId && responseSceneId !== sceneId) reasonIgnored.push("response_scene_mismatch");
+      if (!generatedImageUrl) reasonIgnored.push("image_url_missing");
       if (!liveBinding || !liveBinding.scene) reasonIgnored.push("scene_missing_in_live_storyboard");
       if (liveBinding?.storyboardRevision && requestStoryboardRevision && liveBinding.storyboardRevision !== requestStoryboardRevision) {
         reasonIgnored.push("storyboard_revision_mismatch");
@@ -9511,16 +9519,21 @@ Aspect ratio: ${imageFormat}`,
       if (liveBinding?.storyboardSignature && requestStoryboardSignature && liveBinding.storyboardSignature !== requestStoryboardSignature) {
         reasonIgnored.push("storyboard_signature_mismatch");
       }
-      if (liveBinding?.sceneSignature && requestSceneSignature && liveBinding.sceneSignature !== requestSceneSignature) {
+      const sceneSignatureMismatch = !!(liveBinding?.sceneSignature && requestSceneSignature && liveBinding.sceneSignature !== requestSceneSignature);
+      if (sceneSignatureMismatch && requestSceneStableSignature && liveSceneStableSignature && requestSceneStableSignature !== liveSceneStableSignature) {
         reasonIgnored.push("scene_signature_mismatch");
       }
       const applyAccepted = reasonIgnored.length === 0;
-      const generatedImageUrl = String(out.imageUrl || "");
       console.debug("[SCENARIO IMAGE RESPONSE APPLY]", {
         requestedSceneId: sceneId,
         responseSceneId: responseSceneId || sceneId,
         applyAccepted,
         reasonIgnored: reasonIgnored.join("|") || "",
+        storyboardRevision: requestStoryboardRevision,
+        storyboardSignature: requestStoryboardSignature,
+        sceneSignature: requestSceneSignature,
+        requestSceneStableSignature,
+        liveSceneStableSignature,
         imageUrl: generatedImageUrl,
         slot: normalizedSlot,
       });
