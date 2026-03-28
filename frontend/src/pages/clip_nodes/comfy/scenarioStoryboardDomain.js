@@ -641,6 +641,7 @@ function hasScenarioTwoPersonSemanticSignal(scene = {}) {
 
 function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
   const source = scene && typeof scene === "object" ? scene : {};
+  const sceneRoleDynamics = normalizeText(source.sceneRoleDynamics ?? source.scene_role_dynamics).toLowerCase();
   const packageRefsByRole = normalizeObjectMap(scenarioPackage?.refsByRole);
   const packageMustAppearRoles = normalizeStringList(scenarioPackage?.mustAppearRoles).map((r) => normalizeScenarioRoleId(r) || normalizeText(r));
   const packageRefDirectives = normalizeObjectMap(scenarioPackage?.refDirectives);
@@ -656,6 +657,23 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
   const refsUsedInput = normalizeStringList(source.refsUsed ?? source.refs_used).map((role) => normalizeScenarioRoleId(role) || role);
   const mustAppearInput = normalizeStringList(source.mustAppear ?? source.must_appear).map((role) => normalizeScenarioRoleId(role) || role);
   const supportInput = normalizeStringList(source.supportEntityIds ?? source.support_entity_ids).map((role) => normalizeScenarioRoleId(role) || role);
+  const explicitCrowdNarrativeSignal = [
+    source.sceneGoal,
+    source.scene_goal,
+    source.summaryRu,
+    source.summaryEn,
+    source.imagePromptRu,
+    source.imagePromptEn,
+    source.videoPromptRu,
+    source.videoPromptEn,
+    source.sceneAction,
+    source.action,
+  ].map((v) => normalizeText(v).toLowerCase()).filter(Boolean).join(" ");
+  const crowdImportantKeywords = ["protest", "riot", "mob", "audience", "chorus", "crowd chant", "mass panic", "митинг", "толпа", "бунт", "хор", "массов"];
+  const groupNarrativelyRequired = crowdImportantKeywords.some((keyword) => explicitCrowdNarrativeSignal.includes(keyword))
+    || normalizeStringList(source.mustAppear ?? source.must_appear).map((role) => normalizeScenarioRoleId(role)).includes("group")
+    || normalizeText(packageRefDirectives?.group).toLowerCase() === "required"
+    || normalizeText(packageRefDirectives?.group).toLowerCase() === "hero";
 
   const availableCastRoles = SCENARIO_CAST_ROLE_KEYS.filter((role) => {
     const hasSceneRefs = Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0;
@@ -678,6 +696,9 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
     ...refsUsedByRoleKeys,
     ...participantRoles,
   ].map((role) => normalizeScenarioRoleId(role) || normalizeText(role)).filter((role) => SCENARIO_CAST_ROLE_KEYS.includes(role))));
+  const explicitRolesWithoutDefaultGroup = explicitRoles.filter((role) => (role !== "group" || groupNarrativelyRequired));
+  const hasActiveHumanRoles = explicitRolesWithoutDefaultGroup.some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
+  const isEnvironmentOnlyScene = sceneRoleDynamics === "environment" && participantRoles.length === 0 && !hasActiveHumanRoles;
 
   const hasSemanticTwoPerson = hasScenarioTwoPersonSemanticSignal(source);
   const hasTwoParticipants = participantRoles.length >= 2 || participantsRaw.length >= 2;
@@ -686,12 +707,13 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
   const forceTwoPerson = twoPersonFromGlobalContract && (explicitRoles.includes("character_1") || explicitRoles.length <= 1);
 
   const activeRoles = Array.from(new Set([
-    ...explicitRoles,
+    ...explicitRolesWithoutDefaultGroup,
     ...(forceTwoPerson ? ["character_1", "character_2"] : []),
   ])).filter((role) => SCENARIO_CAST_ROLE_KEYS.includes(role));
+  const filteredActiveRoles = isEnvironmentOnlyScene ? [] : activeRoles.filter((role) => (role !== "group" || groupNarrativelyRequired));
 
-  const resolvedPrimary = primaryRole || activeRoles[0] || availableCastRoles[0] || "";
-  const resolvedSecondary = Array.from(new Set(activeRoles.filter((role) => role !== resolvedPrimary)));
+  const resolvedPrimary = isEnvironmentOnlyScene ? "" : (primaryRole || filteredActiveRoles[0] || availableCastRoles[0] || "");
+  const resolvedSecondary = Array.from(new Set(filteredActiveRoles.filter((role) => role !== resolvedPrimary)));
   const resolvedActive = Array.from(new Set([resolvedPrimary, ...resolvedSecondary].filter(Boolean)));
   const resolvedMustAppear = Array.from(new Set([
     ...mustAppearInput.filter((role) => resolvedActive.includes(role)),
@@ -718,6 +740,7 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
     sceneActiveRoles: resolvedActive,
     refsUsed: finalRefsUsed,
     mustAppear: finalMustAppear,
+    mustNotAppear: isEnvironmentOnlyScene ? ["character_1", "character_2", "character_3", "group"] : [],
     supportEntityIds,
     refsUsedByRole,
     debug: {
@@ -726,6 +749,8 @@ function resolveScenarioSceneRoleContract(scene = {}, scenarioPackage = {}) {
       hasTwoParticipants,
       forceTwoPerson,
       availableCastRoles,
+      groupNarrativelyRequired,
+      isEnvironmentOnlyScene,
     },
   };
 }

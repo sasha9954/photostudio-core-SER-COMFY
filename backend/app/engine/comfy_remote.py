@@ -303,6 +303,11 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
     saw_valid_history_payload = False
     last_response_status: int | None = None
     last_response_body_snippet = ""
+    transient_invalid_json_streak = 0
+    transient_transport_streak = 0
+
+    def _next_sleep(base_sec: int, streak: int) -> float:
+        return float(min(12, max(1, int(base_sec)) + min(6, streak)))
 
     while time.time() < deadline:
         url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history/{safe_prompt_id}"
@@ -319,23 +324,30 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
             last_response_body_snippet = body_snippet
             logger.info("[COMFY REMOTE] history response status=%s body=%r", resp.status_code, body_snippet)
             if resp.status_code >= 400:
+                transient_transport_streak += 1
                 logger.warning(
                     "[COMFY REMOTE] history temporary non-200 prompt_id=%s status=%s body=%r",
                     safe_prompt_id,
                     resp.status_code,
                     body_snippet,
                 )
-                time.sleep(sleep_sec)
+                time.sleep(_next_sleep(sleep_sec, transient_transport_streak))
                 continue
             payload, parse_err = _parse_json_response(resp, stage="history_response")
             if parse_err or not payload:
+                transient_invalid_json_streak += 1
+                body_preview = (body_snippet or "")[:220]
                 logger.warning(
-                    "[COMFY REMOTE] history temporary invalid response prompt_id=%s err=%s",
+                    "[COMFY REMOTE] history temporary invalid response prompt_id=%s err=%s streak=%s body_preview=%r",
                     safe_prompt_id,
                     parse_err or "history_response_invalid_json",
+                    transient_invalid_json_streak,
+                    body_preview,
                 )
-                time.sleep(sleep_sec)
+                time.sleep(_next_sleep(sleep_sec, transient_invalid_json_streak))
                 continue
+            transient_invalid_json_streak = 0
+            transient_transport_streak = 0
             saw_valid_history_payload = True
             last_valid_payload = payload
             logger.info(
@@ -361,30 +373,33 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
                     if outputs:
                         return payload, None
         except ConnectTimeout as exc:
+            transient_transport_streak += 1
             logger.warning(
                 "[COMFY REMOTE] history connect timeout prompt_id=%s error=%s",
                 safe_prompt_id,
                 str(exc)[:200],
             )
-            time.sleep(sleep_sec)
+            time.sleep(_next_sleep(sleep_sec, transient_transport_streak))
             continue
 
         except ReadTimeout as exc:
+            transient_transport_streak += 1
             logger.warning(
                 "[COMFY REMOTE] history read timeout prompt_id=%s error=%s",
                 safe_prompt_id,
                 str(exc)[:200],
             )
-            time.sleep(sleep_sec)
+            time.sleep(_next_sleep(sleep_sec, transient_transport_streak))
             continue
 
         except RequestException as exc:
+            transient_transport_streak += 1
             logger.warning(
                 "[COMFY REMOTE] history request error prompt_id=%s error=%s",
                 safe_prompt_id,
                 str(exc)[:200],
             )
-            time.sleep(sleep_sec)
+            time.sleep(_next_sleep(sleep_sec, transient_transport_streak))
             continue
         except Exception as exc:
             logger.exception("[COMFY REMOTE] history unexpected error url=%s prompt_id=%s", url, safe_prompt_id)
