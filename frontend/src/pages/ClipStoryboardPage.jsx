@@ -651,6 +651,7 @@ function buildScenarioRefsByRoleForImage({ scene = {}, scenarioBrainRefs = {}, s
 function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {}) {
   const castRoles = ["character_1", "character_2", "character_3", "animal", "group"];
   const sceneId = String(scene?.sceneId || "").trim();
+  const sceneRoleDynamics = String(scene?.sceneRoleDynamics || "").trim().toLowerCase();
   const orderedRoleWithRefs = ["character_1", "character_2", "character_3", "animal", "group"]
     .filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0);
   const roleWithRefs = [...new Set([...orderedRoleWithRefs, ...castRoles.filter((role) => Array.isArray(refsByRole?.[role]) && refsByRole[role].length > 0)])];
@@ -671,6 +672,8 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
   const semanticTwoPersonSignal = ["gaze", "shared glance", "look into eyes", "eye contact", "whisper", "hold hand", "embrace", "hug", "looks at", "looking at", "див", "смотр", "взгляд", "шепч", "обнима", "держ"]
     .some((marker) => `${String(scene?.summaryEn || "")} ${String(scene?.summaryRu || "")} ${String(scene?.videoPromptEn || "")} ${String(scene?.videoPromptRu || "")} ${String(scene?.imagePromptEn || "")} ${String(scene?.imagePromptRu || "")}`.toLowerCase().includes(marker));
   const mustAppear = normalizeRoleList(scene?.mustAppear);
+  const hasActiveHumanRoles = [...sceneActiveRoles, ...mustAppear].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
+  const isEnvironmentOnlyScene = sceneRoleDynamics === "environment" && actorsRoleSignals.length === 0 && !hasActiveHumanRoles;
   const availableTwoPersonRefs = roleWithRefs.includes("character_1") && roleWithRefs.includes("character_2");
   const shouldForceTwoPerson = availableTwoPersonRefs && (
     semanticTwoPersonSignal
@@ -678,6 +681,21 @@ function buildScenarioRoleContractForImage({ scene = {}, refsByRole = {} } = {})
     || refsUsedByRoleKeys.includes("character_2")
     || mustAppear.includes("character_2")
   );
+  if (isEnvironmentOnlyScene) {
+    const environmentOnlyContract = {
+      primaryRole: "",
+      secondaryRoles: [],
+      sceneActiveRoles: [],
+      refsUsed: [],
+      mustAppear: [],
+      mustNotAppear: ["character_1", "character_2", "character_3", "group"],
+      environmentOnly: true,
+    };
+    if (shouldTraceRoleContractScene(sceneId)) {
+      console.debug("[SCENARIO ROLE TRACE] buildScenarioRoleContractForImage.output.environment_only", environmentOnlyContract);
+    }
+    return environmentOnlyContract;
+  }
   const hasExplicitContract = Boolean(primaryRole || secondaryRoles.length || sceneActiveRoles.length || mustAppear.length);
   const explicitActiveRoles = normalizeRoleList([
     primaryRole,
@@ -1779,6 +1797,10 @@ function buildScenarioScenePackageSignature(scene = {}) {
     mustAppear: Array.isArray(source?.mustAppear) ? source.mustAppear : [],
     props: Array.isArray(source?.props) ? source.props : [],
     refsByRole: source?.refsByRole && typeof source.refsByRole === "object" ? source.refsByRole : {},
+    sceneRoleDynamics: String(source?.sceneRoleDynamics || "").trim(),
+    primaryRole: String(source?.primaryRole || "").trim(),
+    secondaryRoles: Array.isArray(source?.secondaryRoles) ? source.secondaryRoles : [],
+    sceneActiveRoles: Array.isArray(source?.sceneActiveRoles) ? source.sceneActiveRoles : [],
     resolvedWorkflowKey: String(source?.resolvedWorkflowKey || "").trim(),
     resolvedModelKey: String(source?.resolvedModelKey || "").trim(),
     renderMode: String(source?.renderMode || "").trim(),
@@ -4357,6 +4379,7 @@ function buildComfySceneRefsPayload({
   environmentLock = null,
   styleLock = null,
   identityLock = null,
+  sceneRoleDynamics = "",
 } = {}) {
   const normalizeRoleUrls = (items) => (Array.isArray(items)
     ? items
@@ -4372,6 +4395,25 @@ function buildComfySceneRefsPayload({
     ["character_1", "character_2", "character_3", "animal", "group", "location", "style", "props"]
       .map((role) => [role, pickUrls([role])])
   );
+  const activeRolesNormalized = Array.isArray(sceneActiveRoles)
+    ? sceneActiveRoles.map((role) => normalizeScenarioRoleName(role)).filter(Boolean)
+    : [];
+  const mustAppearNormalized = Array.isArray(mustAppear)
+    ? mustAppear.map((role) => normalizeScenarioRoleName(role)).filter(Boolean)
+    : [];
+  const participantsNormalized = Array.isArray(participants)
+    ? participants.map((role) => normalizeScenarioRoleName(role)).filter(Boolean)
+    : [];
+  const isEnvironmentOnlyScene = String(sceneRoleDynamics || "").trim().toLowerCase() === "environment"
+    && participantsNormalized.length === 0
+    && ![...activeRolesNormalized, ...mustAppearNormalized].some((role) => ["character_1", "character_2", "character_3", "group"].includes(role));
+  const normalizedMustNotAppear = Array.isArray(mustNotAppear) ? [...mustNotAppear] : [];
+  if (isEnvironmentOnlyScene) {
+    ["character_1", "character_2", "character_3", "group"].forEach((role) => {
+      normalizedRefsByRole[role] = [];
+      if (!normalizedMustNotAppear.includes(role)) normalizedMustNotAppear.push(role);
+    });
+  }
 
   const nodeSignals = {
     hasAudio: !!String(audioUrl || "").trim(),
@@ -4415,7 +4457,7 @@ function buildComfySceneRefsPayload({
     heroEntityId: normalizedHeroEntityId,
     supportEntityIds: Array.isArray(supportEntityIds) ? supportEntityIds : undefined,
     mustAppear: Array.isArray(mustAppear) ? mustAppear : undefined,
-    mustNotAppear: Array.isArray(mustNotAppear) ? mustNotAppear : undefined,
+    mustNotAppear: normalizedMustNotAppear.length ? normalizedMustNotAppear : undefined,
     participants: Array.isArray(participants) ? participants : undefined,
     environmentLock: typeof environmentLock === 'boolean' ? environmentLock : undefined,
     styleLock: typeof styleLock === 'boolean' ? styleLock : undefined,
@@ -8352,6 +8394,7 @@ const comfyShowVideoSection = Boolean(
         environmentLock: typeof comfySceneForImageContract?.environmentLock === 'boolean' ? comfySceneForImageContract.environmentLock : null,
         styleLock: typeof comfySceneForImageContract?.styleLock === 'boolean' ? comfySceneForImageContract.styleLock : null,
         identityLock: typeof comfySceneForImageContract?.identityLock === 'boolean' ? comfySceneForImageContract.identityLock : null,
+        sceneRoleDynamics: comfySceneForImageContract?.sceneRoleDynamics || "",
         promptSource,
       };
       const refsForImageRequest = buildComfySceneRefsPayload(refsPayloadForImage);
@@ -9016,6 +9059,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         mustAppear: Array.isArray(targetScene?.mustAppear) && targetScene.mustAppear.length
           ? targetScene.mustAppear
           : derivedRoleContract.mustAppear,
+        mustNotAppear: Array.isArray(derivedRoleContract?.mustNotAppear) ? derivedRoleContract.mustNotAppear : [],
         participants: Array.isArray(targetScene?.actors) ? targetScene.actors : [],
         previousContinuityMemory,
         previousSceneImageUrl,

@@ -8046,6 +8046,9 @@ def clip_image(payload: ClipImageIn):
         ]
     scene_contract["activeRoles"] = scene_active_roles
     must_not_appear_roles = set(scene_contract.get("mustNotAppear") or [])
+    if must_not_appear_roles:
+        scene_active_roles = [role for role in scene_active_roles if role not in must_not_appear_roles]
+        scene_contract["activeRoles"] = scene_active_roles
 
     hero_entity_id = str(scene_contract.get("heroEntityId") or "").strip()
     if hero_entity_id not in scene_active_roles:
@@ -8092,6 +8095,12 @@ def clip_image(payload: ClipImageIn):
     selected_view_hint = _infer_selected_view_hint(scene_delta, scene_text, prompt)
 
     scene_cast_roles = [role for role in scene_active_roles if role in COMFY_CAST_ROLES]
+    if "character_1" in scene_cast_roles and "character_2" in scene_cast_roles and "group" in scene_cast_roles:
+        scene_cast_roles = [role for role in scene_cast_roles if role != "group"]
+        scene_active_roles = [role for role in scene_active_roles if role != "group"]
+        scene_contract["activeRoles"] = scene_active_roles
+        must_appear_roles = [role for role in must_appear_roles if role != "group"]
+        scene_contract["mustAppear"] = must_appear_roles
     world_anchor_roles: list[str] = []
     for role in ["location", "style"]:
         role_urls = comfy_refs_by_role.get(role) or []

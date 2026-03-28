@@ -85,6 +85,20 @@ DUO_SCENE_EXTRA_HINTS = {
     "walk together",
     "walking together",
 }
+GROUP_NARRATIVE_REQUIRED_HINTS = {
+    "protest",
+    "riot",
+    "mob",
+    "audience",
+    "crowd chant",
+    "mass panic",
+    "chorus",
+    "митинг",
+    "бунт",
+    "толпа",
+    "массов",
+    "хор",
+}
 WORLD_ANCHOR_ROLES = {"location", "style", "props", "animal", "animal_1", "group", "group_faces"}
 SCENARIO_WORLD_ROLES = {"location", "style", "props"}
 SCENARIO_CONTENT_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
@@ -1973,6 +1987,12 @@ def _extract_scene_actor_roles(
     supporting_participants: list[str],
 ) -> list[str]:
     actor_roles: list[str] = []
+    scene_signal_parts: list[str] = []
+
+    def _collect_signal(value: Any) -> None:
+        text = str(value or "").strip().lower()
+        if text:
+            scene_signal_parts.append(text)
 
     def _push(role: Any) -> None:
         normalized = _normalize_scenario_role(role, role_lookup=role_lookup)
@@ -1980,10 +2000,18 @@ def _extract_scene_actor_roles(
             actor_roles.append(normalized)
 
     for key in ("primaryRole", "primary_role"):
+        _collect_signal(raw_scene.get(key))
         _push(raw_scene.get(key))
     for key in ("secondaryRoles", "secondary_roles", "sceneActiveRoles", "scene_active_roles", "refsUsed", "refs_used"):
         for role in (raw_scene.get(key) or []):
             _push(role)
+    for key in ("sceneType", "scene_type", "shotType", "shot_type", "title", "description", "prompt", "action", "beat", "imagePrompt", "videoPrompt"):
+        _collect_signal(raw_scene.get(key))
+    _collect_signal(scene.scene_goal)
+    _collect_signal(scene.frame_description)
+    _collect_signal(scene.action_in_frame)
+    _collect_signal(scene.image_prompt)
+    _collect_signal(scene.video_prompt)
     for actor in (scene.actors or []):
         _push(actor)
     for role in (raw_scene.get("participants") or []):
@@ -1995,9 +2023,21 @@ def _extract_scene_actor_roles(
     for role, directive in ref_directives.items():
         if str(directive or "").strip().lower() in {"hero", "required"}:
             _push(role)
+        _collect_signal(directive)
     if not actor_roles:
         for role in [*hero_participants, *supporting_participants]:
             _push(role)
+    scene_signal = " ".join(scene_signal_parts)
+    group_is_explicit = (
+        "group" in {
+            _normalize_scenario_role(role, role_lookup=role_lookup)
+            for role in (raw_scene.get("mustAppear") or raw_scene.get("must_appear") or [])
+        }
+        or str(ref_directives.get("group") or "").strip().lower() in {"hero", "required"}
+        or any(hint in scene_signal for hint in GROUP_NARRATIVE_REQUIRED_HINTS)
+    )
+    if "group" in actor_roles and not group_is_explicit:
+        actor_roles = [role for role in actor_roles if role != "group"]
     return actor_roles
 
 
@@ -2088,6 +2128,19 @@ def _resolve_scene_must_appear(
         return out
 
     explicit = _normalize_actor_roles(raw_scene.get("mustAppear") if raw_scene.get("mustAppear") is not None else raw_scene.get("must_appear"))
+    if "group" in explicit:
+        scene_signal = " ".join(
+            [
+                str(raw_scene.get("sceneType") or raw_scene.get("scene_type") or "").strip().lower(),
+                str(raw_scene.get("shotType") or raw_scene.get("shot_type") or "").strip().lower(),
+                str(raw_scene.get("description") or "").strip().lower(),
+                str(scene.scene_goal or "").strip().lower(),
+                str(scene.action_in_frame or "").strip().lower(),
+            ]
+        )
+        group_required = any(hint in scene_signal for hint in GROUP_NARRATIVE_REQUIRED_HINTS)
+        if not group_required:
+            explicit = [role for role in explicit if role != "group"]
     if explicit:
         return explicit
     explicit_primary = _normalize_scenario_role(
@@ -2298,6 +2351,22 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             for explicit_role in ("character_1", "character_2"):
                 if explicit_role in actor_roles and explicit_role not in must_appear:
                     must_appear.append(explicit_role)
+        scene_role_dynamics = str(scene.scene_role_dynamics or "").strip().lower()
+        active_character_roles = [role for role in actor_roles if role.startswith("character_")]
+        is_environment_only_scene = bool(scene_role_dynamics == "environment" and not actor_roles and not active_character_roles)
+        if "character_1" in actor_roles and "character_2" in actor_roles and "group" in actor_roles:
+            actor_roles = [role for role in actor_roles if role != "group"]
+            scene_active_roles = [role for role in scene_active_roles if role != "group"]
+            refs_used_roles = [role for role in refs_used_roles if role != "group"]
+            refs_used_map.pop("group", None)
+            must_appear = [role for role in must_appear if role != "group"]
+        if is_environment_only_scene:
+            scene_active_roles = [role for role in scene_active_roles if role in {"location", "style", "props"}]
+            refs_used_roles = [role for role in refs_used_roles if role in {"location", "style", "props"}]
+            refs_used_map = {role: refs for role, refs in refs_used_map.items() if role in {"location", "style", "props"}}
+            must_appear = []
+        primary_role = primary_role if primary_role in actor_roles else (actor_roles[0] if actor_roles else "")
+        secondary_roles = [role for role in actor_roles if role != primary_role]
         support_entity_ids = list(secondary_roles)
         start_frame_prompt = ""
         end_frame_prompt = ""
@@ -2418,7 +2487,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "refsUsed": refs_used_roles,
             "refsUsedByRole": refs_used_map,
             "mustAppear": must_appear,
-            "mustNotAppear": [],
+            "mustNotAppear": ["character_1", "character_2", "character_3", "group"] if is_environment_only_scene else [],
             "heroEntityId": primary_role if primary_role else "",
             "supportEntityIds": support_entity_ids,
             "refDirectives": {role: ref_directives.get(role, "optional") for role in refs_used_roles},
@@ -4871,9 +4940,11 @@ def _build_request_text(
         "- If connected refs imply two key characters, build interplay, contrast, and relationship energy across the scenario.\n"
         "TIMING RULES:\n"
         "- Do not force evenly sliced 5-second blocks.\n"
-        "- Typical useful scene duration is about 4-9 seconds, but hook, reveal, climax, and final hold may be shorter or longer when justified by the drama.\n"
+        "- For music_video / clip mode: keep phrase-first cadence dense; typical useful scene duration is about 2.0-5.5 seconds.\n"
+        "- Do not merge adjacent lyrical phrases into one scene unless they are semantically identical and continuity demands a single beat.\n"
+        "- If neighboring phrases express different meaning, keep separate scenes.\n"
         "- Let timing breathe and follow emotional rhythm.\n"
-        "- For longer videos, vary rhythm like short / medium / medium / short / long / climax / final hold.\n"
+        "- For longer videos, vary rhythm like short / short / medium / short / medium / peak / final hold.\n"
         "LTX MODE RULES:\n"
         "- i2v: strong single-image motion.\n"
         "- i2v_as: audio-sensitive motion, environmental pulsing, breathing tension, subtle rhythm response, but no literal speech articulation.\n"
@@ -5165,6 +5236,8 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "  - speech phrases\n"
         "  - pauses\n"
         "  - energy shifts\n"
+        "- Do not merge two adjacent lyrical phrases into one scene unless they express the same semantic beat.\n"
+        "- Prefer short clip-friendly scene durations (about 2-5.5 sec) when phrase timing allows.\n"
         "BAD:\n"
         "- t0: 0.0 → t1: 1.0 for full audio\n"
         "GOOD:\n"
@@ -6241,7 +6314,7 @@ def _build_scenes_request_text(
     if retry_level >= 1:
         retry_hint += SCENES_JSON_RETRY_SUFFIX + "\nRETRY 1 OVERRIDE: Return ONLY JSON. Short fields only."
     if retry_level >= 2:
-        retry_hint += "\nRETRY 2 OVERRIDE: Reduce scenes to 5. Minimal output."
+        retry_hint += "\nRETRY 2 OVERRIDE: Keep compact fields, but preserve phrase boundaries; do not collapse adjacent distinct phrases."
     compact_audio = {
         "audioDurationSec": _safe_float(audio_analysis.get("audioDurationSec"), 0.0),
         "phrases": (audio_analysis.get("phrases") or [])[:16],
@@ -6254,7 +6327,7 @@ def _build_scenes_request_text(
         "- Use provided MASTER as immutable truth.\n"
         "- Do not rewrite worldContext.\n"
         "- Do not expand beyond given time window.\n"
-        "- Keep scene count <= expectedScenes and <= 8.\n"
+        "- Keep scene count <= expectedScenes and <= 12.\n"
         "- Keep every string <= 160 chars.\n"
         "Return JSON contract:\n"
         "{\n"
@@ -6317,8 +6390,8 @@ def run_scenario_director_scenes(payload: dict[str, Any]) -> dict[str, Any]:
     end_sec = raw_end_sec if raw_end_sec >= start_sec else start_sec
     if (end_sec - start_sec) > 60.0:
         end_sec = round(start_sec + 60.0, 3)
-    expected_scenes = int(_safe_float(payload.get("expectedScenes"), max(1, round((end_sec - start_sec) / 8.0))))
-    expected_scenes = max(1, min(expected_scenes, 8))
+    expected_scenes = int(_safe_float(payload.get("expectedScenes"), max(1, round((end_sec - start_sec) / 4.0))))
+    expected_scenes = max(1, min(expected_scenes, 12))
 
     audio_context = _normalize_audio_context(payload)
     audio_analysis = _build_audio_analysis_fallback(_safe_float(audio_context.get("audioDurationSec"), 0.0), "analysis_skipped")
