@@ -181,6 +181,7 @@ const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
 const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = true;
 const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
+const CLIP_TRACE_SCENARIO_IMAGE_E2E = false;
 const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
 
 function shouldTraceRoleContractScene(sceneId = "") {
@@ -3101,6 +3102,25 @@ function resolveSceneFrameUrls(scene, previousScene = null) {
         : ["scene.startImageUrl", "scene.startFrameImageUrl", "scene.startFramePreviewUrl", "scene.imageUrl"],
       end: ["scene.endImageUrl", "scene.endFrameImageUrl", "scene.endFramePreviewUrl"],
     },
+  };
+}
+
+function resolveScenarioScenePreviewSources(scene, previousScene = null) {
+  const transitionType = resolveSceneTransitionType(scene);
+  const imageStrategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase() || "single";
+  const frameUrls = resolveSceneFrameUrls(scene, previousScene);
+  const resolvedStartPreviewSrc = String(resolveAssetUrl(frameUrls.effectiveStartImageUrl || frameUrls.fallbackImageUrl || "") || "").trim();
+  const resolvedEndPreviewSrc = String(resolveAssetUrl(frameUrls.endImageUrl || "") || "").trim();
+  const resolvedSinglePreviewSrc = String(resolveAssetUrl(scene?.imageUrl || frameUrls.fallbackImageUrl || "") || "").trim();
+  const resolvedPreviewSrc = transitionType === "continuous"
+    ? (resolvedStartPreviewSrc || resolvedEndPreviewSrc || resolvedSinglePreviewSrc)
+    : (resolvedSinglePreviewSrc || resolvedStartPreviewSrc || resolvedEndPreviewSrc);
+  return {
+    imageStrategy,
+    transitionType,
+    resolvedPreviewSrc,
+    resolvedStartPreviewSrc,
+    resolvedEndPreviewSrc,
   };
 }
 
@@ -6861,6 +6881,10 @@ const scenarioSelectedTransitionType = resolveSceneTransitionType(scenarioSelect
 const scenarioSelectedIsLipSync = isLipSyncScene(scenarioSelected);
 const scenarioPreviousScene = scenarioSelectedIndex > 0 ? scenarioScenes[scenarioSelectedIndex - 1] : null;
 const scenarioSelectedFrameUrls = resolveSceneFrameUrls(scenarioSelected, scenarioPreviousScene);
+const scenarioSelectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
+const scenarioSelectedResolvedPreviewSrc = scenarioSelectedPreviewSources.resolvedPreviewSrc;
+const scenarioSelectedResolvedStartPreviewSrc = scenarioSelectedPreviewSources.resolvedStartPreviewSrc;
+const scenarioSelectedResolvedEndPreviewSrc = scenarioSelectedPreviewSources.resolvedEndPreviewSrc;
 const scenarioSelectedCanInheritPreviousEnd = scenarioSelectedTransitionType === "continuous"
   && !!scenarioPreviousScene
   && !!String(scenarioPreviousScene?.endImageUrl || scenarioPreviousScene?.endFrameImageUrl || "").trim();
@@ -7198,20 +7222,22 @@ const comfyShowVideoSection = Boolean(
         : sceneRef;
       if (!Number.isInteger(resolvedIdx) || resolvedIdx < 0 || !scenes[resolvedIdx]) return n;
       const sceneAtIdx = scenes[resolvedIdx] || {};
-      console.debug("[SCENARIO SCENE PATCH TARGET RESOLVED]", {
-        targetNodeId,
-        sceneRef,
-        resolvedIdx,
-        resolvedSceneId: String(sceneAtIdx?.sceneId || ""),
-        patchKeys: Object.keys(patch || {}),
-      });
-      console.debug("[SCENARIO SCENE PATCH APPLIED]", {
-        targetNodeId,
-        sceneRef,
-        resolvedIdx,
-        actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
-        patchKeys: Object.keys(patch || {}),
-      });
+      if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+        console.debug("[SCENARIO SCENE PATCH TARGET RESOLVED]", {
+          targetNodeId,
+          sceneRef,
+          resolvedIdx,
+          resolvedSceneId: String(sceneAtIdx?.sceneId || ""),
+          patchKeys: Object.keys(patch || {}),
+        });
+        console.debug("[SCENARIO SCENE PATCH APPLIED]", {
+          targetNodeId,
+          sceneRef,
+          resolvedIdx,
+          actualSceneIdAtIdx: String(sceneAtIdx?.sceneId || ""),
+          patchKeys: Object.keys(patch || {}),
+        });
+      }
       const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...patch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
@@ -7221,12 +7247,14 @@ const comfyShowVideoSection = Boolean(
     const sceneId = String(sceneIdRaw || "").trim();
     const targetNodeId = String(options?.nodeId || scenarioFlowSourceNode?.id || "").trim();
     if (!targetNodeId || !sceneId || !patch || typeof patch !== "object") return;
-    console.debug("[SCENARIO RUNTIME PATCH TARGET]", {
-      targetNodeId,
-      sceneId,
-      patchKeys: Object.keys(patch || {}),
-      hasRuntimePatch: true,
-    });
+    if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+      console.debug("[SCENARIO RUNTIME PATCH TARGET]", {
+        targetNodeId,
+        sceneId,
+        patchKeys: Object.keys(patch || {}),
+        hasRuntimePatch: true,
+      });
+    }
     setNodes((prev) => prev.map((n) => {
       if (n.id !== targetNodeId) return n;
       const currentMap = n?.data?.sceneGeneration && typeof n.data.sceneGeneration === "object" ? n.data.sceneGeneration : {};
@@ -9546,13 +9574,15 @@ Aspect ratio: ${imageFormat}`,
           refs: refsForImageRequest,
         },
       });
-      console.debug("[SCENARIO IMAGE RESPONSE RECEIVED]", {
-        requestedSceneId: sceneId,
-        responseOk: Boolean(out?.ok),
-        responseSceneId: String(out?.sceneId || "").trim(),
-        hasImageUrl: !!String(out?.imageUrl || "").trim(),
-        slot: normalizedSlot,
-      });
+      if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+        console.debug("[SCENARIO IMAGE RESPONSE RECEIVED]", {
+          requestedSceneId: sceneId,
+          responseOk: Boolean(out?.ok),
+          responseSceneId: String(out?.sceneId || "").trim(),
+          hasImageUrl: !!String(out?.imageUrl || "").trim(),
+          slot: normalizedSlot,
+        });
+      }
       if (!out?.ok || !out?.imageUrl) throw new Error(out?.hint || out?.code || "image_generation_failed");
 
       const generatedImageUrl = String(out?.imageUrl || "");
@@ -9574,24 +9604,26 @@ Aspect ratio: ${imageFormat}`,
         reasonIgnored.push("scene_signature_mismatch");
       }
       const applyAccepted = reasonIgnored.length === 0;
-      console.debug("[SCENARIO IMAGE RESPONSE APPLY]", {
-        requestedSceneId: sceneId,
-        responseSceneId: responseSceneId || sceneId,
-        applyAccepted,
-        reasonIgnored: reasonIgnored.join("|") || "",
-        requestStoryboardRevision,
-        requestStoryboardSignature,
-        requestSceneSignature,
-        requestSceneStableSignature,
-        liveSceneStableSignature,
-        "liveBinding?.sceneIndex": liveBinding?.sceneIndex,
-        "liveBinding?.scene?.sceneId": String(liveBinding?.scene?.sceneId || "").trim(),
-        "liveBinding?.storyboardRevision": String(liveBinding?.storyboardRevision || "").trim(),
-        "liveBinding?.storyboardSignature": String(liveBinding?.storyboardSignature || "").trim(),
-        "liveBinding?.sceneSignature": String(liveBinding?.sceneSignature || "").trim(),
-        imageUrl: generatedImageUrl,
-        slot: normalizedSlot,
-      });
+      if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+        console.debug("[SCENARIO IMAGE RESPONSE APPLY]", {
+          requestedSceneId: sceneId,
+          responseSceneId: responseSceneId || sceneId,
+          applyAccepted,
+          reasonIgnored: reasonIgnored.join("|") || "",
+          requestStoryboardRevision,
+          requestStoryboardSignature,
+          requestSceneSignature,
+          requestSceneStableSignature,
+          liveSceneStableSignature,
+          "liveBinding?.sceneIndex": liveBinding?.sceneIndex,
+          "liveBinding?.scene?.sceneId": String(liveBinding?.scene?.sceneId || "").trim(),
+          "liveBinding?.storyboardRevision": String(liveBinding?.storyboardRevision || "").trim(),
+          "liveBinding?.storyboardSignature": String(liveBinding?.storyboardSignature || "").trim(),
+          "liveBinding?.sceneSignature": String(liveBinding?.sceneSignature || "").trim(),
+          imageUrl: generatedImageUrl,
+          slot: normalizedSlot,
+        });
+      }
       if (!applyAccepted) {
         const runtimeResetPatch = normalizedSlot === "start"
           ? { startFrameStatus: "idle", startFrameError: "" }
@@ -9599,21 +9631,26 @@ Aspect ratio: ${imageFormat}`,
             ? { endFrameStatus: "idle", endFrameError: "" }
             : { imageStatus: "idle", imageError: "" };
         updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
-        console.debug("[SCENARIO IMAGE E2E TRACE]", {
-          requestedSceneId: sceneId,
-          responseOk: Boolean(out?.ok),
-          applyAccepted,
-          patchedNodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
-          patchedSceneId: sceneId,
-          patchedImageUrl: "",
-          selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
-          selectedSceneId: String(scenarioSelected?.sceneId || ""),
-          selectedSceneImageUrl: String(scenarioSelected?.imageUrl || "").trim(),
-          editorPreviewSrc: resolveAssetUrl(scenarioSelected?.imageUrl),
-          mainPreviewSrc: resolveAssetUrl(scenarioSelected?.imageUrl),
-          assetsPreservedAfterRebind: false,
-          finalVisible: false,
-        });
+        if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+          const selectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
+          console.debug("[SCENARIO IMAGE E2E TRACE]", {
+            requestedSceneId: sceneId,
+            responseOk: Boolean(out?.ok),
+            applyAccepted,
+            patchedNodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+            patchedSceneId: sceneId,
+            patchedImageUrl: "",
+            selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
+            selectedSceneId: String(scenarioSelected?.sceneId || ""),
+            selectedSceneImageStrategy: selectedPreviewSources.imageStrategy,
+            selectedSceneTransitionType: selectedPreviewSources.transitionType,
+            resolvedPreviewSrc: selectedPreviewSources.resolvedPreviewSrc,
+            resolvedStartPreviewSrc: selectedPreviewSources.resolvedStartPreviewSrc,
+            resolvedEndPreviewSrc: selectedPreviewSources.resolvedEndPreviewSrc,
+            assetsPreservedAfterRebind: false,
+            finalVisible: Boolean(selectedPreviewSources.resolvedPreviewSrc),
+          });
+        }
         return;
       }
       const targetNodeId = String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || "").trim();
@@ -9656,20 +9693,22 @@ Aspect ratio: ${imageFormat}`,
         runtimeImagePatch = { imageStatus: "done", imageError: "" };
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
-      console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
-        sceneId,
-        slot: normalizedSlot,
-        targetNodeId,
-        imageUrl: generatedImageUrl,
-        patchApplied: true,
-      });
-      console.debug("[SCENARIO IMAGE STATUS SYNC]", {
-        sceneId,
-        slot: normalizedSlot,
-        status: "done",
-        hasImageUrl: !!generatedImageUrl,
-        error: "",
-      });
+      if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+        console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
+          sceneId,
+          slot: normalizedSlot,
+          targetNodeId,
+          imageUrl: generatedImageUrl,
+          patchApplied: true,
+        });
+        console.debug("[SCENARIO IMAGE STATUS SYNC]", {
+          sceneId,
+          slot: normalizedSlot,
+          status: "done",
+          hasImageUrl: !!generatedImageUrl,
+          error: "",
+        });
+      }
       clearActiveVideoJob(sceneId);
       setScenarioVideoOpen(false);
       console.log("[StoryboardVideo] image_generated_reset_video_stage", {
@@ -9689,25 +9728,29 @@ Aspect ratio: ${imageFormat}`,
               ? (patchedSceneNow?.endImageUrl || "")
               : (patchedSceneNow?.imageUrl || "")
         ).trim();
-        const selectedSceneImageUrl = String(selectedSceneNow?.imageUrl || "").trim();
-        const editorPreviewSrc = resolveAssetUrl(selectedSceneImageUrl);
-        const mainPreviewSrc = resolveAssetUrl(selectedSceneImageUrl);
+        const selectedSceneIndexNow = scenesNow.findIndex((sceneItem) => String(sceneItem?.sceneId || "").trim() === selectedSceneIdNow);
+        const selectedPreviousSceneNow = selectedSceneIndexNow > 0 ? scenesNow[selectedSceneIndexNow - 1] : null;
+        const selectedPreviewSources = resolveScenarioScenePreviewSources(selectedSceneNow, selectedPreviousSceneNow);
         const assetsPreservedAfterRebind = !!patchedImageUrl;
-        console.debug("[SCENARIO IMAGE E2E TRACE]", {
-          requestedSceneId: sceneId,
-          responseOk: Boolean(out?.ok),
-          applyAccepted,
-          patchedNodeId: targetNodeId,
-          patchedSceneId: String(patchedSceneNow?.sceneId || sceneId),
-          patchedImageUrl,
-          selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
-          selectedSceneId: selectedSceneIdNow,
-          selectedSceneImageUrl,
-          editorPreviewSrc,
-          mainPreviewSrc,
-          assetsPreservedAfterRebind,
-          finalVisible: Boolean(editorPreviewSrc || mainPreviewSrc),
-        });
+        if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+          console.debug("[SCENARIO IMAGE E2E TRACE]", {
+            requestedSceneId: sceneId,
+            responseOk: Boolean(out?.ok),
+            applyAccepted,
+            patchedNodeId: targetNodeId,
+            patchedSceneId: String(patchedSceneNow?.sceneId || sceneId),
+            patchedImageUrl,
+            selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
+            selectedSceneId: selectedSceneIdNow,
+            selectedSceneImageStrategy: selectedPreviewSources.imageStrategy,
+            selectedSceneTransitionType: selectedPreviewSources.transitionType,
+            resolvedPreviewSrc: selectedPreviewSources.resolvedPreviewSrc,
+            resolvedStartPreviewSrc: selectedPreviewSources.resolvedStartPreviewSrc,
+            resolvedEndPreviewSrc: selectedPreviewSources.resolvedEndPreviewSrc,
+            assetsPreservedAfterRebind,
+            finalVisible: Boolean(selectedPreviewSources.resolvedPreviewSrc),
+          });
+        }
       }, 0);
       if (imageStrategy === "first_last" && requestedSlot === "single") {
         await handleGenerateScenarioImage("end", { sceneIndex: targetSceneIndex });
@@ -9721,13 +9764,15 @@ Aspect ratio: ${imageFormat}`,
           ? { endFrameStatus: "error", endFrameError: imageErrorMessage }
           : { imageStatus: "error", imageError: imageErrorMessage };
       updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
-      console.debug("[SCENARIO IMAGE STATUS SYNC]", {
-        sceneId,
-        slot: normalizedSlot,
-        status: "error",
-        hasImageUrl: false,
-        error: imageErrorMessage,
-      });
+      if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
+        console.debug("[SCENARIO IMAGE STATUS SYNC]", {
+          sceneId,
+          slot: normalizedSlot,
+          status: "error",
+          hasImageUrl: false,
+          error: imageErrorMessage,
+        });
+      }
       setScenarioImageError(imageErrorMessage);
     } finally {
       setScenarioImageLoading(false);
@@ -15782,12 +15827,12 @@ const hydrate = useCallback((source = "unknown") => {
                             Источник: {scenarioSelectedStartImageSource === "previous_end" ? "предыдущий END" : scenarioSelectedStartImageSource === "manual" ? "manual" : "none"}
                           </div>
                           <div className="clipSB_scenarioPreviewWrap">
-                            {scenarioSelectedEffectiveStartImageUrl ? (
+                            {scenarioSelectedResolvedStartPreviewSrc ? (
                               <img
-                                src={scenarioSelectedEffectiveStartImageUrl}
+                                src={scenarioSelectedResolvedStartPreviewSrc}
                                 alt="start frame preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={(e) => openLightbox(scenarioSelectedEffectiveStartImageUrl, e.currentTarget.getBoundingClientRect())}
+                                onClick={(e) => openLightbox(scenarioSelectedResolvedStartPreviewSrc, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Start preview отсутствует</div>
@@ -15815,12 +15860,12 @@ const hydrate = useCallback((source = "unknown") => {
 
                           <div className="clipSB_hint" style={{ marginBottom: 6 }}>END FRAME IMAGE</div>
                           <div className="clipSB_scenarioPreviewWrap">
-                            {scenarioSelectedEndImageUrl ? (
+                            {scenarioSelectedResolvedEndPreviewSrc ? (
                               <img
-                                src={scenarioSelectedEndImageUrl}
+                                src={scenarioSelectedResolvedEndPreviewSrc}
                                 alt="end frame preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={(e) => openLightbox(scenarioSelectedEndImageUrl, e.currentTarget.getBoundingClientRect())}
+                                onClick={(e) => openLightbox(scenarioSelectedResolvedEndPreviewSrc, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">End preview отсутствует</div>
@@ -15868,12 +15913,12 @@ const hydrate = useCallback((source = "unknown") => {
                             ))}
                           </div>
                           <div className="clipSB_scenarioPreviewWrap">
-                            {resolveAssetUrl(scenarioSelected.imageUrl) ? (
+                            {scenarioSelectedResolvedPreviewSrc ? (
                               <img
-                                src={resolveAssetUrl(scenarioSelected.imageUrl)}
+                                src={scenarioSelectedResolvedPreviewSrc}
                                 alt="scene preview"
                                 className="clipSB_scenarioPreview"
-                                onClick={(e) => openLightbox(resolveAssetUrl(scenarioSelected.imageUrl), e.currentTarget.getBoundingClientRect())}
+                                onClick={(e) => openLightbox(scenarioSelectedResolvedPreviewSrc, e.currentTarget.getBoundingClientRect())}
                               />
                             ) : (
                               <div className="clipSB_scenarioPreview clipSB_scenarioPreviewPlaceholder">Превью отсутствует</div>
