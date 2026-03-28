@@ -9171,10 +9171,11 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     });
   }, [scenarioScenes]);
 
-  const resolveScenarioLiveBinding = useCallback((sceneIdRaw = "") => {
+  const resolveScenarioLiveBinding = useCallback((sceneIdRaw = "", options = {}) => {
     const sceneId = String(sceneIdRaw || "").trim();
     if (!sceneId) return null;
-    const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === scenarioFlowSourceNode?.id) || scenarioFlowSourceNode || null;
+    const targetNodeId = String(options?.nodeId || scenarioFlowSourceNode?.id || "").trim();
+    const activeNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId) || scenarioFlowSourceNode || null;
     const rawScenes = Array.isArray(activeNode?.data?.scenes) ? activeNode.data.scenes : scenarioScenes;
     const normalizedScenes = normalizeSceneCollectionWithSceneId(rawScenes, "scene");
     const sceneIndex = resolveScenarioSceneIndex(sceneId, normalizedScenes);
@@ -9526,7 +9527,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || "unknown"
       ).trim();
       console.debug("[SCENARIO IMAGE REQUEST CONTEXT]", {
-        nodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+        nodeId: targetNodeId,
         activeNodeId: String(scenarioFlowSourceNode?.id || ""),
         sceneId,
         sceneIndex: targetSceneIndex,
@@ -9644,7 +9645,7 @@ Aspect ratio: ${imageFormat}`,
 
       const generatedImageUrl = String(out?.imageUrl || "");
       const responseSceneId = String(out?.sceneId || "").trim();
-      const liveBinding = resolveScenarioLiveBinding(sceneId);
+      const liveBinding = resolveScenarioLiveBinding(sceneId, { nodeId: targetNodeId });
       const liveSceneStableSignature = String(buildScenarioSceneStableSignature(liveBinding?.scene || {}) || "").trim();
       const reasonIgnored = [];
       if (responseSceneId && responseSceneId !== sceneId) reasonIgnored.push("response_scene_mismatch");
@@ -9680,6 +9681,24 @@ Aspect ratio: ${imageFormat}`,
           imageUrl: generatedImageUrl,
           slot: normalizedSlot,
         });
+        console.debug("[SCENARIO LIVE BINDING TARGET]", {
+          targetNodeId,
+          scenarioFlowSourceNodeId: String(scenarioFlowSourceNode?.id || "").trim(),
+          requestSceneId: sceneId,
+          liveBindingSceneId: String(liveBinding?.scene?.sceneId || "").trim(),
+          liveBindingSceneIndex: Number.isInteger(liveBinding?.sceneIndex) ? liveBinding.sceneIndex : null,
+          liveBindingStoryboardRevision: String(liveBinding?.storyboardRevision || "").trim(),
+          liveBindingStoryboardSignature: String(liveBinding?.storyboardSignature || "").trim(),
+          liveBindingSceneSignature: String(liveBinding?.sceneSignature || "").trim(),
+        });
+        if (targetNodeId !== String(scenarioFlowSourceNode?.id || "").trim()) {
+          console.warn("[SCENARIO LIVE BINDING TARGET MISMATCH]", {
+            targetNodeId,
+            scenarioFlowSourceNodeId: String(scenarioFlowSourceNode?.id || "").trim(),
+            requestSceneId: sceneId,
+            liveBindingSceneId: String(liveBinding?.scene?.sceneId || "").trim(),
+          });
+        }
       }
       if (!applyAccepted) {
         const runtimeResetPatch = normalizedSlot === "start"
@@ -9687,14 +9706,14 @@ Aspect ratio: ${imageFormat}`,
           : normalizedSlot === "end"
             ? { endFrameStatus: "idle", endFrameError: "" }
             : { imageStatus: "idle", imageError: "" };
-        updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+        updateScenarioSceneGenerationRuntime(sceneId, runtimeResetPatch, { nodeId: targetNodeId });
         if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
           const selectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
           console.debug("[SCENARIO IMAGE E2E TRACE]", {
             requestedSceneId: sceneId,
             responseOk: Boolean(out?.ok),
             applyAccepted,
-            patchedNodeId: String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || ""),
+            patchedNodeId: targetNodeId,
             patchedSceneId: sceneId,
             patchedImageUrl: "",
             selectedNodeId: String(scenarioFlowSourceNode?.id || ""),
@@ -9721,7 +9740,7 @@ Aspect ratio: ${imageFormat}`,
           videoJobId: "",
           videoSourceImageUrl: "",
           videoPanelActivated: false,
-        }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+        }, { nodeId: targetNodeId });
         runtimeImagePatch = { startFrameStatus: "done", startFrameError: "" };
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         updateScenarioScene(sceneId, {
@@ -9733,7 +9752,7 @@ Aspect ratio: ${imageFormat}`,
           videoJobId: "",
           videoSourceImageUrl: "",
           videoPanelActivated: false,
-        }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+        }, { nodeId: targetNodeId });
         runtimeImagePatch = { endFrameStatus: "done", endFrameError: "" };
       } else {
         updateScenarioScene(sceneId, {
@@ -9745,10 +9764,10 @@ Aspect ratio: ${imageFormat}`,
           videoJobId: "",
           videoSourceImageUrl: "",
           videoPanelActivated: false,
-        }, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+        }, { nodeId: targetNodeId });
         runtimeImagePatch = { imageStatus: "done", imageError: "" };
       }
-      updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+      updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
           sceneId,
@@ -9836,7 +9855,7 @@ Aspect ratio: ${imageFormat}`,
         : normalizedSlot === "end"
           ? { endFrameStatus: "error", endFrameError: imageErrorMessage }
           : { imageStatus: "error", imageError: imageErrorMessage };
-      updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: scenarioEditor?.nodeId || scenarioFlowSourceNode?.id });
+      updateScenarioSceneGenerationRuntime(sceneId, runtimeErrorPatch, { nodeId: targetNodeId });
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE STATUS SYNC]", {
           sceneId,
