@@ -303,6 +303,10 @@ export default function ScenarioStoryboardEditor({
     const firstSceneDuration = safeSceneDuration(firstScene);
     const firstSceneLocalPhrase = String(firstScene?.localPhrase || "").trim();
     const firstSceneGoal = String(firstScene?.sceneGoalRu || firstScene?.sceneGoalEn || firstScene?.sceneGoal || "").trim();
+    const firstSceneFrameDescription = String(firstScene?.frameDescription || firstScene?.frameDescriptionRu || firstScene?.frameDescriptionEn || "").trim();
+    const firstSceneIntroHintText = `${firstSceneGoal} ${firstSceneFrameDescription}`.toLowerCase();
+    const firstSceneLooksLikeIntro = /(establishing|intro|opening|instrumental|skyline|city\s*shot)/i.test(firstSceneIntroHintText);
+    const firstSceneHasEnvironmentVisualContext = !!firstSceneGoal || !!firstSceneFrameDescription;
     const firstSceneHasActors = Array.isArray(firstScene?.actors) && firstScene.actors.length > 0;
     const secondSceneLocalPhrase = String(secondScene?.localPhrase || "").trim();
     const shouldHideMicroIntro = (
@@ -310,9 +314,9 @@ export default function ScenarioStoryboardEditor({
       && firstSceneDuration > 0
       && firstSceneDuration < 0.8
       && !firstSceneLocalPhrase
-      && !firstSceneGoal
       && !firstSceneHasActors
       && !!secondSceneLocalPhrase
+      && (firstSceneLooksLikeIntro || firstSceneHasEnvironmentVisualContext)
     );
     if (!shouldHideMicroIntro) return phrases;
     const firstPhraseSceneId = String(phrases?.[0]?.sceneId || "").trim();
