@@ -264,8 +264,15 @@ function isFirstLastLikeScene(scene = {}) {
 function deriveFirstLastPrompts(scene = {}) {
   const explicitStart = normalizeText(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.start_frame_prompt);
   const explicitEnd = normalizeText(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || scene?.end_frame_prompt);
+  const pairContract = scene?.firstLastPairContract && typeof scene.firstLastPairContract === "object"
+    ? scene.firstLastPairContract
+    : (scene?.firstLastContinuityPlan && typeof scene.firstLastContinuityPlan === "object" ? scene.firstLastContinuityPlan : {});
+  const continuityClause = "Frame B is the evolved state of Frame A in the same exact scene world.";
   if (explicitStart && explicitEnd) {
-    return { start: explicitStart, end: explicitEnd, derived: false };
+    const endWithContract = explicitEnd.toLowerCase().includes(continuityClause.toLowerCase())
+      ? explicitEnd
+      : `${explicitEnd}. ${continuityClause}`;
+    return { start: explicitStart, end: endWithContract, derived: false };
   }
 
   const sceneGoal = normalizeText(scene?.sceneGoal || scene?.scene_goal);
@@ -277,7 +284,9 @@ function deriveFirstLastPrompts(scene = {}) {
 
   const start = explicitStart || frameDescription || sceneGoal || imagePrompt || videoPrompt;
   let end = explicitEnd || sceneGoal || imagePrompt || frameDescription || videoPrompt;
-  if (end) end = `${end}. Final changed state after transition: ${transitionSemantics}`;
+  const allowedDelta = Array.isArray(pairContract?.allowedDelta) ? pairContract.allowedDelta.map((item) => normalizeText(item)).filter(Boolean) : [];
+  const deltaText = allowedDelta.length ? allowedDelta.join(", ") : "pose, emotion, distance, interaction, orientation";
+  if (end) end = `${end}. ${continuityClause} Final changed state after transition: ${transitionSemantics}. Allowed delta only: ${deltaText}.`;
   if (start && end && start === end) end = `${end}. Keep the final frame visually different from the start frame.`;
   return { start, end, derived: true };
 }
@@ -1191,6 +1200,15 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         ?? responseScene?.requestedDurationSec
         ?? responseScene?.requested_duration_sec,
         0
+      ),
+      firstLastPairContract: (
+        (directorScene?.firstLastPairContract && typeof directorScene.firstLastPairContract === "object" && directorScene.firstLastPairContract)
+        || (directorScene?.firstLastContinuityPlan && typeof directorScene.firstLastContinuityPlan === "object" && directorScene.firstLastContinuityPlan)
+        || (storyboardScene?.firstLastPairContract && typeof storyboardScene.firstLastPairContract === "object" && storyboardScene.firstLastPairContract)
+        || (storyboardScene?.firstLastContinuityPlan && typeof storyboardScene.firstLastContinuityPlan === "object" && storyboardScene.firstLastContinuityPlan)
+        || (responseScene?.firstLastPairContract && typeof responseScene.firstLastPairContract === "object" && responseScene.firstLastPairContract)
+        || (responseScene?.firstLastContinuityPlan && typeof responseScene.firstLastContinuityPlan === "object" && responseScene.firstLastContinuityPlan)
+        || {}
       ),
       ...(isFirstLastLikeScene({ ...(responseScene || {}), ...(storyboardScene || {}), ...(directorScene || {}) })
         ? (() => {

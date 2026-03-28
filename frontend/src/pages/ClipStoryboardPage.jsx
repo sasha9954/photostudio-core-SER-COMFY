@@ -7329,6 +7329,31 @@ const comfyShowVideoSection = Boolean(
       || hint.includes("job_id_not_found_or_expired");
   }, []);
 
+  const applyScenarioVideoUiReset = useCallback((sceneRef, patch = {}, reason = "") => {
+    const isIndex = Number.isInteger(sceneRef);
+    const sceneIndex = isIndex
+      ? Number(sceneRef)
+      : scenarioScenes.findIndex((scene) => String(scene?.sceneId || "").trim() === String(sceneRef || "").trim());
+    if (sceneIndex < 0) return;
+    const sceneItem = scenarioScenes[sceneIndex] || null;
+    const sceneId = String(sceneItem?.sceneId || sceneRef || "").trim();
+    const nextStatus = String(
+      patch && Object.prototype.hasOwnProperty.call(patch, "videoStatus")
+        ? patch.videoStatus
+        : (sceneItem?.videoStatus || "")
+    ).trim();
+    updateScenarioScene(sceneIndex, {
+      ...patch,
+      videoPanelActivated: false,
+    });
+    console.info("[SCENARIO VIDEO UI RESET FINAL]", {
+      sceneId,
+      reason: String(reason || "unspecified"),
+      videoStatus: nextStatus,
+      videoPanelActivatedAfterApply: false,
+    });
+  }, [scenarioScenes, updateScenarioScene]);
+
   const startScenarioVideoPolling = useCallback((jobMeta) => {
     if (!jobMeta?.jobId || !jobMeta?.sceneId) return;
     const sceneId = String(jobMeta.sceneId || "").trim();
@@ -7486,10 +7511,10 @@ const comfyShowVideoSection = Boolean(
         return;
       }
       if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
-        updateScenarioScene(scenarioScenes.findIndex((x) => String(x?.sceneId || "") === sceneId), {
+        applyScenarioVideoUiReset(sceneId, {
           videoStatus: "error",
           videoError: "video_job_stale_timeout",
-        });
+        }, "stale_timeout");
         clearActiveVideoJob(sceneId);
         return;
       }
@@ -7553,13 +7578,11 @@ const comfyShowVideoSection = Boolean(
             scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
-          updateScenarioScene(idx, {
+          applyScenarioVideoUiReset(idx, {
             videoStatus: "not_found",
             videoError: String(out?.hint || out?.code || "video_job_not_found"),
             videoJobId: toleratedMeta.jobId,
-            videoPanelActivated: false,
-          });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
+          }, "poll_not_found_retry_exhausted");
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -7583,13 +7606,11 @@ const comfyShowVideoSection = Boolean(
             scheduleScenarioPoll(2200, "status_not_found_retry");
             return;
           }
-          updateScenarioScene(idx, {
+          applyScenarioVideoUiReset(idx, {
             videoStatus: "not_found",
             videoJobId: toleratedMeta.jobId,
             videoError: String(out?.error || out?.hint || "video_job_not_found"),
-            videoPanelActivated: false,
-          });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
+          }, "poll_status_not_found");
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -7632,7 +7653,7 @@ const comfyShowVideoSection = Boolean(
               jobId: String(settledMeta?.jobId || ""),
             });
           } else {
-            updateScenarioScene(idx, {
+            applyScenarioVideoUiReset(idx, {
               videoUrl: String(out?.videoUrl || ""),
               mode: String(out?.mode || ""),
               model: String(out?.model || ""),
@@ -7647,9 +7668,7 @@ const comfyShowVideoSection = Boolean(
               videoStatus: "done",
               videoError: "",
               videoJobId: settledMeta.jobId,
-              videoPanelActivated: false,
-            });
-            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
+            }, "poll_done");
             console.info("[CLIP TRACE] scene updated after done", {
               scope: "scenario",
               sceneId,
@@ -7665,8 +7684,7 @@ const comfyShowVideoSection = Boolean(
 
         if (status === "error" || status === "stopped" || status === "not_found") {
           if (idx >= 0) {
-            updateScenarioScene(idx, { videoPanelActivated: false });
-            console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status, videoPanelActivatedAfterApply: false });
+            applyScenarioVideoUiReset(idx, { videoStatus: status }, "poll_terminal_status");
           }
           clearActiveVideoJob(sceneId, { status, jobId: settledMeta.jobId });
           return;
@@ -7691,13 +7709,11 @@ const comfyShowVideoSection = Boolean(
             scheduleScenarioPoll(2400, "exception_not_found_retry");
             return;
           }
-          updateScenarioScene(idx, {
+          applyScenarioVideoUiReset(idx, {
             videoStatus: "not_found",
             videoError: String(e?.message || e),
             videoJobId: String(toleratedMeta?.jobId || ""),
-            videoPanelActivated: false,
-          });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
+          }, "poll_exception_not_found");
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -7710,7 +7726,7 @@ const comfyShowVideoSection = Boolean(
     };
 
     scheduleScenarioPoll(250, "initial_after_start");
-  }, [clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
+  }, [applyScenarioVideoUiReset, clearActiveVideoJob, isScenarioVideoJobNotFound, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, stopScenarioVideoPolling, updateScenarioScene]);
 
   useEffect(() => () => {
     scenarioActivePollingJobIdsRef.current.clear();
@@ -7802,7 +7818,7 @@ const comfyShowVideoSection = Boolean(
         }
         const lastUpdatedAt = Number(meta?.updatedAt) || Number(meta?.startedAt) || 0;
         if (lastUpdatedAt > 0 && (Date.now() - lastUpdatedAt) > staleTimeoutMs) {
-          updateScenarioScene(idx, { videoStatus: "error", videoError: "video_job_stale_timeout" });
+          applyScenarioVideoUiReset(idx, { videoStatus: "error", videoError: "video_job_stale_timeout" }, "restore_stale_timeout");
           return;
         }
         nextPersisted[normalizedSceneId] = meta;
@@ -7836,7 +7852,7 @@ const comfyShowVideoSection = Boolean(
     } finally {
       restoredScenarioVideoJobsRef.current.add(restoreToken);
     }
-  }, [VIDEO_JOB_STORE_KEY, accountKey, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
+  }, [VIDEO_JOB_STORE_KEY, accountKey, applyScenarioVideoUiReset, persistActiveVideoJob, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const updateComfyScene = useCallback((idx, patch) => {
     if (!comfyNode?.id || idx < 0) return;
@@ -9365,6 +9381,24 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     }
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
     const applyFirstLastContinuityContract = imageStrategy === "first_last" && normalizedSlot === "end";
+    const continuityPlanRaw = targetScene?.firstLastPairContract || targetScene?.firstLastContinuityPlan || {};
+    const continuityPlan = continuityPlanRaw && typeof continuityPlanRaw === "object" ? continuityPlanRaw : {};
+    const continuityAllowedDelta = Array.isArray(continuityPlan?.allowedDelta)
+      ? continuityPlan.allowedDelta.map((item) => String(item || "").trim()).filter(Boolean)
+      : ["pose", "emotion", "distance", "interaction", "orientation"];
+    if (imageStrategy === "first_last") {
+      console.info("[FIRST_LAST PAIR CONTRACT]", {
+        sceneId,
+        startFramePromptPresent: Boolean(normalizeText(targetScene?.startFramePrompt || targetScene?.start_frame_prompt)),
+        endFramePromptPresent: Boolean(normalizeText(targetScene?.endFramePrompt || targetScene?.end_frame_prompt)),
+        sameIdentity: continuityPlan?.sameIdentity !== false,
+        sameWardrobe: continuityPlan?.sameWardrobe !== false,
+        sameLocation: continuityPlan?.sameLocation !== false,
+        sameLightFamily: continuityPlan?.sameLightFamily !== false,
+        sameCameraFamily: continuityPlan?.sameCameraFamily !== false,
+        allowedDelta: continuityAllowedDelta,
+      });
+    }
     const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}`.trim();
 
     setScenarioImageLoading(true);
@@ -9463,6 +9497,20 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           currentSceneStartImageUrl,
           willAttachFirstFrameReference: Boolean(firstFrameReferenceUrlForEnd),
         });
+        const sameWorldRequired = continuityPlan?.sameIdentity !== false
+          && continuityPlan?.sameWardrobe !== false
+          && continuityPlan?.sameLocation !== false
+          && continuityPlan?.sameLightFamily !== false
+          && continuityPlan?.sameCameraFamily !== false;
+        if (sameWorldRequired && !firstFrameReferenceUrlForEnd) {
+          console.warn("[FIRST_LAST END REFERENCE REQUIRED MISSING]", {
+            sceneId,
+            reason: "pair_contract_requires_same_world_but_firstFrameReferenceUrl_missing",
+            imageStrategy,
+            slot: normalizedSlot,
+            sameWorldRequired,
+          });
+        }
       }
       if (applyFirstLastContinuityContract) {
         console.info("[FIRST_LAST CONSISTENCY CONTRACT]", {
@@ -10580,7 +10628,7 @@ Aspect ratio: ${imageFormat}`,
         status: "done",
         provider: String(legacyOut?.provider || effectiveVideoProvider || ""),
       });
-      updateScenarioScene(targetSceneIndex, {
+      applyScenarioVideoUiReset(targetSceneIndex, {
         videoUrl: String(legacyOut.videoUrl || ""),
         mode: String(legacyOut.mode || ""),
         model: String(legacyOut.model || ""),
@@ -10589,25 +10637,22 @@ Aspect ratio: ${imageFormat}`,
         videoStatus: "done",
         videoError: "",
         videoJobId: "",
-        videoPanelActivated: false,
-      });
-      console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
+      }, "legacy_done");
       openNextSceneWithoutVideo(targetSceneIndex);
     } catch (e) {
       console.error(e);
       setScenarioVideoError(String(e?.message || e));
-      updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: false });
-      console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: false });
+      applyScenarioVideoUiReset(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e) }, "legacy_error");
     }
-  }, [openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
+  }, [applyScenarioVideoUiReset, openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
     const sceneId = String(scenarioSelected?.sceneId || "").trim();
     if (!sceneId) throw new Error("scene_id_required");
     clearActiveVideoJob(sceneId);
-    updateScenarioScene(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" });
-  }, [clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.sceneId, updateScenarioScene]);
+    applyScenarioVideoUiReset(scenarioEditor.selected, { videoUrl: "", videoStatus: "", videoError: "", videoJobId: "" }, "manual_clear_video");
+  }, [applyScenarioVideoUiReset, clearActiveVideoJob, scenarioEditor.selected, scenarioSelected?.sceneId]);
 
   const handleScenarioAddToVideo = useCallback(() => {
     const scrollToVideoBlock = (attemptsLeft = 3) => {
