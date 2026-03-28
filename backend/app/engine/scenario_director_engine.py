@@ -470,6 +470,7 @@ class ScenarioDirectorScene(BaseModel):
     video_prompt: str = ""
     start_frame_prompt: str = ""
     end_frame_prompt: str = ""
+    first_last_pair_contract: dict[str, Any] = Field(default_factory=dict)
     ltx_mode: str = "i2v"
     ltx_reason: str = ""
     start_frame_source: str = "new"
@@ -544,6 +545,7 @@ class ScenarioDirectorScene(BaseModel):
         self.video_prompt = str(self.video_prompt or "").strip()
         self.start_frame_prompt = str(self.start_frame_prompt or "").strip()
         self.end_frame_prompt = str(self.end_frame_prompt or "").strip()
+        self.first_last_pair_contract = dict(self.first_last_pair_contract or {})
         self.narration_mode = str(self.narration_mode or "full").strip() or "full"
         self.start_frame_source = _normalize_start_frame_source(self.start_frame_source, continuation=self.continuation_from_previous)
         self.needs_two_frames = _coerce_bool(self.needs_two_frames, False)
@@ -2431,10 +2433,12 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         support_entity_ids = [role for role in secondary_roles if role != "group" or group_narratively_required]
         start_frame_prompt = ""
         end_frame_prompt = ""
+        first_last_pair_contract: dict[str, Any] = {}
         if _scene_requires_explicit_first_last_prompts(scene):
             start_frame_prompt, end_frame_prompt = _derive_first_last_frame_prompts(scene, raw_scene)
             scene.start_frame_prompt = start_frame_prompt
             scene.end_frame_prompt = end_frame_prompt
+            first_last_pair_contract = dict(scene.first_last_pair_contract or _build_first_last_pair_contract(scene, raw_scene))
 
         scene_must_not_appear = ["character_1", "character_2", "character_3"] if is_environment_only_scene else []
         if is_environment_only_scene or not group_narratively_required:
@@ -2462,6 +2466,8 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "startFramePromptEn": start_frame_prompt,
             "endFramePromptRu": end_frame_prompt,
             "endFramePromptEn": end_frame_prompt,
+            "firstLastPairContract": first_last_pair_contract,
+            "firstLastContinuityPlan": first_last_pair_contract,
             "ltxMode": scene.ltx_mode,
             "whyThisMode": scene.ltx_reason,
             "renderMode": scene.render_mode,
@@ -2571,6 +2577,8 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "startFramePromptEn": start_frame_prompt,
                 "endFramePromptRu": end_frame_prompt,
                 "endFramePromptEn": end_frame_prompt,
+                "firstLastPairContract": first_last_pair_contract,
+                "firstLastContinuityPlan": first_last_pair_contract,
                 "ltxMode": scene.ltx_mode,
                 "whyThisMode": scene.ltx_reason,
                 "renderMode": scene.render_mode,
@@ -3493,6 +3501,48 @@ def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) ->
     return bool(scene.needs_two_frames) or render_mode in {"first_last", "first_last_sound"} or ltx_mode in {"f_l", "first_last"}
 
 
+def _build_first_last_pair_contract(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> dict[str, Any]:
+    source = raw_scene if isinstance(raw_scene, dict) else {}
+    existing = source.get("firstLastPairContract")
+    if not isinstance(existing, dict):
+        existing = source.get("first_last_pair_contract")
+    if not isinstance(existing, dict):
+        existing = source.get("firstLastContinuityPlan")
+    if not isinstance(existing, dict):
+        existing = source.get("first_last_continuity_plan")
+    existing = existing if isinstance(existing, dict) else {}
+    allowed_delta = existing.get("allowedDelta")
+    if not isinstance(allowed_delta, list):
+        allowed_delta = ["pose", "emotion", "distance", "interaction", "orientation"]
+    allowed_delta = [str(item).strip() for item in allowed_delta if str(item).strip()]
+    if not allowed_delta:
+        allowed_delta = ["pose", "emotion", "distance", "interaction", "orientation"]
+    return {
+        "sameIdentity": bool(existing.get("sameIdentity", True)),
+        "sameWardrobe": bool(existing.get("sameWardrobe", True)),
+        "sameLocation": bool(existing.get("sameLocation", True)),
+        "sameLightFamily": bool(existing.get("sameLightFamily", True)),
+        "sameCameraFamily": bool(existing.get("sameCameraFamily", True)),
+        "allowedDelta": allowed_delta,
+        "summary": "Frame A and Frame B are the same shot world; Frame B only evolves scene-state delta from Frame A.",
+        "mustStayFixed": [
+            "people_identity",
+            "wardrobe_accessories",
+            "hairstyle",
+            "location_architecture",
+            "time_weather_light_family",
+            "camera_family_framing_scale",
+        ],
+        "forbiddenChanges": [
+            "outfit_redesign",
+            "hairstyle_redesign",
+            "location_swap",
+            "new_background_world",
+            "new_people",
+        ],
+    }
+
+
 def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
     raw_scene = raw_scene if isinstance(raw_scene, dict) else {}
     explicit_start = str(
@@ -3507,6 +3557,7 @@ def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: di
         or scene.end_frame_prompt
         or ""
     ).strip()
+    pair_contract = _build_first_last_pair_contract(scene, raw_scene)
     continuity_contract = (
         "same people, same identity, same wardrobe and accessories, same hairstyle, same location, same weather/light family, same camera family and framing scale; "
         "no outfit redesign, no hairstyle redesign, no location swap, no extra people; "
@@ -3515,6 +3566,7 @@ def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: di
     if explicit_start and explicit_end:
         if continuity_contract.lower() not in explicit_end.lower():
             explicit_end = f"{explicit_end}. Continuity contract: {continuity_contract}.".strip()
+        scene.first_last_pair_contract = pair_contract
         return explicit_start, explicit_end
 
     base_opening = str(scene.frame_description or scene.scene_goal or scene.image_prompt or scene.video_prompt or "").strip()
@@ -3527,12 +3579,15 @@ def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: di
         explicit_start = base_opening
     if not explicit_end:
         explicit_end = (
-            f"{base_closing}. Final state after transition: {transition_semantics}".strip()
+            f"{base_closing}. Frame B is the evolved state of Frame A in the same exact scene world. Final state after transition: {transition_semantics}".strip()
             if base_closing
-            else f"Final visual state after transition: {transition_semantics}".strip()
+            else f"Frame B is the evolved state of Frame A in the same exact scene world. Final visual state after transition: {transition_semantics}".strip()
         )
+    if "frame b is the evolved state of frame a in the same exact scene world" not in explicit_end.lower():
+        explicit_end = f"{explicit_end}. Frame B is the evolved state of Frame A in the same exact scene world.".strip()
     if continuity_contract.lower() not in explicit_end.lower():
         explicit_end = f"{explicit_end}. Continuity contract: {continuity_contract}.".strip()
+    scene.first_last_pair_contract = pair_contract
 
     if explicit_start and explicit_end and explicit_start == explicit_end:
         explicit_end = f"{explicit_end} Keep it visually changed relative to the opening frame.".strip()
