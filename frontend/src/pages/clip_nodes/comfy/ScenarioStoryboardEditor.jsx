@@ -107,6 +107,30 @@ function isFirstLastScene(scene = {}) {
   return ["f_l", "first_last"].includes(ltxMode);
 }
 
+function resolveScenePreviewSources(scene = {}) {
+  const imageStrategy = String(scene?.imageStrategy || "").trim().toLowerCase() || "single";
+  const transitionType = String(scene?.transitionType || "").trim().toLowerCase();
+  const resolvedSinglePreviewSrc = String(resolveAssetUrl(scene?.imageUrl || "") || "").trim();
+  const resolvedStartPreviewSrc = String(resolveAssetUrl(
+    scene?.startImageUrl
+    || scene?.startFrameImageUrl
+    || scene?.startFramePreviewUrl
+    || scene?.imageUrl
+    || ""
+  ) || "").trim();
+  const resolvedEndPreviewSrc = String(resolveAssetUrl(
+    scene?.endImageUrl
+    || scene?.endFrameImageUrl
+    || scene?.endFramePreviewUrl
+    || ""
+  ) || "").trim();
+  const isContinuous = transitionType === "continuous" || imageStrategy === "continuation" || imageStrategy === "first_last";
+  const resolvedPreviewSrc = isContinuous
+    ? (resolvedStartPreviewSrc || resolvedEndPreviewSrc || resolvedSinglePreviewSrc)
+    : (resolvedSinglePreviewSrc || resolvedStartPreviewSrc || resolvedEndPreviewSrc);
+  return { resolvedPreviewSrc, resolvedSinglePreviewSrc, resolvedStartPreviewSrc, resolvedEndPreviewSrc };
+}
+
 function deriveFirstLastFramePrompts(scene = {}) {
   const startExplicit = String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || "").trim();
   const endExplicit = String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || "").trim();
@@ -246,15 +270,17 @@ export default function ScenarioStoryboardEditor({
       }
     }
     prevStoryboardRevisionRef.current = nextRevision;
-    console.debug("[SCENARIO EDITOR SYNC]", {
-      revisionChanged,
-      usingNewPackage: revisionChanged,
-      scenesCount: normalizedScenes.length,
-      preservedSelectedScene: hasSelectedScene,
-      selectionType: activeSelectionType,
-      selectionId: activeSelectionId,
-      isBgAudioSelected: isBgAudioSelectedNow,
-    });
+    if (CLIP_TRACE_SCENARIO_EDITOR_DEBUG) {
+      console.debug("[SCENARIO EDITOR SYNC]", {
+        revisionChanged,
+        usingNewPackage: revisionChanged,
+        scenesCount: normalizedScenes.length,
+        preservedSelectedScene: hasSelectedScene,
+        selectionType: activeSelectionType,
+        selectionId: activeSelectionId,
+        isBgAudioSelected: isBgAudioSelectedNow,
+      });
+    }
   }, [activeSelectionId, activeSelectionType, hasBgAudioAvailable, normalizedScenes, open, storyboardRevision, storyboardSignature]);
 
   useEffect(() => {
@@ -491,20 +517,10 @@ export default function ScenarioStoryboardEditor({
   const derivedFramePrompts = deriveFirstLastFramePrompts(selectedScene || {});
   const startFramePromptValue = String(selectedScene?.startFramePromptRu || selectedScene?.startFramePrompt || derivedFramePrompts.start || "");
   const endFramePromptValue = String(selectedScene?.endFramePromptRu || selectedScene?.endFramePrompt || derivedFramePrompts.end || "");
-  const sourceImageUrl = String(resolveAssetUrl(selectedScene?.imageUrl) || "").trim();
-  const startFrameSourceUrl = String(resolveAssetUrl(
-    selectedScene?.startImageUrl
-    || selectedScene?.startFrameImageUrl
-    || selectedScene?.startFramePreviewUrl
-    || selectedScene?.imageUrl
-    || ""
-  ) || "").trim();
-  const endFrameSourceUrl = String(resolveAssetUrl(
-    selectedScene?.endImageUrl
-    || selectedScene?.endFrameImageUrl
-    || selectedScene?.endFramePreviewUrl
-    || ""
-  ) || "").trim();
+  const previewSources = resolveScenePreviewSources(selectedScene || {});
+  const sourceImageUrl = previewSources.resolvedPreviewSrc;
+  const startFrameSourceUrl = previewSources.resolvedStartPreviewSrc;
+  const endFrameSourceUrl = previewSources.resolvedEndPreviewSrc;
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
   const hasSceneVideo = Boolean(sceneVideoUrl);
   const sceneAudioSliceUrl = String(selectedScene?.audioSliceUrl || selectedScene?.extractedAudioUrl || "").trim();
@@ -542,6 +558,7 @@ export default function ScenarioStoryboardEditor({
   const hasBgMusic = Boolean(String(safeAudioData?.musicUrl || "").trim());
 
   useEffect(() => {
+    if (!CLIP_TRACE_SCENARIO_EDITOR_DEBUG) return;
     console.debug("[SCENARIO EDITOR PREVIEW SRC FINAL]", {
       sceneId: selectedSceneId,
       single: sourceImageUrl,
