@@ -4047,17 +4047,86 @@ def _detect_world_scale_context(*, text: str, scenes: list[dict], session_world_
             " ".join(str((s or {}).get("visualPrompt") or "") for s in scenes[:4]),
         ]
     ).lower()
-    if any(k in tokens for k in ["planet", "spaceship", "starship", "cosmic", "orbit", "galaxy", "space"]):
-        return "space_scale"
-    if any(k in tokens for k in ["tiny human", "tiny person", "insect", "ant", "beetle", "spider", "ladybug", "blade of grass", "macro world", "micro"]):
-        return "micro_world"
-    if any(k in tokens for k in ["dragon", "hydra", "myth", "mythic", "leviathan", "behemoth"]):
-        return "mythic_world"
-    if any(k in tokens for k in ["giant", "towering", "colossal", "titan", "kaiju", "monster", "beast", "colossus", "mech", "giant creature", "massive creature"]):
-        return "hero_vs_giant"
-    if any(k in tokens for k in ["horse", "elephant", "predator", "beast", "wolf", "animal"]):
-        return "animal_scale"
-    return "human_world"
+    signals = {
+        "space_scale": [r"\bplanet\b", r"\bspaceship\b", r"\bstarship\b", r"\bcosmic\b", r"\borbit\b", r"\bgalaxy\b", r"\bspace\b"],
+        "micro_world": [
+            r"\btiny human\b",
+            r"\btiny person\b",
+            r"\binsect\b",
+            r"\bants?\b",
+            r"\bbeetle\b",
+            r"\bspider\b",
+            r"\bladybug\b",
+            r"\bblade of grass\b",
+            r"\bmacro world\b",
+            r"\bmicro(world|scape)?\b",
+            r"\bminiature\b",
+            r"\bmicroscopic\b",
+            r"\bdollhouse\b",
+            r"\bant[-\s]?size\b",
+        ],
+        "mythic_world": [r"\bdragon\b", r"\bhydra\b", r"\bmyth\b", r"\bmythic\b", r"\bleviathan\b", r"\bbehemoth\b"],
+        "hero_vs_giant": [r"\bgiant\b", r"\btowering\b", r"\bcolossal\b", r"\btitan\b", r"\bkaiju\b", r"\bmonster\b", r"\bbeast\b", r"\bcolossus\b", r"\bmech\b", r"\bgiant creature\b", r"\bmassive creature\b"],
+        "animal_scale": [r"\bhorse\b", r"\belephant\b", r"\bpredator\b", r"\bbeast\b", r"\bwolf\b", r"\banimal\b"],
+    }
+    triggered = {ctx: [pattern for pattern in patterns if re.search(pattern, tokens)] for ctx, patterns in signals.items()}
+
+    human_role_keys = {"character_1", "character_2", "character_3"}
+    has_active_human_roles = False
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            continue
+        role_tokens = []
+        role_tokens.extend(scene.get("sceneActiveRoles") or [])
+        role_tokens.extend(scene.get("secondaryRoles") or [])
+        role_tokens.append(scene.get("primaryRole"))
+        for role in role_tokens:
+            if str(role or "").strip().lower() in human_role_keys:
+                has_active_human_roles = True
+                break
+        if has_active_human_roles:
+            break
+
+    explicit_non_human_signals = bool(
+        triggered["space_scale"] or triggered["mythic_world"] or triggered["hero_vs_giant"] or triggered["animal_scale"]
+    )
+    fallback_to_human_world = bool(has_active_human_roles and not triggered["micro_world"] and not explicit_non_human_signals)
+    if triggered["space_scale"]:
+        context = "space_scale"
+        reason = "space_signal"
+    elif triggered["micro_world"] and not fallback_to_human_world:
+        context = "micro_world"
+        reason = "micro_signal"
+    elif triggered["mythic_world"]:
+        context = "mythic_world"
+        reason = "mythic_signal"
+    elif triggered["hero_vs_giant"]:
+        context = "hero_vs_giant"
+        reason = "hero_vs_giant_signal"
+    elif triggered["animal_scale"]:
+        context = "animal_scale"
+        reason = "animal_signal"
+    else:
+        context = "human_world"
+        reason = "default_human_world"
+    if fallback_to_human_world:
+        context = "human_world"
+        reason = "human_roles_fallback"
+
+    print(
+        "[WORLD SCALE DEBUG] "
+        + json.dumps(
+            {
+                "chosenContext": context,
+                "reason": reason,
+                "triggeredSignals": {k: v for k, v in triggered.items() if v},
+                "hasActiveHumanRoles": has_active_human_roles,
+                "humanWorldFallbackApplied": bool(fallback_to_human_world and reason in {"default_human_world", "human_roles_fallback"}),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return context
 
 
 def _default_entity_scale_anchors(context: str) -> dict[str, float]:
