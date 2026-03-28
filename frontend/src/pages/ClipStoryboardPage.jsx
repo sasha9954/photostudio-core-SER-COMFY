@@ -9328,6 +9328,25 @@ Aspect ratio: ${imageFormat}`,
     await handleScenarioTakeAudioByIndex(scenarioEditor.selected);
   }, [handleScenarioTakeAudioByIndex, scenarioEditor.selected, scenarioSelected]);
 
+  const handleScenarioEditorExtractSceneAudio = useCallback(async (nodeId, sceneId) => {
+    const normalizedSceneId = String(sceneId || "").trim();
+    if (!normalizedSceneId) throw new Error("scene_id_required");
+    const sourceNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
+    const rawScenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : [];
+    const normalizedScenes = normalizeSceneCollectionWithSceneId(rawScenes, "scene");
+    const sceneIndex = resolveScenarioSceneIndex(normalizedSceneId, normalizedScenes);
+    if (sceneIndex < 0) throw new Error(`scene_not_found:${normalizedSceneId}`);
+    await handleScenarioTakeAudioByIndex(sceneIndex);
+    const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
+    const refreshedScenes = normalizeSceneCollectionWithSceneId(Array.isArray(refreshedNode?.data?.scenes) ? refreshedNode.data.scenes : [], "scene");
+    const refreshedScene = refreshedScenes[sceneIndex] || null;
+    return {
+      audioSliceUrl: String(refreshedScene?.audioSliceUrl || "").trim(),
+      audioSliceDurationSec: normalizeDurationSec(refreshedScene?.audioSliceDurationSec ?? refreshedScene?.audioSliceActualDurationSec ?? refreshedScene?.audioSliceExpectedDurationSec),
+      audioSliceStatus: String(refreshedScene?.audioSliceStatus || "").trim(),
+    };
+  }, [handleScenarioTakeAudioByIndex, resolveScenarioSceneIndex]);
+
   const handleScenarioSliceLoadedMetadata = useCallback((event) => {
     if (!scenarioSelected) return;
     const mediaEl = event?.currentTarget || event?.target || null;
@@ -9387,6 +9406,7 @@ Aspect ratio: ${imageFormat}`,
         targetSceneIndex,
         selectedSceneId: String(targetScene?.sceneId || ""),
         resolvedSceneFound: !!targetScene,
+        selectedTab: String(options?.selectedTab || options?.activeTab || ""),
       });
     }
     if (!targetScene) return;
@@ -9515,6 +9535,11 @@ Aspect ratio: ${imageFormat}`,
     })));
     try {
       const endpoint = "/api/clip/video/start";
+      console.debug("[SCENARIO VIDEO SEND ROUTE]", {
+        route: endpoint,
+        sceneId,
+        selectedTab: String(options?.selectedTab || options?.activeTab || ""),
+      });
       const transitionActionPrompt = [
         continuityBridgePrompt,
         getSceneTransitionPrompt(targetScene),
@@ -9689,6 +9714,12 @@ Aspect ratio: ${imageFormat}`,
       const legacyOut = await fetchJson("/api/clip/video", {
         method: "POST",
         body: legacyPayload,
+      });
+      console.debug("[SCENARIO VIDEO SEND ROUTE]", {
+        route: "/api/clip/video",
+        sceneId,
+        fallback: true,
+        selectedTab: String(options?.selectedTab || options?.activeTab || ""),
       });
       if (!legacyOut?.ok || !legacyOut?.videoUrl) throw new Error(legacyOut?.hint || legacyOut?.code || "video_generation_failed");
       updateScenarioScene(targetSceneIndex, {
@@ -15386,6 +15417,7 @@ const hydrate = useCallback((source = "unknown") => {
         onGenerateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneGenerate}
         onUpdateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicUpdate}
         onGenerateMusic={activeScenarioStoryboardNode?.data?.onScenarioMusicGenerate}
+        onExtractSceneAudio={handleScenarioEditorExtractSceneAudio}
       />
 
       {comfyEditor.open ? (
