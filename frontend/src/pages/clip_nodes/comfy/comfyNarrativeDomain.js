@@ -29,7 +29,7 @@ export const NARRATIVE_CONTENT_TYPE_REGISTRY = [
     supportsLipSync: true,
     supportsAudioSlices: true,
     prefersPerformanceCloseup: true,
-    defaultLtxStrategy: "image-video",
+    defaultLtxStrategy: "i2v",
     summaryStyle: "beat_driven",
     notesRu: "Клип опирается на master audio и не требует synthetic global music prompt.",
   },
@@ -664,8 +664,12 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     ...audioContextRaw,
     audioDurationSec: effectiveAudioDurationSec,
   };
+  const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
+  const isMusicVideo = safeContentType === "music_video";
   const preferAudioOverText = audioContext.hasAudioSource;
-  const segmentationMode = audioContext.hasAudioSource ? "phrase-first" : "default";
+  const segmentationMode = isMusicVideo
+    ? (audioContext.hasAudioSource ? "performance_arc_audio_timed" : "performance_arc_default")
+    : (audioContext.hasAudioSource ? "phrase-first" : "default");
   const timelineSource = audioContext.hasAudioSource ? "audio" : "text";
   const useAudioPhraseBoundaries = audioContext.hasAudioSource;
   const contextRefs = {
@@ -686,8 +690,6 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     ? String(state.format).trim()
     : "9:16";
 
-  const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
-  const isMusicVideo = safeContentType === "music_video";
   const payload = {
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
@@ -726,9 +728,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       timelineSource,
       useAudioPhraseBoundaries,
       clipModeCanon: isMusicVideo ? "visual_performance_arc_v1" : "",
-      clipTargetFormula: isMusicVideo ? { lip_sync_music: 2, first_last: 2, i2v: 4 } : undefined,
+      clipTargetFormula: isMusicVideo ? { lip_sync_music: 2, f_l: 2, i2v: 4 } : undefined,
       storyConstructionMode: isMusicVideo ? "performance_arc" : "narrative_arc",
-      literalLyricSceneMode: !isMusicVideo,
+      literalLyricSceneMode: isMusicVideo ? false : true,
       firstLastRequiresVisualDelta: isMusicVideo,
       musicLipSyncRequiresMusicAndVocal: isMusicVideo,
       soundDialogueWorkflowsDisabledInClip: isMusicVideo,
@@ -877,7 +879,10 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
       ltxMode,
       whyThisMode: normalizeText(scene.ltx_reason),
       renderMode: normalizeText(scene.render_mode ?? scene.renderMode) || "image_video",
-      resolvedWorkflowKey: normalizeText(scene.resolved_workflow_key ?? scene.resolvedWorkflowKey) || "image-video",
+      resolvedWorkflowKey: normalizeText(scene.resolved_workflow_key ?? scene.resolvedWorkflowKey) || "i2v",
+      resolvedWorkflowFile: normalizeText(scene.resolved_workflow_file ?? scene.resolvedWorkflowFile),
+      audioSliceKind: normalizeText(scene.audio_slice_kind ?? scene.audioSliceKind),
+      musicVocalLipSyncAllowed: Boolean(scene.music_vocal_lipsync_allowed ?? scene.musicVocalLipSyncAllowed),
       scenePurpose: normalizeText(scene.scene_purpose ?? scene.scenePurpose),
       viewerHook: normalizeText(scene.viewer_hook ?? scene.viewerHook),
       startFrameSource: normalizeText(scene.start_frame_source) || "new",
@@ -1147,7 +1152,28 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         storyboardScene?.resolved_workflow_key,
         responseScene?.resolvedWorkflowKey,
         responseScene?.resolved_workflow_key
-      ) || "image-video",
+      ) || "i2v",
+      resolvedWorkflowFile: firstNonEmptyText(
+        directorScene?.resolvedWorkflowFile,
+        storyboardScene?.resolvedWorkflowFile,
+        storyboardScene?.resolved_workflow_file,
+        responseScene?.resolvedWorkflowFile,
+        responseScene?.resolved_workflow_file
+      ),
+      audioSliceKind: firstNonEmptyText(
+        directorScene?.audioSliceKind,
+        storyboardScene?.audioSliceKind,
+        storyboardScene?.audio_slice_kind,
+        responseScene?.audioSliceKind,
+        responseScene?.audio_slice_kind
+      ),
+      musicVocalLipSyncAllowed: Boolean(
+        directorScene?.musicVocalLipSyncAllowed
+        ?? storyboardScene?.musicVocalLipSyncAllowed
+        ?? storyboardScene?.music_vocal_lipsync_allowed
+        ?? responseScene?.musicVocalLipSyncAllowed
+        ?? responseScene?.music_vocal_lipsync_allowed
+      ),
       lipSync: Boolean(directorScene?.lipSync ?? storyboardScene?.lipSync ?? storyboardScene?.lip_sync ?? responseScene?.lipSync ?? responseScene?.lip_sync),
       lipSyncText: firstNonEmptyText(directorScene?.lipSyncText, storyboardScene?.lipSyncText, storyboardScene?.lip_sync_text, responseScene?.lipSyncText, responseScene?.lip_sync_text),
       sendAudioToGenerator: Boolean(
