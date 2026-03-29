@@ -10753,7 +10753,17 @@ Aspect ratio: ${imageFormat}`,
         });
       }
 
-      if (out?.ok && out?.jobId) {
+      if (out?.jobId) {
+        if (!out?.ok) {
+          console.warn("[SCENARIO VIDEO JOB]", {
+            stage: "start_response_has_job_but_not_ok",
+            sceneId,
+            jobId: String(out?.jobId || ""),
+            code: String(out?.code || ""),
+            hint: String(out?.hint || ""),
+            message: String(out?.error || out?.message || ""),
+          });
+        }
         console.info("[SCENARIO VIDEO JOB]", {
           stage: "queued",
           sceneId,
