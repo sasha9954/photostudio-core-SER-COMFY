@@ -5039,43 +5039,85 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             pending.insert(0, (right_data, split_idx + 1))
             pending.insert(0, (left_data, split_idx + 1))
         next_scenes.extend(scene_chunks)
-    phrase_rows: list[dict[str, Any]] = []
+    precise_phrase_rows: list[dict[str, Any]] = []
+    fallback_phrase_rows: list[dict[str, Any]] = []
     pause_windows: list[dict[str, float]] = []
-    phrase_seen: set[tuple[float, float, str]] = set()
+    precise_phrase_seen: set[tuple[float, float, str]] = set()
+    fallback_phrase_seen: set[tuple[float, float, str]] = set()
+    pause_seen: set[tuple[float, float]] = set()
 
-    def _push_phrase_row(start_value: Any, end_value: Any, text_value: Any, source: str) -> None:
+    def _push_phrase_row(
+        start_value: Any,
+        end_value: Any,
+        text_value: Any,
+        source: str,
+        target_rows: list[dict[str, Any]],
+        target_seen: set[tuple[float, float, str]],
+    ) -> None:
         start_sec = round(_safe_float(start_value, -1.0), 3)
         end_sec = round(_safe_float(end_value, -1.0), 3)
         if start_sec < 0 or end_sec <= start_sec:
             return
         text = str(text_value or "").strip()
         key = (start_sec, end_sec, text)
-        if key in phrase_seen:
+        if key in target_seen:
             return
-        phrase_seen.add(key)
-        phrase_rows.append({"start": start_sec, "end": end_sec, "text": text, "source": source})
+        target_seen.add(key)
+        target_rows.append({"start": start_sec, "end": end_sec, "text": text, "source": source})
+
+    def _push_pause_window(start_value: Any, end_value: Any, source: str) -> None:
+        p_start = round(_safe_float(start_value, -1.0), 3)
+        p_end = round(_safe_float(end_value, p_start), 3)
+        if p_start < 0 or p_end <= p_start:
+            return
+        key = (p_start, p_end)
+        if key in pause_seen:
+            return
+        pause_seen.add(key)
+        pause_windows.append({"start": p_start, "end": p_end, "source": source})
 
     single_call_payload = (payload or {}).get("_single_call_payload") if isinstance((payload or {}).get("_single_call_payload"), dict) else {}
     for container, source_name in ((single_call_payload, "single_call"), (payload if isinstance(payload, dict) else {}, "payload")):
         for row in (container.get("transcript") or []):
             if isinstance(row, dict):
-                _push_phrase_row(row.get("t0") if row.get("t0") is not None else row.get("start"), row.get("t1") if row.get("t1") is not None else row.get("end"), row.get("text"), source_name)
+                _push_phrase_row(
+                    row.get("t0") if row.get("t0") is not None else row.get("start"),
+                    row.get("t1") if row.get("t1") is not None else row.get("end"),
+                    row.get("text"),
+                    source_name,
+                    precise_phrase_rows,
+                    precise_phrase_seen,
+                )
         for row in (container.get("semanticTimeline") or []):
             if isinstance(row, dict):
-                _push_phrase_row(row.get("t0") if row.get("t0") is not None else row.get("startSec"), row.get("t1") if row.get("t1") is not None else row.get("endSec"), row.get("text"), f"{source_name}_semantic")
+                _push_phrase_row(
+                    row.get("t0") if row.get("t0") is not None else row.get("startSec"),
+                    row.get("t1") if row.get("t1") is not None else row.get("endSec"),
+                    row.get("text"),
+                    f"{source_name}_semantic",
+                    fallback_phrase_rows,
+                    fallback_phrase_seen,
+                )
+        for pause in (((container.get("audioStructure") or {}).get("pauses")) or []):
+            if isinstance(pause, dict):
+                _push_pause_window(pause.get("start"), pause.get("end"), f"{source_name}_audio_structure")
 
     for phrase in (audio_analysis.get("phrases") or []):
         if isinstance(phrase, dict):
-            _push_phrase_row(phrase.get("start"), phrase.get("end"), phrase.get("text"), "audio_analysis")
+            _push_phrase_row(
+                phrase.get("start"),
+                phrase.get("end"),
+                phrase.get("text"),
+                "audio_analysis",
+                precise_phrase_rows,
+                precise_phrase_seen,
+            )
     for pause in (audio_analysis.get("pauseWindows") or []):
-        if not isinstance(pause, dict):
-            continue
-        p_start = round(_safe_float(pause.get("start"), -1.0), 3)
-        p_end = round(_safe_float(pause.get("end"), p_start), 3)
-        if p_start >= 0 and p_end > p_start:
-            pause_windows.append({"start": p_start, "end": p_end})
+        if isinstance(pause, dict):
+            _push_pause_window(pause.get("start"), pause.get("end"), "audio_analysis")
 
-    phrase_rows.sort(key=lambda row: (float(row.get("start") or 0.0), float(row.get("end") or 0.0)))
+    precise_phrase_rows.sort(key=lambda row: (float(row.get("start") or 0.0), float(row.get("end") or 0.0)))
+    fallback_phrase_rows.sort(key=lambda row: (float(row.get("start") or 0.0), float(row.get("end") or 0.0)))
     pause_windows.sort(key=lambda row: (float(row.get("start") or 0.0), float(row.get("end") or 0.0)))
 
     def _adaptive_safe_gap(gap_to_next: float) -> float:
@@ -5086,10 +5128,11 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         return min(0.18, max(0.1, gap_to_next * 0.35))
 
     def _pick_scene_anchor_phrase(scene_start: float, scene_end: float) -> dict[str, Any] | None:
-        if not phrase_rows:
+        candidate_rows = precise_phrase_rows or fallback_phrase_rows
+        if not candidate_rows:
             return None
         overlaps: list[tuple[float, dict[str, Any]]] = []
-        for row in phrase_rows:
+        for row in candidate_rows:
             p_start = _safe_float(row.get("start"), 0.0)
             p_end = _safe_float(row.get("end"), p_start)
             overlap = max(0.0, min(scene_end, p_end) - max(scene_start, p_start))
@@ -5099,11 +5142,12 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             overlaps.sort(key=lambda item: item[0], reverse=True)
             return overlaps[0][1]
         scene_mid = (scene_start + scene_end) / 2.0
-        return min(phrase_rows, key=lambda row: abs(_safe_float(row.get("start"), 0.0) - scene_mid))
+        return min(candidate_rows, key=lambda row: abs(_safe_float(row.get("start"), 0.0) - scene_mid))
 
     def _phrase_text_for_window(window_start: float, window_end: float) -> str | None:
+        source_rows = precise_phrase_rows or fallback_phrase_rows
         matched: list[str] = []
-        for row in phrase_rows:
+        for row in source_rows:
             text = str(row.get("text") or "").strip()
             if not text:
                 continue
@@ -5124,7 +5168,8 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         chosen_phrase_end = max(chosen_phrase_start, _safe_float((anchor_phrase or {}).get("end"), scene_end))
         previous_phrase_end = None
         next_phrase_start = None
-        for row in phrase_rows:
+        anchor_source_used = "precise" if precise_phrase_rows else ("semantic_fallback" if fallback_phrase_rows else "none")
+        for row in (precise_phrase_rows or fallback_phrase_rows):
             p_start = _safe_float(row.get("start"), -1.0)
             p_end = _safe_float(row.get("end"), -1.0)
             if p_end <= chosen_phrase_start:
@@ -5134,9 +5179,12 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 break
         gap_before = chosen_phrase_start - previous_phrase_end if previous_phrase_end is not None else 0.2
         preroll = min(0.12, max(0.03, gap_before * 0.35))
-        aligned_start = round(max(0.0, min(scene_start, chosen_phrase_start - preroll)), 3)
+        aligned_start = round(max(0.0, min(scene_start, chosen_phrase_start - preroll, chosen_phrase_start)), 3)
+        if aligned_start > chosen_phrase_start:
+            aligned_start = round(max(0.0, chosen_phrase_start - preroll), 3)
 
         pause_boundary = None
+        pause_boundary_source = "none"
         safe_gap_used = 0.0
         aligned_end = scene_end
         if next_phrase_start is not None:
@@ -5147,6 +5195,7 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
                 p_end = _safe_float(pause.get("end"), p_start)
                 if p_start >= chosen_phrase_end and p_end <= next_phrase_start and p_end > p_start:
                     pause_boundary = round((p_start + p_end) / 2.0, 3)
+                    pause_boundary_source = str(pause.get("source") or "unknown")
                     break
             phrase_end_boundary = round(chosen_phrase_end, 3)
             next_phrase_guard = round(max(aligned_start, next_phrase_start - safe_gap_used), 3)
@@ -5174,8 +5223,11 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
         chunk.audio_slice_end_sec = aligned_end
         chunk.audio_slice_expected_duration_sec = round(max(0.0, aligned_end - aligned_start), 3)
         logger.info(
-            "[SCENARIO AUDIO ALIGN] sceneId=%s original=[%.3f,%.3f] phraseStart=%.3f phraseEnd=%.3f nextPhraseStart=%s aligned=[%.3f,%.3f] pauseBoundary=%s safeGap=%.3f",
+            "[SCENARIO AUDIO ALIGN] sceneId=%s sourceUsedForAnchor=%s precisePhraseCount=%s fallbackPhraseCount=%s original=[%.3f,%.3f] chosenPhraseStart=%.3f chosenPhraseEnd=%.3f nextPrecisePhraseStart=%s alignedStart=%.3f alignedEnd=%.3f pauseBoundary=%s pauseBoundarySource=%s safeGap=%.3f",
             chunk.scene_id,
+            anchor_source_used,
+            len(precise_phrase_rows),
+            len(fallback_phrase_rows),
             scene_start,
             scene_end,
             chosen_phrase_start,
@@ -5184,22 +5236,39 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             aligned_start,
             aligned_end,
             f"{pause_boundary:.3f}" if pause_boundary is not None else "none",
+            pause_boundary_source,
             safe_gap_used,
         )
         logger.info(
-            "[SCENARIO PHRASE WINDOW] sceneId=%s finalWindow=[%.3f,%.3f] finalLocalPhrase=%s sourcePhrase=%s",
+            "[SCENARIO PHRASE WINDOW] sceneId=%s sourceUsedForAnchor=%s precisePhraseCount=%s fallbackPhraseCount=%s chosenPhraseStart=%.3f chosenPhraseEnd=%.3f nextPrecisePhraseStart=%s finalWindow=[%.3f,%.3f] finalLocalPhrase=%s sourcePhrase=%s",
             chunk.scene_id,
+            anchor_source_used,
+            len(precise_phrase_rows),
+            len(fallback_phrase_rows),
+            chosen_phrase_start,
+            chosen_phrase_end,
+            f"{next_phrase_start:.3f}" if next_phrase_start is not None else "none",
             aligned_start,
             aligned_end,
             str(chunk.local_phrase or ""),
             str((anchor_phrase or {}).get("source") or "none"),
         )
         logger.info(
-            "[SCENARIO AUDIO SLICE FINAL] sceneId=%s audioSlice=[%.3f,%.3f] expected=%.3f sceneIndex=%s",
+            "[SCENARIO AUDIO SLICE FINAL] sceneId=%s sourceUsedForAnchor=%s precisePhraseCount=%s fallbackPhraseCount=%s chosenPhraseStart=%.3f chosenPhraseEnd=%.3f nextPrecisePhraseStart=%s pauseBoundarySource=%s alignedStart=%.3f alignedEnd=%.3f audioSlice=[%.3f,%.3f] expected=%.3f finalLocalPhrase=%s sceneIndex=%s",
             chunk.scene_id,
+            anchor_source_used,
+            len(precise_phrase_rows),
+            len(fallback_phrase_rows),
+            chosen_phrase_start,
+            chosen_phrase_end,
+            f"{next_phrase_start:.3f}" if next_phrase_start is not None else "none",
+            pause_boundary_source,
+            aligned_start,
+            aligned_end,
             chunk.audio_slice_start_sec,
             chunk.audio_slice_end_sec,
             chunk.audio_slice_expected_duration_sec,
+            str(chunk.local_phrase or ""),
             idx,
         )
 
