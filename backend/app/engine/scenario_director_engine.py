@@ -3437,55 +3437,204 @@ def _build_music_video_viewer_hook(scene: ScenarioDirectorScene, purpose: str, s
     return f"Keep the clip breathing through contrast in scale, distance, and motion within this {shot_label} beat.{action_tail}".strip()
 
 
-def _build_music_video_image_prompt(scene: ScenarioDirectorScene) -> str:
-    actors = ", ".join(str(actor).replace("_", " ") for actor in (scene.actors or [])[:2] if str(actor).strip())
+def _strip_ltx_meta_noise(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    banned_fragments = (
+        "Scene intent in time",
+        "Transition cue",
+        "First→last transition",
+        "Temporal feel",
+        "Treat the motion as an edit pivot",
+        "DUET IDENTITY CONTRACT",
+        "Preserve slot",
+        "Continuity contract",
+    )
+    lines = [segment.strip() for segment in re.split(r"[\n\r]+", cleaned) if segment.strip()]
+    filtered = [line for line in lines if not any(fragment.lower() in line.lower() for fragment in banned_fragments)]
+    return " ".join(filtered).strip()
+
+
+def _join_visible_prompt_parts(parts: list[str]) -> str:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_part in parts:
+        part = _strip_ltx_meta_noise(raw_part)
+        if not part:
+            continue
+        normalized = re.sub(r"\s+", " ", part).strip(" .;,:").lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        final_part = part if part[-1:] in ".!?" else f"{part}."
+        result.append(final_part)
+    return " ".join(result).strip()
+
+
+def _is_duet_scene(scene: ScenarioDirectorScene) -> bool:
+    roles = {str(actor).strip().lower() for actor in (scene.actors or []) if str(actor).strip()}
+    return "character_1" in roles and "character_2" in roles
+
+
+def _build_duet_visible_hint(scene: ScenarioDirectorScene) -> str:
+    if not _is_duet_scene(scene):
+        return ""
+    shot_type = str(scene.shot_type or "").strip().lower()
+    render_mode = str(scene.render_mode or "").strip().lower()
+    first_last = render_mode in {"first_last", "first_last_sound"} or bool(scene.needs_two_frames)
+    if shot_type == "close_up" or first_last:
+        return "Two distinct women stay clearly separated; one reads more 3/4, the other closer to profile, avoiding symmetric overlap"
+    return "Two distinct women with different faces and hair stay readable in one frame"
+
+
+def _build_props_visible_hint(scene: ScenarioDirectorScene) -> str:
+    props = [str(prop).strip() for prop in (scene.props or []) if str(prop).strip()]
+    if not props:
+        return ""
+    anchors = props[:2]
+    return f"Visual anchors: {', '.join(anchors)}"
+
+
+def build_ltx_visible_image_prompt(scene: ScenarioDirectorScene) -> str:
     lead = str(scene.frame_description or scene.scene_goal or "").strip()
+    action = str(scene.action_in_frame or "").strip()
     location = str(scene.location or "").strip()
     emotion = str(scene.emotion or "").strip()
-    visual_anchor = ", ".join(str(prop).strip() for prop in (scene.props or [])[:2] if str(prop).strip())
     parts: list[str] = []
     if lead:
         parts.append(lead)
-    if actors:
-        parts.append(f"Primary subjects: {actors}.")
-    if location:
-        parts.append(f"Location: {location}.")
+    if action and action.lower() not in lead.lower():
+        parts.append(action)
+    duet_hint = _build_duet_visible_hint(scene)
+    if duet_hint:
+        parts.append(duet_hint)
+    props_hint = _build_props_visible_hint(scene)
+    if props_hint:
+        parts.append(props_hint)
+    if location or emotion:
+        atmosphere = ", ".join(value for value in (location, emotion) if value)
+        parts.append(f"Atmosphere: {atmosphere}")
+    return _join_visible_prompt_parts(parts)
+
+
+def _build_scene_driven_end_state_delta(scene: ScenarioDirectorScene) -> str:
+    scene_text = " ".join(
+        str(value or "")
+        for value in (
+            scene.scene_goal,
+            scene.frame_description,
+            scene.action_in_frame,
+            scene.camera,
+            scene.emotion,
+            scene.transition_type,
+            scene.shot_type,
+        )
+    ).lower()
+    scene_cues: list[tuple[tuple[str, ...], str]] = [
+        (("whisper", "secret", "ear"), "By the end, they lean closer, head angle shifts, and a soft private smile appears"),
+        (("laugh", "smile", "giggle"), "By the end, laughter opens the posture and gaze, with livelier shoulder movement"),
+        (("twirl", "turn", "spin"), "By the end, the turn opens into a wider motion arc with changed gaze direction"),
+        (("intimate", "tender", "pause"), "By the end, emotional distance closes with subtler eye-line and head-angle changes"),
+        (("approach", "closer", "lean in"), "By the end, body distance is reduced and mutual orientation becomes stronger"),
+    ]
+    for keys, delta in scene_cues:
+        if any(key in scene_text for key in keys):
+            return delta
+    if "close_up" in scene_text:
+        return "By the end, micro-expression shifts and eye-line changes are clearly visible"
+    if "wide" in scene_text:
+        return "By the end, spacing and blocking shift into a visibly different frame geometry"
+    return "By the end, pose, gaze, and interpersonal distance visibly evolve into a new state"
+
+
+def _normalize_prompt_tokens(text: str) -> set[str]:
+    normalized = re.sub(r"[^a-z0-9а-яё\s]", " ", str(text or "").lower())
+    tokens = [token for token in normalized.split() if len(token) > 2]
+    return set(tokens)
+
+
+def _has_visual_change_cues(text: str) -> bool:
+    lowered = str(text or "").lower()
+    cues = (
+        "closer",
+        "leans",
+        "lean",
+        "turns",
+        "turned",
+        "smile",
+        "smiles",
+        "opens up",
+        "gaze shifts",
+        "distance",
+        "framing tightens",
+        "by the end",
+        "final state",
+        "крупнее",
+        "поворач",
+        "улыб",
+        "ближе",
+        "в финале",
+    )
+    return any(cue in lowered for cue in cues)
+
+
+def _ensure_first_last_visual_delta(start_prompt: str, end_prompt: str, scene: ScenarioDirectorScene) -> str:
+    start_clean = _strip_ltx_meta_noise(start_prompt)
+    end_clean = _strip_ltx_meta_noise(end_prompt)
+    if not start_clean:
+        return end_clean
+    start_norm = re.sub(r"\s+", " ", start_clean).strip().lower()
+    end_norm = re.sub(r"\s+", " ", end_clean).strip().lower()
+    if not end_clean:
+        return _join_visible_prompt_parts([start_clean, _build_scene_driven_end_state_delta(scene)])
+
+    start_tokens = _normalize_prompt_tokens(start_norm)
+    end_tokens = _normalize_prompt_tokens(end_norm)
+    overlap = len(start_tokens & end_tokens) / max(1, min(len(start_tokens), len(end_tokens)))
+    contains = start_norm in end_norm or end_norm in start_norm
+    too_similar = start_norm == end_norm or contains or overlap >= 0.82
+    lacks_delta = not _has_visual_change_cues(end_norm)
+    if too_similar or lacks_delta:
+        return _join_visible_prompt_parts([end_clean, _build_scene_driven_end_state_delta(scene)])
+    return end_clean
+
+
+def build_ltx_visible_first_last_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
+    raw_scene = raw_scene if isinstance(raw_scene, dict) else {}
+    explicit_start = str(raw_scene.get("startFramePrompt") or raw_scene.get("start_frame_prompt") or scene.start_frame_prompt or "").strip()
+    explicit_end = str(raw_scene.get("endFramePrompt") or raw_scene.get("end_frame_prompt") or scene.end_frame_prompt or "").strip()
+
+    base_start = explicit_start or str(scene.frame_description or scene.scene_goal or scene.image_prompt or "").strip()
+    base_end = explicit_end or str(scene.scene_goal or scene.action_in_frame or scene.frame_description or "").strip()
+    start_prompt = _join_visible_prompt_parts([base_start, _build_duet_visible_hint(scene) if _is_duet_scene(scene) else ""])
+    end_prompt = _join_visible_prompt_parts([base_end, _build_duet_visible_hint(scene) if _is_duet_scene(scene) else ""])
+    end_prompt = _ensure_first_last_visual_delta(start_prompt, end_prompt, scene)
+    return start_prompt, end_prompt
+
+
+def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene) -> str:
+    action = str(scene.action_in_frame or scene.scene_goal or "").strip()
+    camera = str(scene.camera or "").strip()
+    emotion = str(scene.emotion or "").strip()
+    parts: list[str] = []
+    if action:
+        parts.append(action)
+    if camera:
+        parts.append(f"Camera: {camera}")
     if emotion:
-        parts.append(f"Mood/light: {emotion}.")
-    if visual_anchor:
-        parts.append(f"Visual anchors: {visual_anchor}.")
-    parts.append("Compose as a hero keyframe with clear silhouette, depth layering, and strong frame balance.")
-    return " ".join(parts).strip()
+        parts.append(f"Atmosphere: {emotion}")
+    if scene.render_mode in {"first_last", "first_last_sound"} or scene.resolved_workflow_key == "imag-imag-video-bz":
+        parts.append(_build_scene_driven_end_state_delta(scene))
+    return _join_visible_prompt_parts(parts)
+
+
+def _build_music_video_image_prompt(scene: ScenarioDirectorScene) -> str:
+    return build_ltx_visible_image_prompt(scene)
 
 
 def _build_music_video_video_prompt(scene: ScenarioDirectorScene) -> str:
-    action = str(scene.action_in_frame or scene.scene_goal or "").strip()
-    camera = str(scene.camera or "").strip()
-    purpose = str(scene.scene_purpose or "").replace("_", " ").strip()
-    performance = str(scene.performance_framing or "").replace("_", " ").strip()
-    transition_type = str(scene.transition_type or "").replace("_", " ").strip()
-    motion_parts: list[str] = []
-    if action:
-        motion_parts.append(f"Performance motion: {action}.")
-    if camera:
-        motion_parts.append(f"Camera movement: {camera}.")
-    else:
-        motion_parts.append("Camera movement: maintain rhythmic push/pull and subtle reframing on beats.")
-    if performance:
-        motion_parts.append(f"Framing behavior: {performance}.")
-    if purpose:
-        motion_parts.append(f"Scene intent in time: {purpose}.")
-    if scene.render_mode in {"first_last", "first_last_sound"} or scene.resolved_workflow_key == "imag-imag-video-bz":
-        frame_state = str(scene.frame_description or scene.scene_goal or "").strip()
-        motion_parts.append(
-            f"First→last transition: evolve from the opening state '{frame_state}' to a clearly shifted final state with a readable emotional change."
-        )
-    elif transition_type in {"continuation", "state shift", "state_shift"}:
-        motion_parts.append("Transition feel: use this shot as a visual bridge into the next beat, not an isolated loop.")
-    else:
-        motion_parts.append("Temporal feel: preserve beat-synced micro-movements in fabric, hair, gaze, and body weight.")
-    motion_parts.append(f"Transition cue: {transition_type or 'cut'}, paced to music accents.")
-    return " ".join(motion_parts).strip()
+    return build_ltx_visible_video_prompt(scene)
 
 
 def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) -> bool:
@@ -3495,49 +3644,7 @@ def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) ->
 
 
 def _derive_first_last_frame_prompts(scene: ScenarioDirectorScene, raw_scene: dict[str, Any] | None = None) -> tuple[str, str]:
-    raw_scene = raw_scene if isinstance(raw_scene, dict) else {}
-    explicit_start = str(
-        raw_scene.get("startFramePrompt")
-        or raw_scene.get("start_frame_prompt")
-        or scene.start_frame_prompt
-        or ""
-    ).strip()
-    explicit_end = str(
-        raw_scene.get("endFramePrompt")
-        or raw_scene.get("end_frame_prompt")
-        or scene.end_frame_prompt
-        or ""
-    ).strip()
-    continuity_contract = (
-        "same people, same identity, same wardrobe and accessories, same hairstyle, same location, same weather/light family, same camera family and framing scale; "
-        "no outfit redesign, no hairstyle redesign, no location swap, no extra people; "
-        "change only pose, distance, orientation, emotion, interaction intensity, and scene state progression"
-    )
-    if explicit_start and explicit_end:
-        if continuity_contract.lower() not in explicit_end.lower():
-            explicit_end = f"{explicit_end}. Continuity contract: {continuity_contract}.".strip()
-        return explicit_start, explicit_end
-
-    base_opening = str(scene.frame_description or scene.scene_goal or scene.image_prompt or scene.video_prompt or "").strip()
-    base_closing = str(scene.scene_goal or scene.action_in_frame or scene.video_prompt or scene.image_prompt or base_opening).strip()
-    transition_prompt = str(scene.video_prompt or "").strip()
-    transition_hint = str(scene.transition_type or "").strip().replace("_", " ") or "state shift"
-    transition_semantics = transition_prompt if transition_prompt else f"Transition semantics: {transition_hint}."
-
-    if not explicit_start:
-        explicit_start = base_opening
-    if not explicit_end:
-        explicit_end = (
-            f"{base_closing}. Final state after transition: {transition_semantics}".strip()
-            if base_closing
-            else f"Final visual state after transition: {transition_semantics}".strip()
-        )
-    if continuity_contract.lower() not in explicit_end.lower():
-        explicit_end = f"{explicit_end}. Continuity contract: {continuity_contract}.".strip()
-
-    if explicit_start and explicit_end and explicit_start == explicit_end:
-        explicit_end = f"{explicit_end} Keep it visually changed relative to the opening frame.".strip()
-    return explicit_start, explicit_end
+    return build_ltx_visible_first_last_prompts(scene, raw_scene)
 
 
 def _enhance_music_video_transition_language(scene: ScenarioDirectorScene) -> None:
@@ -3549,8 +3656,6 @@ def _enhance_music_video_transition_language(scene: ScenarioDirectorScene) -> No
         return
     if "visual bridge" not in scene.viewer_hook.lower():
         scene.viewer_hook = f"{scene.viewer_hook} Use this beat as a visual bridge into a new state.".strip()
-    if "edit pivot" not in scene.video_prompt.lower():
-        scene.video_prompt = f"{scene.video_prompt} Treat the motion as an edit pivot with clear before/after energy."
     if "state change" not in scene.clip_decision_reason.lower():
         scene.clip_decision_reason = f"{scene.clip_decision_reason} state_change_bridge=true;"
 
@@ -4192,10 +4297,6 @@ def _apply_music_video_mode_policy(
         genre_intent = _resolve_director_genre_intent(payload, scene)
         scene.image_prompt = _build_music_video_image_prompt(scene)
         scene.video_prompt = _build_music_video_video_prompt(scene)
-        identity_contract = str(identity_lock.get("contract") or "").strip()
-        if identity_contract:
-            scene.image_prompt = f"{scene.image_prompt} {identity_contract}".strip()
-            scene.video_prompt = f"{scene.video_prompt} {identity_contract}".strip()
         # Final derived debug layer (must reflect final scene state, not intermediate steps).
         final_shot_type = str(scene.shot_type or shot_type).strip() or shot_type
         final_presence_type = str(role_influence.get("presence_type") or _infer_music_video_presence_type(scene, payload=payload, raw_scene=raw_scene))
