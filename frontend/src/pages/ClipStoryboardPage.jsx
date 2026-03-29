@@ -393,7 +393,9 @@ function buildScenarioSceneContractPayload(scene = {}) {
     continuationSourceSceneId: String(scene?.continuationSourceSceneId || "").trim(),
     continuationSourceAssetUrl: String(scene?.continuationSourceAssetUrl || "").trim(),
     continuationSourceAssetType: String(scene?.continuationSourceAssetType || "").trim(),
-    requiresAudioSensitiveVideo: ["lip_sync_music", "lip_sync"].includes(resolvedWorkflowKey) || Boolean(scene?.lipSync),
+    audioSliceKind: String(scene?.audioSliceKind || scene?.audio_slice_kind || "").trim().toLowerCase(),
+    musicVocalLipSyncAllowed: Boolean(scene?.musicVocalLipSyncAllowed ?? scene?.music_vocal_lipsync_allowed),
+    requiresAudioSensitiveVideo: resolvedWorkflowKey === "lip_sync_music" || Boolean(scene?.lipSync),
     resolvedWorkflowKey,
     resolvedModelKey,
     requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
@@ -431,7 +433,7 @@ function resolveScenarioSceneVideoProvider(scene = {}) {
     || resolveScenarioWorkflowKey(scene)
     || ""
   );
-  const isLipSyncWorkflow = ["lip_sync_music", "lip_sync"].includes(resolvedWorkflowKey);
+  const isLipSyncWorkflow = resolvedWorkflowKey === "lip_sync_music";
   const hasLtxContract = Boolean(
     String(scene?.ltxMode || "").trim()
     || String(scene?.resolvedWorkflowKey || "").trim()
@@ -440,7 +442,7 @@ function resolveScenarioSceneVideoProvider(scene = {}) {
     || scene?.needsTwoFrames
     || scene?.requiresTwoFrames
     || scene?.requiresContinuation
-    || ["lip_sync_music", "lip_sync"].includes(resolvedWorkflowKey)
+    || resolvedWorkflowKey === "lip_sync_music"
   );
   if (rawProvider) {
     if (isLipSyncWorkflow) return rawProvider;
@@ -10648,7 +10650,9 @@ Aspect ratio: ${imageFormat}`,
       setScenarioVideoError("Sound dialogue workflows отключены для music_video по умолчанию.");
       return;
     }
-    if (["lip_sync_music", "lip_sync"].includes(effectiveWorkflowKey) && !attachedAudioSliceUrl) {
+    const musicVocalLipSyncAllowed = Boolean(targetScene?.musicVocalLipSyncAllowed ?? targetScene?.music_vocal_lipsync_allowed);
+    const audioSliceKind = String(targetScene?.audioSliceKind || targetScene?.audio_slice_kind || "").trim().toLowerCase();
+    if (effectiveWorkflowKey === "lip_sync_music" && !attachedAudioSliceUrl) {
       logScenarioVideoBlocked("validate_audio", "lip_sync_audio_missing", {
         sceneId,
         workflow: effectiveWorkflowKey,
@@ -10660,6 +10664,16 @@ Aspect ratio: ${imageFormat}`,
         selectedIndex: targetSceneIndex,
       });
       setScenarioVideoError("Для lipSync сначала возьмите аудио");
+      return;
+    }
+    if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
+      logScenarioVideoBlocked("validate_audio", "lip_sync_music_vocal_flag_missing", {
+        sceneId,
+        workflow: effectiveWorkflowKey,
+        musicVocalLipSyncAllowed,
+        audioSliceKind: audioSliceKind || "none",
+      });
+      setScenarioVideoError("Для lipSync нужен slice с music+vocal compatibility.");
       return;
     }
 
@@ -10697,7 +10711,7 @@ Aspect ratio: ${imageFormat}`,
       ?? targetScene?.durationSec
       ?? Math.max(0, Number(targetScene.t1 ?? targetScene.end ?? 0) - Number(targetScene.t0 ?? targetScene.start ?? 0))
     ) || 0;
-    const requiresAudioSensitiveVideo = ["lip_sync_music", "lip_sync"].includes(effectiveWorkflowKey) || Boolean(effectiveLipSync);
+    const requiresAudioSensitiveVideo = effectiveWorkflowKey === "lip_sync_music" || Boolean(effectiveLipSync);
     const shouldAttachAudioSlice = Boolean(attachedAudioSliceUrl) && (requiresAudioSensitiveVideo || Boolean(effectiveLipSync));
     const continuationSourceSceneId = effectiveRequiresContinuation
       ? String(targetPreviousScene?.sceneId || "").trim()
