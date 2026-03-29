@@ -26,6 +26,7 @@ export async function fetchJson(path,{method="GET",headers={},body,signal,timeou
   const timeoutController = hasTimeout ? new AbortController() : null;
   const timeoutSignal = timeoutController?.signal;
   const activeSignal = timeoutSignal || signal;
+  let didTimeout = false;
   let timeoutId = null;
   let signalAbortHandler = null;
 
@@ -40,6 +41,7 @@ export async function fetchJson(path,{method="GET",headers={},body,signal,timeou
 
   if (timeoutController && hasTimeout) {
     timeoutId = window.setTimeout(() => {
+      didTimeout = true;
       timeoutController.abort(new Error(`timeout:${timeoutValue}`));
     }, timeoutValue);
   }
@@ -62,7 +64,7 @@ export async function fetchJson(path,{method="GET",headers={},body,signal,timeou
     }
     return data;
   } catch (error) {
-    const isTimeoutAbort = hasTimeout && (timeoutSignal?.aborted || false);
+    const isTimeoutAbort = hasTimeout && didTimeout;
     if (isTimeoutAbort) {
       throw new Error(`Request timeout after ${timeoutValue}ms (${method} ${path})`);
     }
