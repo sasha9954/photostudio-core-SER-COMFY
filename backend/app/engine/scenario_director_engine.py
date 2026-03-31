@@ -4316,7 +4316,8 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
         "micro-expressions and breath detail; minimal locomotion, no running or chase action."
     )
     scene.camera = (
-        "Steady close performance camera, very slow push-in with minimal drift, no aggressive tracking."
+        "Steady close performance camera, very slow push-in with minimal drift, soft partial arc only (about 90–180°), "
+        "never a full 360° orbit, no aggressive circular tracking; performer stays readable and stable."
     )
     scene.viewer_hook = (
         "Immediate face-readable emotional singing beat; keep expression and lyric articulation as the main focus."
@@ -4325,6 +4326,24 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
         scene.frame_description = (
             f"Half-body or medium-close singer performance in {location}; environment supports mood in background."
         )
+    scene.image_prompt = _join_visible_prompt_parts(
+        [
+            f"Cinematic 9:16 half-body/medium-close singing portrait in {location}.",
+            "Face and mouth stay cleanly readable for lyric articulation; subtle head motion and gentle body sway only.",
+            "Breath detail, micro-expressions, and possible tears carry emotion while environment stays secondary.",
+            "No running, chase, stunt motion, or locomotion-first blocking.",
+            "Steady close performance camera, very slow push-in, minimal drift, soft partial arc (about 90–180°, up to ~270° only if very gentle and stable), never full 360° camera wrap.",
+        ]
+    )
+    scene.video_prompt = _join_visible_prompt_parts(
+        [
+            "Emotional singing performance in tight medium framing with persistent face/mouth readability.",
+            "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle partial arc, not a full orbit.",
+            "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body.",
+            "Optional safe variant: performer may gently rotate with camera while background shifts behind trajectory, preserving character integrity.",
+            "Environment remains background support; no running/chasing/spinning as primary action.",
+        ]
+    )
 
 
 def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:

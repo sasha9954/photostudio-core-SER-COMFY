@@ -10731,7 +10731,7 @@ Aspect ratio: ${imageFormat}`,
         hasAudioSliceUrl: Boolean(attachedAudioSliceUrl),
         selectedIndex: targetSceneIndex,
       });
-      setScenarioVideoError("Для lipSync не удалось автоматически подготовить audio slice.");
+      setScenarioVideoError("Для lipSync не удалось автоматически подготовить audioSlice. Проверьте исходное аудио и попробуйте снова.");
       return;
     }
     if (effectiveWorkflowKey === "lip_sync_music" && (!musicVocalLipSyncAllowed || audioSliceKind !== "music_vocal")) {
