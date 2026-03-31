@@ -10364,7 +10364,7 @@ Aspect ratio: ${imageFormat}`,
 
   const handleScenarioTakeAudioByIndex = useCallback(async (idx, options = {}) => {
     const scene = scenarioScenes[idx] || null;
-    if (!scene) return;
+    if (!scene) return null;
     const explicitAudioUrl = String(options?.audioUrl || "").trim();
     const explicitSourceNode = options?.sourceNode || null;
     const explicitSourceNodeAudioUrl = explicitSourceNode
@@ -10398,7 +10398,7 @@ Aspect ratio: ${imageFormat}`,
         audioSliceLoadError: msg,
       });
       if (idx === scenarioEditor.selected) setScenarioVideoError(msg);
-      return;
+      return null;
     }
 
     if (!sceneId) throw new Error("scene_id_required");
@@ -10468,6 +10468,13 @@ Aspect ratio: ${imageFormat}`,
           sliceMayCutSpeech: out?.sliceMayCutSpeech,
         })
       );
+      return {
+        audioSliceUrl: String(out.audioSliceUrl || ""),
+        audioSliceDurationSec: durationSec ?? expectedDuration,
+        audioSliceStartSec: outStartSec,
+        audioSliceEndSec: outEndSec,
+        audioSliceStatus: "ready",
+      };
     } catch (e) {
       console.error(e);
       const msg = String(e?.message || e || "audio_slice_failed");
@@ -10485,6 +10492,7 @@ Aspect ratio: ${imageFormat}`,
         audioSliceLoadError: msg,
       });
       if (idx === scenarioEditor.selected) setScenarioVideoError(msg);
+      return null;
     } finally {
       if (idx === scenarioEditor.selected) setScenarioAudioSliceLoading(false);
     }
@@ -10516,16 +10524,29 @@ Aspect ratio: ${imageFormat}`,
       scenarioNodeId: String(nodeId || ""),
       sourceNodeId: String(sourceNode?.id || ""),
     });
-    await handleScenarioTakeAudioByIndex(sceneIndex, {
+    const directResult = await handleScenarioTakeAudioByIndex(sceneIndex, {
       audioUrl: selectedAudioUrl,
       sourceNode,
     });
+    const normalizedDirectUrl = String(directResult?.audioSliceUrl || "").trim();
+    if (normalizedDirectUrl) {
+      return {
+        audioSliceUrl: normalizedDirectUrl,
+        audioSliceDurationSec: normalizeDurationSec(directResult?.audioSliceDurationSec),
+        audioSliceStartSec: Number(directResult?.audioSliceStartSec),
+        audioSliceEndSec: Number(directResult?.audioSliceEndSec),
+        audioSliceStatus: String(directResult?.audioSliceStatus || "").trim(),
+      };
+    }
+
     const refreshedNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === nodeId && nodeItem?.type === "scenarioStoryboard") || null;
     const refreshedScenes = normalizeSceneCollectionWithSceneId(Array.isArray(refreshedNode?.data?.scenes) ? refreshedNode.data.scenes : [], "scene");
     const refreshedScene = refreshedScenes[sceneIndex] || null;
     return {
       audioSliceUrl: String(refreshedScene?.audioSliceUrl || "").trim(),
       audioSliceDurationSec: normalizeDurationSec(refreshedScene?.audioSliceDurationSec ?? refreshedScene?.audioSliceActualDurationSec ?? refreshedScene?.audioSliceExpectedDurationSec),
+      audioSliceStartSec: Number(refreshedScene?.audioSliceStartSec ?? refreshedScene?.audioSliceT0),
+      audioSliceEndSec: Number(refreshedScene?.audioSliceEndSec ?? refreshedScene?.audioSliceT1),
       audioSliceStatus: String(refreshedScene?.audioSliceStatus || "").trim(),
     };
   }, [handleScenarioTakeAudioByIndex, resolveScenarioSceneIndex]);
