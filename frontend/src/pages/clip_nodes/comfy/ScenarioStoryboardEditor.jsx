@@ -554,13 +554,18 @@ export default function ScenarioStoryboardEditor({
     });
     try {
       const result = await onExtractSceneAudio?.(nodeId, sceneId);
-      const audioSliceUrl = String(
-        result?.audioSliceUrl
-        || result?.extractedAudioUrl
-        || scene?.audioSliceUrl
-        || safeAudioData?.audioUrl
-        || "",
-      ).trim();
+      const audioSliceUrl = String(result?.audioSliceUrl || result?.extractedAudioUrl || "").trim();
+      const masterAudioCandidateUrl = String(masterAudioUrl || "").trim();
+      const globalAudioCandidateUrl = String(globalAudioUrl || "").trim();
+      const safeAudioCandidateUrl = String(safeAudioData?.audioUrl || "").trim();
+      const resolvedToFullTrack = Boolean(
+        audioSliceUrl
+        && (
+          (masterAudioCandidateUrl && audioSliceUrl === masterAudioCandidateUrl)
+          || (globalAudioCandidateUrl && audioSliceUrl === globalAudioCandidateUrl)
+          || (safeAudioCandidateUrl && audioSliceUrl === safeAudioCandidateUrl)
+        )
+      );
       if (!audioSliceUrl) {
         onUpdateScene?.(nodeId, sceneId, {
           audioSliceStatus: "error",
@@ -568,6 +573,20 @@ export default function ScenarioStoryboardEditor({
           audioSliceLoadError: "Не найден источник для audio slice",
         });
         return;
+      }
+      if (resolvedToFullTrack) {
+        onUpdateScene?.(nodeId, sceneId, {
+          audioSliceStatus: "error",
+          extractedAudioStatus: "error",
+          audioSliceError: "audio_slice_resolved_to_full_track",
+          audioSliceLoadError: "audio_slice_resolved_to_full_track",
+        });
+        return {
+          audioSliceUrl,
+          audioSliceDurationSec: Number(result?.audioSliceDurationSec ?? result?.extractedAudioDurationSec ?? durationSec),
+          audioSliceStatus: "error",
+          audioSliceError: "audio_slice_resolved_to_full_track",
+        };
       }
       onUpdateScene?.(nodeId, sceneId, {
         audioSliceUrl,
@@ -583,6 +602,7 @@ export default function ScenarioStoryboardEditor({
       return {
         audioSliceUrl,
         audioSliceDurationSec: Number(result?.audioSliceDurationSec ?? result?.extractedAudioDurationSec ?? durationSec),
+        audioSliceStatus: "ready",
       };
     } catch (error) {
       onUpdateScene?.(nodeId, sceneId, {
