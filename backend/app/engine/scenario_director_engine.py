@@ -5180,14 +5180,16 @@ def _apply_scene_route(scene: ScenarioDirectorScene, *, route: str, reason: str)
         scene.ltx_mode = "lip_sync"
         scene.lip_sync = True
         scene.send_audio_to_generator = True
+        scene.video_downgrade_reason_code = ""
+        scene.video_downgrade_reason_message = ""
         if str(scene.lip_sync_decision_reason or "").strip().lower() == fallback_lip_sync_eligibility:
             scene.audio_slice_kind = "music_vocal"
             scene.music_vocal_lipsync_allowed = True
             scene.audio_slice_decision_reason = fallback_audio_send_reason
+        else:
+            scene.audio_slice_decision_reason = lip_sync_selected_reason
         scene.resolved_workflow_key, scene.resolved_workflow_file = _resolve_workflow_key_and_file("lip_sync_music", fallback_key="lip_sync_music")
         scene.lip_sync_text = _extract_lip_sync_text(scene)
-        if not str(scene.audio_slice_decision_reason or "").strip():
-            scene.audio_slice_decision_reason = lip_sync_selected_reason
         _assign_video_route(scene, route="lip_sync_music", planned_route="lip_sync_music")
     elif route == "f_l":
         scene.render_mode = "first_last"
