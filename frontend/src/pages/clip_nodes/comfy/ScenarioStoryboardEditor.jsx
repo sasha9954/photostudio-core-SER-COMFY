@@ -1368,7 +1368,7 @@ export default function ScenarioStoryboardEditor({
                         <div className="clipSB_storyboardKv"><span>workflow</span><strong>{selectedScene?.resolvedWorkflowKey || selectedScene?.ltxMode || "—"}</strong></div>
                         <div className="clipSB_storyboardKv"><span>lipSync</span><strong>{sceneLipSync ? "да" : "нет"}</strong></div>
                         <div className="clipSB_storyboardKv"><span>audioSlice</span><strong>{sceneAudioSliceUrl ? "present" : "missing"}</strong></div>
-                        {sceneLipSync ? <div className="clipSB_hint clipSB_sceneVideoAudioHint">{sceneAudioSliceUrl ? "Этот audioSlice будет отправлен в video generation." : "Для lipSync сначала подготовьте audioSlice в блоке AUDIO (СЦЕНА)."}</div> : null}
+                        {sceneLipSync ? <div className="clipSB_hint clipSB_sceneVideoAudioHint">{sceneAudioSliceUrl ? "Этот audioSlice будет отправлен в video generation." : "Для lipSync audioSlice подготовится автоматически перед генерацией видео."}</div> : null}
                         {sceneAudioSliceUrl ? <audio controls className="clipSB_audioPlayer" src={sceneAudioSliceUrl} /> : null}
                       </div>
                       <div className="clipSB_scenarioEditorBtnRow">
@@ -1415,7 +1415,7 @@ export default function ScenarioStoryboardEditor({
                         </button>
                         <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { videoUrl: "", videoStatus: "idle", videoError: "", videoJobId: "" })}>Удалить</button>
                       </div>
-                      {lipSyncAudioMissing ? <div className="clipSB_hint" style={{ color: "#ffb066" }}>Для lipSync сцены audioSlice будет автоматически извлечён при «Создать видео».</div> : null}
+                      {lipSyncAudioMissing ? <div className="clipSB_hint" style={{ color: "#ffb066" }}>Для lipSync сцены audioSlice подготовится автоматически при «Создать видео». Если извлечение не удастся, покажем ошибку.</div> : null}
                     </div>
                     <div className="clipSB_scenarioEditorVideoRight clipSB_scenarioEditorVideoPreviewCol">
                       <div className={`clipSB_scenarioEditorImagePreviewWrap clipSB_scenarioEditorVideoPreviewBox${hasSceneVideo || isFirstLastVideoMode ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
