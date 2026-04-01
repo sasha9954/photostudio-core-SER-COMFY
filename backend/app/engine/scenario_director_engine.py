@@ -8142,7 +8142,7 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "Return ONLY valid JSON. No markdown. No comments. No prose outside JSON.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
         f"{references_block}"
-        "Output JSON contract:\n"
+        "Output JSON contract (strict, only this shape):\n"
         "{\n"
         '  "input_understanding": {\n'
         '    "audio_visual_read": "",\n'
@@ -8178,59 +8178,86 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         '        "content_tags": []\n'
         "      }\n"
         "    ]\n"
-        "  },\n"
-        '  "transcript": [\n'
-        '    { "t0": 0.0, "t1": 0.0, "text": "" }\n'
-        "  ],\n"
-        '  "audioStructure": {\n'
-        '    "pauses": [],\n'
-        '    "energyPeaks": [],\n'
-        '    "transitions": [],\n'
-        '    "pacingType": "",\n'
-        '    "rhythmDescription": ""\n'
-        "  },\n"
-        '  "semanticTimeline": [\n'
-        "    {\n"
-        '      "t0": 0.0,\n'
-        '      "t1": 0.0,\n'
-        '      "text": "",\n'
-        '      "meaning": "",\n'
-        '      "visualFocus": "",\n'
-        '      "emotion": "",\n'
-        '      "sceneType": "intro",\n'
-        '      "transitionHint": ""\n'
-        "    }\n"
-        "  ],\n"
-        '  "scenes": [\n'
-        "    {\n"
-        '      "sceneId": "S1",\n'
-        '      "t0": 0.0,\n'
-        '      "t1": 0.0,\n'
-        '      "duration": 0.0,\n'
-        '      "summary": "",\n'
-        '      "visualPrompt": "",\n'
-        '      "characters": [],\n'
-        '      "environment": "",\n'
-        '      "camera": "",\n'
-        '      "motion": "",\n'
-        '      "transitionIn": "",\n'
-        '      "transitionOut": ""\n'
-        "    }\n"
-        "  ],\n"
-        '  "globalStory": {\n'
-        '    "overallNarrative": "",\n'
-        '    "mainTopic": "",\n'
-        '    "worldDescription": "",\n'
-        '    "tone": ""\n'
-        "  },\n"
-        '  "debug": {\n'
-        '    "audioUsage": "",\n'
-        '    "alignment": "",\n'
-        '    "boundaryLogic": "",\n'
-        '    "signals": ""\n'
         "  }\n"
         "}"
     )
+
+
+def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any]) -> dict[str, Any]:
+    storyboard = compact_payload.get("storyboard") if isinstance(compact_payload.get("storyboard"), dict) else {}
+    compact_scenes = storyboard.get("scenes") if isinstance(storyboard.get("scenes"), list) else []
+    legacy_scenes: list[dict[str, Any]] = []
+    transcript: list[dict[str, Any]] = []
+    semantic_timeline: list[dict[str, Any]] = []
+    for idx, scene in enumerate(compact_scenes, start=1):
+        if not isinstance(scene, dict):
+            continue
+        start = _safe_float(scene.get("start_time_sec"), 0.0)
+        end = _safe_float(scene.get("end_time_sec"), start)
+        if end < start:
+            end = start
+        description = str(scene.get("description") or "").strip()
+        route = str(scene.get("route") or "i2v").strip() or "i2v"
+        scene_type = str(scene.get("scene_type") or scene.get("sceneType") or "").strip()
+        legacy_scenes.append(
+            {
+                "sceneId": str(scene.get("scene_id") or f"S{idx}").strip() or f"S{idx}",
+                "t0": start,
+                "t1": end,
+                "duration": max(0.0, end - start),
+                "summary": description,
+                "visualPrompt": description,
+                "characters": [],
+                "environment": "",
+                "camera": "",
+                "motion": "",
+                "transitionIn": "",
+                "transitionOut": "",
+                "sceneType": scene_type,
+                "route": route,
+                "content_tags": scene.get("content_tags") if isinstance(scene.get("content_tags"), list) else [],
+            }
+        )
+        transcript.append({"t0": start, "t1": end, "text": description})
+        semantic_timeline.append(
+            {
+                "t0": start,
+                "t1": end,
+                "text": description,
+                "meaning": description,
+                "visualFocus": "",
+                "emotion": "",
+                "sceneType": scene_type or "build",
+                "transitionHint": "",
+            }
+        )
+    story_summary = str(storyboard.get("story_summary") or "").strip()
+    director_summary = str(storyboard.get("director_summary") or "").strip()
+    return {
+        **compact_payload,
+        "transcript": transcript,
+        "audioStructure": {
+            "pauses": [],
+            "energyPeaks": [],
+            "transitions": [],
+            "pacingType": "",
+            "rhythmDescription": "",
+        },
+        "semanticTimeline": semantic_timeline,
+        "scenes": legacy_scenes,
+        "globalStory": {
+            "overallNarrative": story_summary,
+            "mainTopic": "",
+            "worldDescription": "",
+            "tone": "",
+        },
+        "debug": {
+            "audioUsage": "",
+            "alignment": director_summary,
+            "boundaryLogic": "",
+            "signals": "",
+        },
+    }
 
 
 def _build_inline_audio_part(audio_context: dict[str, Any]) -> dict[str, Any]:
@@ -8308,6 +8335,12 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
                 "parseStage": parse_stage,
             },
         )
+    if (
+        isinstance(extracted.get("input_understanding"), dict)
+        and isinstance(extracted.get("storyboard"), dict)
+        and not any(key in extracted for key in ("transcript", "audioStructure", "semanticTimeline", "scenes"))
+    ):
+        extracted = _adapt_audio_first_compact_to_legacy_contract(extracted)
     required = ("transcript", "audioStructure", "semanticTimeline", "scenes")
     missing = [key for key in required if key not in extracted]
     if missing:
