@@ -939,12 +939,82 @@ export function mapStoryboardOutToDirectorOutput(storyboardOut = null, state = {
   };
 }
 
+function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
+  const inputUnderstanding = compactResponse?.input_understanding && typeof compactResponse.input_understanding === "object"
+    ? compactResponse.input_understanding
+    : {};
+  const storyboard = compactResponse?.storyboard && typeof compactResponse.storyboard === "object"
+    ? compactResponse.storyboard
+    : {};
+  const compactScenes = Array.isArray(storyboard?.scenes) ? storyboard.scenes : [];
+  if (!compactScenes.length) return null;
+  const continuityLock = Boolean(inputUnderstanding?.same_character_across_all_scenes);
+  const identityFields = continuityLock
+    ? ["face_identity", "hair_identity", "clothing_identity", "body_proportions", "body_silhouette"]
+    : [];
+  const scenes = compactScenes.map((scene, index) => {
+    const startSec = Number(scene?.start_time_sec ?? 0) || 0;
+    const endSecRaw = Number(scene?.end_time_sec ?? startSec) || startSec;
+    const endSec = endSecRaw < startSec ? startSec : endSecRaw;
+    const routeRaw = normalizeText(scene?.route).toLowerCase();
+    const resolvedWorkflowKey = ["lip_sync_music", "lip_sync"].includes(routeRaw)
+      ? "lip_sync_music"
+      : ["f_l", "first_last", "first-last"].includes(routeRaw)
+        ? "f_l"
+        : "i2v";
+    const isLipSync = resolvedWorkflowKey === "lip_sync_music";
+    const needsTwoFrames = resolvedWorkflowKey === "f_l";
+    const description = normalizeText(scene?.description);
+    const contentTags = Array.isArray(scene?.content_tags) ? scene.content_tags.map((tag) => normalizeText(tag)).filter(Boolean) : [];
+    return {
+      scene_id: normalizeText(scene?.scene_id) || `S${index + 1}`,
+      time_start: startSec,
+      time_end: endSec,
+      duration: Math.max(0, endSec - startSec),
+      requested_duration_sec: Math.max(0, endSec - startSec),
+      scene_goal: description,
+      frame_description: description || "Performance-led visual beat aligned to audio.",
+      action_in_frame: description || "Performer follows the current music phrase.",
+      camera: "medium shot, stable cinematic camera",
+      what_from_audio_this_scene_uses: description,
+      shot_type: contentTags[0] || "medium",
+      performance_framing: contentTags.slice(0, 3).join(", "),
+      local_phrase: description,
+      render_mode: "image_video",
+      resolved_workflow_key: resolvedWorkflowKey,
+      video_generation_route: resolvedWorkflowKey,
+      planned_video_generation_route: resolvedWorkflowKey,
+      ltx_mode: isLipSync ? "lip_sync" : (needsTwoFrames ? "f_l" : "i2v"),
+      lip_sync: isLipSync,
+      send_audio_to_generator: isLipSync,
+      music_vocal_lipsync_allowed: isLipSync,
+      needs_two_frames: needsTwoFrames,
+      audio_slice_start_sec: isLipSync ? startSec : 0,
+      audio_slice_end_sec: isLipSync ? endSec : 0,
+      audio_slice_expected_duration_sec: isLipSync ? Math.max(0, endSec - startSec) : 0,
+      identity_lock_applied: continuityLock,
+      identity_lock_fields_used: identityFields,
+    };
+  });
+  return {
+    story_summary: normalizeText(storyboard?.story_summary),
+    full_scenario: normalizeText(storyboard?.full_scenario),
+    voice_script: normalizeText(storyboard?.voice_script),
+    director_summary: normalizeText(storyboard?.director_summary),
+    audio_understanding: storyboard?.audio_understanding && typeof storyboard.audio_understanding === "object" ? storyboard.audio_understanding : {},
+    narrative_strategy: storyboard?.narrative_strategy && typeof storyboard.narrative_strategy === "object" ? storyboard.narrative_strategy : {},
+    diagnostics: storyboard?.diagnostics && typeof storyboard.diagnostics === "object" ? storyboard.diagnostics : {},
+    scenes,
+  };
+}
+
 export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) {
+  const compactStoryboardOut = mapCompactDirectorResponseToStoryboardOut(response);
   const storyboardOut = response?.storyboardOut && typeof response.storyboardOut === "object"
     ? response.storyboardOut
     : response?.storyboard_out && typeof response.storyboard_out === "object"
       ? response.storyboard_out
-      : null;
+      : compactStoryboardOut;
   const directorOutputFromResponse = response?.directorOutput && typeof response.directorOutput === "object"
     ? response.directorOutput
     : null;

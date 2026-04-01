@@ -1255,6 +1255,103 @@ def _normalize_scenario_director_scene_defaults(payload: dict[str, Any]) -> tupl
 
 
 def _repair_scenario_director_payload(payload: dict) -> dict:
+    def _is_compact_director_payload(candidate_payload: dict[str, Any]) -> bool:
+        if not isinstance(candidate_payload, dict):
+            return False
+        input_understanding = candidate_payload.get("input_understanding")
+        storyboard = candidate_payload.get("storyboard")
+        if not isinstance(input_understanding, dict) or not isinstance(storyboard, dict):
+            return False
+        scenes = storyboard.get("scenes")
+        if not isinstance(scenes, list) or not scenes:
+            return False
+        first_scene = scenes[0] if isinstance(scenes[0], dict) else {}
+        return "start_time_sec" in first_scene and "end_time_sec" in first_scene
+
+    def _normalize_compact_route(route_value: Any) -> str:
+        route = str(route_value or "").strip().lower()
+        if route in {"lip_sync_music", "lip_sync", "lipsync_music"}:
+            return "lip_sync_music"
+        if route in {"f_l", "first_last", "first-last"}:
+            return "f_l"
+        return "i2v"
+
+    def _map_compact_director_to_legacy(candidate_payload: dict[str, Any]) -> dict[str, Any]:
+        storyboard = candidate_payload.get("storyboard") if isinstance(candidate_payload.get("storyboard"), dict) else {}
+        input_understanding = (
+            candidate_payload.get("input_understanding")
+            if isinstance(candidate_payload.get("input_understanding"), dict)
+            else {}
+        )
+        compact_scenes = storyboard.get("scenes") if isinstance(storyboard.get("scenes"), list) else []
+        same_character = _coerce_bool(input_understanding.get("same_character_across_all_scenes"), False)
+        continuity_lock_fields = [
+            "face_identity",
+            "hair_identity",
+            "clothing_identity",
+            "body_proportions",
+            "body_silhouette",
+        ]
+        mapped_scenes: list[dict[str, Any]] = []
+        for idx, compact_scene in enumerate(compact_scenes):
+            if not isinstance(compact_scene, dict):
+                continue
+            scene_start = _safe_float(compact_scene.get("start_time_sec"), 0.0)
+            scene_end = _safe_float(compact_scene.get("end_time_sec"), scene_start)
+            if scene_end < scene_start:
+                scene_end = scene_start
+            route = _normalize_compact_route(compact_scene.get("route"))
+            description = str(compact_scene.get("description") or "").strip()
+            content_tags = [str(tag).strip() for tag in (compact_scene.get("content_tags") or []) if str(tag).strip()]
+            shot_type = content_tags[0] if content_tags else "medium"
+            performance_framing = ", ".join(content_tags[:3]) if content_tags else ""
+            is_lip_sync = route == "lip_sync_music"
+            needs_two_frames = route == "f_l"
+            scene_duration = max(0.0, round(scene_end - scene_start, 3))
+            mapped_scenes.append(
+                {
+                    "scene_id": str(compact_scene.get("scene_id") or f"S{idx + 1}"),
+                    "time_start": scene_start,
+                    "time_end": scene_end,
+                    "duration": scene_duration,
+                    "requested_duration_sec": scene_duration,
+                    "local_phrase": description,
+                    "scene_goal": description,
+                    "frame_description": description or "Performance-led visual beat aligned with audio timing.",
+                    "action_in_frame": description or "Performer expresses the current music beat.",
+                    "camera": "medium shot, stable cinematic camera",
+                    "what_from_audio_this_scene_uses": description,
+                    "render_mode": "image_video",
+                    "resolved_workflow_key": route,
+                    "video_generation_route": route,
+                    "planned_video_generation_route": route,
+                    "ltx_mode": "lip_sync" if is_lip_sync else ("f_l" if needs_two_frames else "i2v"),
+                    "needs_two_frames": needs_two_frames,
+                    "lip_sync": is_lip_sync,
+                    "send_audio_to_generator": is_lip_sync,
+                    "music_vocal_lipsync_allowed": is_lip_sync,
+                    "audio_slice_start_sec": scene_start if is_lip_sync else 0.0,
+                    "audio_slice_end_sec": scene_end if is_lip_sync else 0.0,
+                    "audio_slice_expected_duration_sec": scene_duration if is_lip_sync else 0.0,
+                    "shot_type": shot_type,
+                    "performance_framing": performance_framing,
+                    "identity_lock_applied": same_character,
+                    "identity_lock_fields_used": continuity_lock_fields if same_character else [],
+                }
+            )
+
+        diagnostics = storyboard.get("diagnostics") if isinstance(storyboard.get("diagnostics"), dict) else {}
+        return {
+            "story_summary": str(storyboard.get("story_summary") or "").strip(),
+            "full_scenario": str(storyboard.get("full_scenario") or "").strip(),
+            "voice_script": str(storyboard.get("voice_script") or "").strip(),
+            "director_summary": str(storyboard.get("director_summary") or "").strip(),
+            "audio_understanding": storyboard.get("audio_understanding") if isinstance(storyboard.get("audio_understanding"), dict) else {},
+            "narrative_strategy": storyboard.get("narrative_strategy") if isinstance(storyboard.get("narrative_strategy"), dict) else {},
+            "diagnostics": diagnostics,
+            "scenes": mapped_scenes,
+        }
+
     candidate = payload
     changed = False
     if isinstance(candidate.get("storyboard_out"), dict):
@@ -1265,6 +1362,10 @@ def _repair_scenario_director_payload(payload: dict) -> dict:
         changed = True
     elif isinstance(candidate.get("output"), dict) and isinstance(candidate["output"].get("scenes"), list):
         candidate = candidate["output"]
+        changed = True
+
+    if _is_compact_director_payload(candidate):
+        candidate = _map_compact_director_to_legacy(candidate)
         changed = True
 
     repaired = dict(candidate)
@@ -7728,10 +7829,14 @@ def _build_request_text(
         "You are the ONLY scenario writer/director/router for a music video.\n"
         "Return ONE JSON object only (no markdown/comments).\n"
         "Decide independently: scene count, boundaries, timing, routing, lip sync placement, transitions, first/last usage, and world progression.\n"
-        "System will only validate/normalize structure and execute. Do not optimize for old clip formulas.\n"
-        "Required output fields: scenes[].time_start,time_end,local_phrase,render_mode,resolved_workflow_key,lip_sync,lip_sync_text,"
-        "music_vocal_lipsync_allowed,needs_two_frames,identity_lock_applied,identity_lock_fields_used,"
-        "video_generation_route,planned_video_generation_route.\n"
+        "If no location ref is provided, choose world/location yourself from audio+character context.\n"
+        "If location ref exists, treat it as a hard anchor and respect it.\n"
+        "Do not optimize for old clip formulas or fixed route quotas.\n"
+        "Return COMPACT director JSON with shape:\n"
+        "{input_understanding:{...},storyboard:{story_summary,full_scenario,voice_script,director_summary,audio_understanding,narrative_strategy,diagnostics:{total_duration,scene_count},scenes:[{scene_id,start_time_sec,end_time_sec,route,description,content_tags}]}}\n"
+        "Allowed route values: i2v | lip_sync_music | f_l(first_last).\n"
+        "Keep same character identity across scenes when character refs exist.\n"
+        "System will translate your compact output into production contract and execute it.\n"
         f"Raw inputs: {json.dumps(runtime_payload, ensure_ascii=False)}"
         f"{retry_suffix}"
     )
