@@ -2777,32 +2777,6 @@ function getRoleDiversityDirective(sceneRole) {
   return "Role: ending. Resolve the moment with visual closure while preserving scene continuity.";
 }
 
-function enforceSceneDiversityLocal(rawScenes) {
-  const scenes = Array.isArray(rawScenes) ? rawScenes : [];
-  return scenes.map((scene, idx) => {
-    const prev = idx > 0 ? scenes[idx - 1] : null;
-    const sceneRole = normalizeSceneRole(scene?.sceneRole, idx);
-    const currentText = String(scene?.sceneText || scene?.visualDescription || scene?.why || "").trim();
-    const prevText = String(prev?.sceneText || prev?.visualDescription || prev?.why || "").trim();
-    const isNearDup = isNearDuplicateSceneText(currentText, prevText);
-    const roleDirective = getRoleDiversityDirective(sceneRole);
-    const baseFramePrompt = String(scene?.framePrompt || scene?.imagePrompt || scene?.prompt || "").trim();
-    const baseVideoPrompt = String(scene?.videoPrompt || scene?.transitionActionPrompt || "").trim();
-
-    const patch = {
-      sceneRole,
-      framePrompt: baseFramePrompt ? `${baseFramePrompt}\n${roleDirective}` : roleDirective,
-      videoPrompt: baseVideoPrompt ? `${baseVideoPrompt}\n${roleDirective}` : roleDirective,
-    };
-
-    if (isNearDup && currentText) {
-      patch.sceneText = `${currentText} (${sceneRole.replace("_", " ")} beat; add new visual meaning relative to previous shot).`;
-    }
-
-    return { ...scene, ...patch };
-  });
-}
-
 function buildContinuousContinuityBridge({ scene, previousScene }) {
   const roleDirective = getRoleDiversityDirective(scene?.sceneRole);
   const baseline = [
@@ -12371,52 +12345,59 @@ onClipSec: (nodeId, value) => {
                   const audioType = wantLipSync ? "song" : "bg";
 
                   const payload = {
-                    audioUrl: audioUrl || null,
-                    text: textValue || null,
-                    mode,
-                    scenarioKey,
-                    shootKey,
-                    styleKey,
-                    freezeStyle,
-                    wantLipSync,
-                    refs: {
-                      character: characterRefs,
-                      location: locationRefs,
-                      props: propsRefs,
-                      style: styleRefs,
+                    mode: "oneshot",
+                    audioUrl: audioUrl || "",
+                    text: textValue || "",
+                    refsByRole: {
+                      character_1: Array.isArray(characterRefs) ? characterRefs : [],
+                      location: Array.isArray(locationRefs) ? locationRefs : [],
+                      props: Array.isArray(propsRefs) ? propsRefs : [],
+                      style: Array.isArray(styleRefs) ? styleRefs : [],
                     },
-                    characterRefs,
-                    locationRefs,
-                    propsRefs,
-                    styleRef,
-                    audioType,
+                    selectedCharacterRefUrl: Array.isArray(characterRefs) ? (characterRefs[0] || "") : "",
+                    selectedStyleRefUrl: styleRef || (Array.isArray(styleRefs) ? (styleRefs[0] || "") : ""),
+                    selectedLocationRefUrl: Array.isArray(locationRefs) ? (locationRefs[0] || "") : "",
+                    selectedPropsRefUrls: Array.isArray(propsRefs) ? propsRefs : [],
+                    options: {
+                      mode,
+                      scenarioKey,
+                      shootKey,
+                      styleKey,
+                      freezeStyle,
+                      wantLipSync,
+                      audioType,
+                    },
                   };
 
-                  const res = await fetch(`${API_BASE}/api/clip/plan`, {
+                  const out = await fetchJson("/api/clip/comfy/scenario-director/generate", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
+                    body: payload,
                     signal: controller.signal,
                   });
-
-                  const out = await res.json().catch(() => ({}));
-                  if (!res.ok || !out?.ok) throw new Error(out?.detail || out?.hint || "clip_plan_failed");
+                  if (!out?.ok) throw new Error(out?.detail || out?.hint || "scenario_director_failed");
+                  const normalizedDirector = normalizeScenarioDirectorApiResponse(out, {});
 
                   if (parseTokenRef.current !== parseToken) return;
                   const latestInput = collectBrainPlannerInput({ brainNodeId: nodeId, nodesList: nodesRef.current, edgesList: edgesRef.current });
                   if (latestInput.signature !== plannerInputSignature) return;
 
-                  const audioDuration = Number(out?.audioDuration || 30);
-                  const scenesRaw = Array.isArray(out?.scenes) ? out.scenes : [];
+                  const audioDuration = Number(
+                    normalizedDirector?.storyboardOut?.scenes?.[normalizedDirector?.storyboardOut?.scenes?.length - 1]?.time_end
+                    || normalizedDirector?.directorOutput?.scenes?.[normalizedDirector?.directorOutput?.scenes?.length - 1]?.t1
+                    || out?.audioDuration
+                    || 30
+                  );
+                  const scenesRaw = Array.isArray(normalizedDirector?.directorOutput?.scenes)
+                    ? normalizedDirector.directorOutput.scenes
+                    : (Array.isArray(normalizedDirector?.storyboardOut?.scenes) ? normalizedDirector.storyboardOut.scenes : []);
                   const validation = out?.plannerDebug?.validation || {};
-                  const diverseScenesRaw = enforceSceneDiversityLocal(scenesRaw);
 
                   const existingScenesById = normalizeSceneCollectionWithSceneId(((nodesRef.current || []).find((x) => x.id === nodeId)?.data?.scenes || []), "scene");
-                  const scenes = diverseScenesRaw
+                  const scenes = scenesRaw
                     .map((s, idx) => {
-                      const t0 = Number(s.start ?? s.t0 ?? 0);
-                      const t1 = Number(s.end ?? s.t1 ?? 0);
-                      const prompt = String(s.imagePrompt || s.framePrompt || s.prompt || s.sceneText || `Scene ${idx + 1}`);
+                      const t0 = Number(s.start ?? s.t0 ?? s.time_start ?? 0);
+                      const t1 = Number(s.end ?? s.t1 ?? s.time_end ?? 0);
+                      const prompt = String(s.imagePrompt || s.image_prompt || s.framePrompt || s.prompt || s.sceneText || s.scene_goal || `Scene ${idx + 1}`);
                       const transitionType = resolveSceneTransitionType(s);
                       const sceneId = buildCanonicalSceneId(s, idx, "scene");
                       return {
