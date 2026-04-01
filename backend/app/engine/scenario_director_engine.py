@@ -650,6 +650,12 @@ class ScenarioDirectorScene(BaseModel):
     phrase_loop_action: str = "keep"
     route_before_rebalance: str = ""
     route_after_rebalance: str = ""
+    phrase_boundary_trim_applied: bool = False
+    phrase_boundary_trim_reason: str = ""
+    original_scene_end: float = 0.0
+    trimmed_scene_end: float = 0.0
+    lip_sync_route_state_consistent: bool = False
+    audio_slice_bounds_filled_from_scene: bool = False
 
     @field_validator("scene_id", mode="before")
     @classmethod
@@ -781,6 +787,12 @@ class ScenarioDirectorScene(BaseModel):
         self.phrase_loop_action = phrase_loop_action if phrase_loop_action in {"keep", "merge", "reframe", "reject_duplicate"} else "keep"
         self.route_before_rebalance = str(self.route_before_rebalance or "").strip().lower()
         self.route_after_rebalance = str(self.route_after_rebalance or "").strip().lower()
+        self.phrase_boundary_trim_applied = _coerce_bool(self.phrase_boundary_trim_applied, False)
+        self.phrase_boundary_trim_reason = str(self.phrase_boundary_trim_reason or "").strip()
+        self.original_scene_end = _safe_float(self.original_scene_end, self.time_end)
+        self.trimmed_scene_end = _safe_float(self.trimmed_scene_end, self.time_end)
+        self.lip_sync_route_state_consistent = _coerce_bool(self.lip_sync_route_state_consistent, False)
+        self.audio_slice_bounds_filled_from_scene = _coerce_bool(self.audio_slice_bounds_filled_from_scene, False)
         self.ltx_reason = _normalize_ltx_reason(
             str(self.ltx_reason or "").strip(),
             self.ltx_mode,
@@ -892,6 +904,8 @@ class ScenarioDirectorDiagnostics(BaseModel):
     active_connected_character_roles: list[str] = Field(default_factory=list)
     single_character_mode_enforced: bool = False
     removed_inactive_roles: list[str] = Field(default_factory=list)
+    direct_gemini_storyboard_mode: bool = False
+    intro_logic_applied: bool = False
 
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorDiagnostics":
@@ -922,6 +936,8 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.active_connected_character_roles = [str(item).strip().lower() for item in (self.active_connected_character_roles or []) if str(item).strip()]
         self.single_character_mode_enforced = _coerce_bool(self.single_character_mode_enforced, False)
         self.removed_inactive_roles = [str(item).strip().lower() for item in (self.removed_inactive_roles or []) if str(item).strip()]
+        self.direct_gemini_storyboard_mode = _coerce_bool(self.direct_gemini_storyboard_mode, False)
+        self.intro_logic_applied = _coerce_bool(self.intro_logic_applied, False)
         return self
 
 
@@ -2899,6 +2915,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "pauseDuckSilenceNotes": "",
             "musicMixHint": scene.music_mix_hint,
             "lipSync": scene.lip_sync,
+            "isLipSync": scene.lip_sync,
             "lipSyncText": scene.lip_sync_text,
             "sendAudioToGenerator": scene.send_audio_to_generator,
             "audioSliceKind": scene.audio_slice_kind,
@@ -2976,6 +2993,12 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "videoDowngradeReasonMessage": scene.video_downgrade_reason_message,
             "videoGenerationRoute": scene.video_generation_route,
             "plannedVideoGenerationRoute": scene.planned_video_generation_route,
+            "phraseBoundaryTrimApplied": scene.phrase_boundary_trim_applied,
+            "phraseBoundaryTrimReason": scene.phrase_boundary_trim_reason,
+            "originalSceneEnd": scene.original_scene_end,
+            "trimmedSceneEnd": scene.trimmed_scene_end,
+            "lipSyncRouteStateConsistent": scene.lip_sync_route_state_consistent,
+            "audioSliceBoundsFilledFromScene": scene.audio_slice_bounds_filled_from_scene,
             "identityLockApplied": scene.identity_lock_applied,
             "identityLockNotes": scene.identity_lock_notes,
             "identityLockFieldsUsed": scene.identity_lock_fields_used,
@@ -7192,9 +7215,26 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
             scene.time_end = round(max(scene.time_start, _safe_float(scene.time_end, scene.time_start)), 3)
             scene.duration = round(max(0.0, scene.time_end - scene.time_start), 3)
             scene.requested_duration_sec = scene.duration
-            scene.audio_slice_start_sec = scene.time_start
-            scene.audio_slice_end_sec = scene.time_end
-            scene.audio_slice_expected_duration_sec = scene.duration
+            route_value = str(scene.video_generation_route or scene.planned_video_generation_route or scene.resolved_workflow_key or "").strip().lower()
+            is_lip_sync_route = route_value == "lip_sync_music"
+            if is_lip_sync_route:
+                scene.render_mode = "lip_sync_music"
+                scene.ltx_mode = "lip_sync_music"
+                scene.lip_sync = True
+                scene.send_audio_to_generator = True
+                scene.audio_slice_kind = "music_vocal"
+                scene.music_vocal_lipsync_allowed = True
+                scene.audio_slice_start_sec = scene.time_start
+                scene.audio_slice_end_sec = scene.time_end
+                scene.audio_slice_expected_duration_sec = scene.duration
+                scene.audio_slice_bounds_filled_from_scene = True
+                scene.lip_sync_route_state_consistent = True
+            else:
+                scene.audio_slice_start_sec = scene.time_start
+                scene.audio_slice_end_sec = scene.time_end
+                scene.audio_slice_expected_duration_sec = scene.duration
+                scene.audio_slice_bounds_filled_from_scene = False
+                scene.lip_sync_route_state_consistent = bool(scene.lip_sync) == is_lip_sync_route
         storyboard_out.scenes = scenes
         logger.info(
             "[SCENARIO DIRECT MODE] direct_gemini_storyboard_mode=true scene_merge_applied=false backend_route_override_applied=false transcript_segment_count=%s final_scene_count=%s scene_count_matches_transcript_beats=%s",
@@ -8999,6 +9039,34 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "primarySemantic": semantic_matches[0] if semantic_matches else {},
         }
 
+    def _direct_mode_trim_scene_end(scene_start: float, scene_end: float) -> tuple[float, bool, str]:
+        if not direct_gemini_storyboard_mode:
+            return scene_end, False, "direct_mode_disabled"
+        if scene_end <= scene_start:
+            return scene_end, False, "invalid_scene_window"
+        candidates: list[float] = []
+        for row in [*transcript_rows, *semantic_timeline]:
+            if not isinstance(row, dict):
+                continue
+            t1 = _safe_float(row.get("t1"), _safe_float(row.get("end"), -1.0))
+            if t1 <= scene_start or t1 >= scene_end:
+                continue
+            candidates.append(t1)
+        if not candidates:
+            return scene_end, False, "no_phrase_boundary_candidate"
+        nearest_back = max(candidates)
+        trim_delta = scene_end - nearest_back
+        min_duration_after_trim = 0.8
+        max_safe_trim = 0.65
+        min_trim_delta = 0.08
+        if trim_delta < min_trim_delta:
+            return scene_end, False, "trim_delta_too_small"
+        if trim_delta > max_safe_trim:
+            return scene_end, False, "trim_delta_too_large"
+        if (nearest_back - scene_start) < min_duration_after_trim:
+            return scene_end, False, "trim_makes_scene_too_short"
+        return round(nearest_back, 3), True, "trimmed_to_nearest_phrase_end"
+
     print(
         "[SCENARIO PHRASE MAP] transcript=%s semanticTimeline=%s scenes=%s",
         len(transcript_rows),
@@ -9010,7 +9078,8 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         if not isinstance(scene, dict):
             continue
         scene_start = _safe_float(scene.get("t0"), 0.0)
-        scene_end = _safe_float(scene.get("t1"), scene_start)
+        raw_scene_end = _safe_float(scene.get("t1"), scene_start)
+        scene_end, trimmed, trim_reason = _direct_mode_trim_scene_end(scene_start, raw_scene_end)
         scene_duration = _safe_float(scene.get("duration"), max(0.0, scene_end - scene_start))
         scene_phrase_match = _match_scene_phrases_by_time(scene_start, scene_end)
         primary_semantic = scene_phrase_match.get("primarySemantic") if isinstance(scene_phrase_match.get("primarySemantic"), dict) else {}
@@ -9025,7 +9094,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             scene_phrase_match.get("matchedPhraseTexts"),
         )
         primary_phrase = str(scene_phrase_match.get("primaryPhrase") or "").strip()
-        if _is_short_music_intro_segment(
+        if (not direct_gemini_storyboard_mode) and _is_short_music_intro_segment(
             text=primary_phrase,
             t0=scene_start,
             t1=scene_end,
@@ -9039,6 +9108,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
         is_lip_sync_route = route == "lip_sync_music"
         is_first_last_route = route == "first_last"
         internal_route = "f_l" if is_first_last_route else route
+        lip_sync_route_state_consistent = is_lip_sync_route
         legacy_scenes.append(
             {
                 "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
@@ -9065,8 +9135,16 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "continuation_from_previous": False,
                 "narration_mode": "full",
                 "local_phrase": primary_phrase or None,
-                "audio_slice_kind": "voice_only" if primary_phrase else "none",
+                "audio_slice_kind": "music_vocal" if is_lip_sync_route else ("voice_only" if primary_phrase else "none"),
                 "music_vocal_lipsync_allowed": is_lip_sync_route,
+                "lip_sync": is_lip_sync_route,
+                "lipSync": is_lip_sync_route,
+                "isLipSync": is_lip_sync_route,
+                "send_audio_to_generator": is_lip_sync_route,
+                "sendAudioToGenerator": is_lip_sync_route,
+                "audio_slice_start_sec": scene_start,
+                "audio_slice_end_sec": scene_end,
+                "audio_slice_expected_duration_sec": scene_duration,
                 "matched_phrase_texts": scene_phrase_match.get("matchedPhraseTexts") or [],
                 "scene_phrase_count": int(scene_phrase_match.get("phraseCount") or 0),
                 "scene_phrase_source": str(scene_phrase_match.get("sourceUsed") or "none"),
@@ -9082,6 +9160,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "sourceRoute": route,
                 "video_generation_route": internal_route,
                 "planned_video_generation_route": route,
+                "phrase_boundary_trim_applied": trimmed,
+                "phrase_boundary_trim_reason": trim_reason,
+                "original_scene_end": raw_scene_end,
+                "trimmed_scene_end": scene_end,
+                "lip_sync_route_state_consistent": lip_sync_route_state_consistent,
+                "audio_slice_bounds_filled_from_scene": is_lip_sync_route,
             }
         )
     director_summary = (
@@ -9138,6 +9222,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "planner_mode": "full_audio_first",
             "how_director_note_was_integrated": "effective_director_note_story_frame_bias_plus_audio_rhythm_driver" if has_effective_director_note else "",
             "direct_gemini_storyboard_mode": direct_gemini_storyboard_mode,
+            "intro_logic_applied": False if direct_gemini_storyboard_mode else True,
             "scene_merge_applied": scene_merge_applied,
             "backend_route_override_applied": False,
             "transcript_segment_count": len([row for row in transcript_rows if isinstance(row, dict)]),
