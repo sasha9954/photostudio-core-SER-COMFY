@@ -674,6 +674,30 @@ def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
     ltx_mode = "f_l" if public_route == "first_last" else public_route
     resolved_workflow_file = LTX_WORKFLOW_KEY_TO_FILE.get(workflow_key, "") if workflow_key else ""
     route_render_mode_consistent = bool(public_route and render_mode == DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE.get(public_route))
+    is_lip_sync_route = public_route == "lip_sync_music"
+    route_flags_consistent = bool(
+        public_route
+        and (
+            (
+                is_lip_sync_route
+                and workflow_key == "lip_sync"
+                and ltx_mode == "lip_sync_music"
+                and render_mode == "lip_sync_music"
+            )
+            or (
+                public_route == "i2v"
+                and workflow_key == "i2v"
+                and ltx_mode == "i2v"
+                and render_mode == "image_video"
+            )
+            or (
+                public_route == "first_last"
+                and workflow_key == "f_l"
+                and ltx_mode == "f_l"
+                and render_mode == "first_last"
+            )
+        )
+    )
     return {
         "sourceRoute": public_route,
         "route": public_route,
@@ -688,6 +712,18 @@ def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
         "renderMode": render_mode,
         "render_mode": render_mode,
         "route_render_mode_consistent": route_render_mode_consistent,
+        "lipSync": is_lip_sync_route,
+        "lip_sync": is_lip_sync_route,
+        "isLipSync": is_lip_sync_route,
+        "requiresAudioSensitiveVideo": is_lip_sync_route,
+        "requires_audio_sensitive_video": is_lip_sync_route,
+        "sendAudioToGenerator": is_lip_sync_route,
+        "send_audio_to_generator": is_lip_sync_route,
+        "audioSliceKind": "music_vocal" if is_lip_sync_route else "none",
+        "audio_slice_kind": "music_vocal" if is_lip_sync_route else "none",
+        "musicVocalLipsyncAllowed": is_lip_sync_route,
+        "music_vocal_lipsync_allowed": is_lip_sync_route,
+        "route_flags_consistent": route_flags_consistent,
     }
 
 
@@ -4802,6 +4838,19 @@ def _validate_storyboard_timeline(duration: float, scenes: list[dict]) -> tuple[
     return True, None, warnings
 
 
+def _evaluate_timeline_coverage(duration: float, scenes: list[dict], *, tolerance_sec: float = 0.5) -> tuple[bool, float]:
+    if duration <= 0:
+        return True, 0.0
+    if not scenes:
+        return False, float(duration)
+    try:
+        last_end = max(float(scene.get("end") or 0.0) for scene in scenes if isinstance(scene, dict))
+    except Exception:
+        return False, float(duration)
+    missing_tail_duration_sec = max(0.0, float(duration) - max(0.0, last_end))
+    return missing_tail_duration_sec <= max(0.0, float(tolerance_sec)), missing_tail_duration_sec
+
+
 def _format_audio_analysis_summary(audio_analysis: dict) -> str:
     duration = float(audio_analysis.get("duration") or 0.0)
     bpm = float(audio_analysis.get("bpm") or 0.0)
@@ -7055,7 +7104,12 @@ If any of the required descriptive fields are returned in English, the output is
             if not str(scene.get("cameraMotion") or scene.get("camera") or "").strip():
                 return False, f"scene_{idx}_cameraMotion_missing"
             route_raw = str(scene.get("route") or scene.get("renderRoute") or "").strip().lower()
-            if route_raw and not _normalize_ltx_workflow_key(route_raw):
+            if direct_gemini_storyboard_mode:
+                if not route_raw:
+                    return False, f"scene_{idx}_route_missing"
+                if route_raw not in {"i2v", "lip_sync_music", "first_last"}:
+                    return False, f"scene_{idx}_unsupported_route"
+            elif route_raw and not _normalize_ltx_workflow_key(route_raw):
                 return False, f"scene_{idx}_unsupported_route"
         return True, None
 
@@ -7077,6 +7131,12 @@ If any of the required descriptive fields are returned in English, the output is
         if not timeline_ok:
             is_valid = False
             reason = timeline_reason
+        elif direct_gemini_storyboard_mode:
+            coverage_ok, missing_tail_duration_sec = _evaluate_timeline_coverage(timeline_duration, parsed.get("scenes") or [], tolerance_sec=0.5)
+            if not coverage_ok:
+                is_valid = False
+                reason = "timeline_not_fully_covered"
+                validation_warnings.append(f"missing_tail_duration_sec={missing_tail_duration_sec:.3f}")
 
     if not is_valid:
         retry_used = True
@@ -7091,6 +7151,12 @@ If any of the required descriptive fields are returned in English, the output is
             if not timeline_ok:
                 is_valid = False
                 reason = timeline_reason
+            elif direct_gemini_storyboard_mode:
+                coverage_ok, missing_tail_duration_sec = _evaluate_timeline_coverage(timeline_duration, parsed.get("scenes") or [], tolerance_sec=0.5)
+                if not coverage_ok:
+                    is_valid = False
+                    reason = "timeline_not_fully_covered"
+                    validation_warnings.append(f"missing_tail_duration_sec={missing_tail_duration_sec:.3f}")
 
     validation_rejected_reason = reason if not is_valid else None
 
@@ -7169,7 +7235,7 @@ If any of the required descriptive fields are returned in English, the output is
         lyric_fragment = str(s.get("lyricFragment") or lip_sync_text).strip()
         source_route_raw = str(s.get("route") or s.get("renderRoute") or "").strip().lower()
         source_route = source_route_raw if source_route_raw else ""
-        if not source_route:
+        if not source_route and not direct_gemini_storyboard_mode:
             if str(s.get("transitionType") or "").strip().lower() == "continuous":
                 source_route = "first_last"
             elif lip_sync_text:
@@ -7311,6 +7377,13 @@ If any of the required descriptive fields are returned in English, the output is
 
         scene_delta = _build_scene_delta(s, previous_scene)
         scene_text_ru = visual_desc or reason_text or lyric_fragment
+        route_flags_consistent = bool(contract_fields.get("route_flags_consistent"))
+        accepted_as_is = bool(
+            direct_gemini_storyboard_mode
+            and route_flags_consistent
+            and not semantic_fallback_used
+            and not continuity_rewritten
+        )
         scene_obj = {
             **s,
             "id": str(s.get("id") or f"scene_{idx + 1:03d}"),
@@ -7333,7 +7406,7 @@ If any of the required descriptive fields are returned in English, the output is
             "characterAction": character_action or "Character performs the current emotional beat",
             "cameraMotion": camera_motion or "Cinematic movement aligned with rhythm",
             "environment": scene_environment or str(session_world_anchors.get("location") or "same main location"),
-            "isLipSync": bool(lip_sync_text),
+            "isLipSync": bool(contract_fields.get("isLipSync")),
             "lipSyncText": lip_sync_text,
             "lyricFragment": lyric_fragment,
             "continuityMemory": continuity_memory,
@@ -7356,8 +7429,11 @@ If any of the required descriptive fields are returned in English, the output is
             "renderMode": contract_fields.get("renderMode"),
             "render_mode": contract_fields.get("render_mode"),
             "route_render_mode_consistent": bool(contract_fields.get("route_render_mode_consistent")),
-            "acceptedAsIs": bool(direct_gemini_storyboard_mode and not semantic_fallback_used and not continuity_rewritten),
+            "route_flags_consistent": route_flags_consistent,
+            "acceptedAsIs": accepted_as_is,
+            "accepted_as_is": accepted_as_is,
         }
+        scene_obj.update(contract_fields)
         normalized_scenes.append(scene_obj)
         previous_scene = s
         previous_continuity_memory = continuity_memory
@@ -7387,6 +7463,19 @@ If any of the required descriptive fields are returned in English, the output is
         is_legacy_lipsync = bool(scene.get("lipSync") or scene.get("isLipSync") or str(scene.get("renderMode") or "").strip().lower() == "avatar_lipsync")
         if bool(is_route_lipsync or (not direct_gemini_storyboard_mode and is_legacy_lipsync)):
             lip_sync_scenes.append(scene)
+    effective_audio_duration = _resolve_timeline_duration(parsed)
+    timeline_end_close_to_audio_duration, missing_tail_duration_sec = _evaluate_timeline_coverage(
+        effective_audio_duration,
+        normalized_scenes,
+        tolerance_sec=0.5,
+    )
+    route_flags_consistent_global = all(bool(scene.get("route_flags_consistent")) for scene in normalized_scenes if isinstance(scene, dict))
+    accepted_as_is_global = bool(
+        direct_gemini_storyboard_mode
+        and timeline_end_close_to_audio_duration
+        and route_flags_consistent_global
+        and all(bool(scene.get("acceptedAsIs")) for scene in normalized_scenes if isinstance(scene, dict))
+    )
 
     return {
         "ok": True,
@@ -7430,6 +7519,11 @@ If any of the required descriptive fields are returned in English, the output is
                 "gemini_storyboard_used_as_source_of_truth": bool(direct_gemini_storyboard_mode),
                 "backend_creative_override_applied": False if direct_gemini_storyboard_mode else None,
                 "only_technical_validation_applied": bool(direct_gemini_storyboard_mode),
+                "timeline_end_close_to_audio_duration": bool(timeline_end_close_to_audio_duration),
+                "missing_tail_duration_sec": round(float(missing_tail_duration_sec), 3),
+                "route_flags_consistent": bool(route_flags_consistent_global),
+                "legacy_override_applied": False if direct_gemini_storyboard_mode else None,
+                "accepted_as_is": bool(accepted_as_is_global),
                 "technical_normalizations": technical_normalizations,
                 "technical_warnings": validation_warnings,
                 "sceneRouteMapping": [
@@ -7444,6 +7538,7 @@ If any of the required descriptive fields are returned in English, the output is
                         "mappedWorkflowKey": str(scene.get("resolvedWorkflowKey") or ""),
                         "mappedWorkflowFile": str(scene.get("resolvedWorkflowFile") or ""),
                         "accepted_as_is": bool(scene.get("acceptedAsIs")),
+                        "route_flags_consistent": bool(scene.get("route_flags_consistent")),
                     }
                     for scene in normalized_scenes
                 ],
