@@ -1196,18 +1196,37 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     const storyboardScene = storyboardScenes[index] && typeof storyboardScenes[index] === "object" ? storyboardScenes[index] : null;
     const responseScene = responseScenes[index] && typeof responseScenes[index] === "object" ? responseScenes[index] : null;
     if (!directorScene && !storyboardScene && !responseScene) return null;
+    const resolvedWorkflowKey = firstNonEmptyText(
+      directorScene?.resolvedWorkflowKey,
+      storyboardScene?.resolvedWorkflowKey,
+      storyboardScene?.resolved_workflow_key,
+      responseScene?.resolvedWorkflowKey,
+      responseScene?.resolved_workflow_key
+    ) || "i2v";
+    const videoGenerationRoute = firstNonEmptyText(
+      directorScene?.videoGenerationRoute,
+      storyboardScene?.videoGenerationRoute,
+      storyboardScene?.video_generation_route,
+      responseScene?.videoGenerationRoute,
+      responseScene?.video_generation_route
+    );
+    const plannedVideoGenerationRoute = firstNonEmptyText(
+      directorScene?.plannedVideoGenerationRoute,
+      storyboardScene?.plannedVideoGenerationRoute,
+      storyboardScene?.planned_video_generation_route,
+      responseScene?.plannedVideoGenerationRoute,
+      responseScene?.planned_video_generation_route
+    );
+    const routeNormalized = String(videoGenerationRoute || plannedVideoGenerationRoute || resolvedWorkflowKey || "").trim().toLowerCase();
+    const lipSyncFromRoute = routeNormalized === "lip_sync_music";
+    const lipSyncFromState = Boolean(directorScene?.lipSync ?? storyboardScene?.lipSync ?? storyboardScene?.lip_sync ?? responseScene?.lipSync ?? responseScene?.lip_sync);
+    const uiLipSyncSource = lipSyncFromRoute ? "route" : (lipSyncFromState ? "state" : "legacy");
     return {
       ...(responseScene || {}),
       ...(storyboardScene || {}),
       ...(directorScene || {}),
       renderMode: firstNonEmptyText(directorScene?.renderMode, storyboardScene?.renderMode, storyboardScene?.render_mode, responseScene?.renderMode, responseScene?.render_mode) || "image_video",
-      resolvedWorkflowKey: firstNonEmptyText(
-        directorScene?.resolvedWorkflowKey,
-        storyboardScene?.resolvedWorkflowKey,
-        storyboardScene?.resolved_workflow_key,
-        responseScene?.resolvedWorkflowKey,
-        responseScene?.resolved_workflow_key
-      ) || "i2v",
+      resolvedWorkflowKey,
       sourceRoute: firstNonEmptyText(
         directorScene?.sourceRoute,
         storyboardScene?.sourceRoute,
@@ -1215,20 +1234,8 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         responseScene?.sourceRoute,
         responseScene?.source_route
       ),
-      videoGenerationRoute: firstNonEmptyText(
-        directorScene?.videoGenerationRoute,
-        storyboardScene?.videoGenerationRoute,
-        storyboardScene?.video_generation_route,
-        responseScene?.videoGenerationRoute,
-        responseScene?.video_generation_route
-      ),
-      plannedVideoGenerationRoute: firstNonEmptyText(
-        directorScene?.plannedVideoGenerationRoute,
-        storyboardScene?.plannedVideoGenerationRoute,
-        storyboardScene?.planned_video_generation_route,
-        responseScene?.plannedVideoGenerationRoute,
-        responseScene?.planned_video_generation_route
-      ),
+      videoGenerationRoute,
+      plannedVideoGenerationRoute,
       resolvedWorkflowFile: firstNonEmptyText(
         directorScene?.resolvedWorkflowFile,
         storyboardScene?.resolvedWorkflowFile,
@@ -1250,7 +1257,9 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         ?? responseScene?.musicVocalLipSyncAllowed
         ?? responseScene?.music_vocal_lipsync_allowed
       ),
-      lipSync: Boolean(directorScene?.lipSync ?? storyboardScene?.lipSync ?? storyboardScene?.lip_sync ?? responseScene?.lipSync ?? responseScene?.lip_sync),
+      lipSync: lipSyncFromRoute || lipSyncFromState,
+      isLipSync: lipSyncFromRoute || lipSyncFromState,
+      uiLipsyncSource: uiLipSyncSource,
       lipSyncText: firstNonEmptyText(directorScene?.lipSyncText, storyboardScene?.lipSyncText, storyboardScene?.lip_sync_text, responseScene?.lipSyncText, responseScene?.lip_sync_text),
       sendAudioToGenerator: Boolean(
         directorScene?.sendAudioToGenerator
