@@ -156,7 +156,7 @@ class ScenarioDirectorControlsIn(BaseModel):
 
 class ScenarioDirectorGenerateIn(BaseModel):
     mode: str | None = "oneshot"
-    source: ScenarioDirectorSourceIn
+    source: ScenarioDirectorSourceIn | None = None
     context_refs: dict[str, ScenarioDirectorReferenceIn] = Field(default_factory=dict)
     director_controls: ScenarioDirectorControlsIn = Field(default_factory=ScenarioDirectorControlsIn)
     connected_context_summary: dict[str, Any] = Field(default_factory=dict)
@@ -166,6 +166,14 @@ class ScenarioDirectorGenerateIn(BaseModel):
     timeWindow: dict[str, Any] = Field(default_factory=dict)
     expectedScenes: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    audioUrl: str = ""
+    text: str = ""
+    refsByRole: dict[str, list[str]] = Field(default_factory=dict)
+    selectedCharacterRefUrl: str = ""
+    selectedStyleRefUrl: str = ""
+    selectedLocationRefUrl: str = ""
+    selectedPropsRefUrls: list[str] = Field(default_factory=list)
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
@@ -586,6 +594,65 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
 @router.post("/clip/comfy/scenario-director/generate")
 async def clip_comfy_scenario_director_generate(payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
     req = payload.model_dump(mode="json")
+    if not isinstance(req.get("source"), dict):
+        source_mode = "audio" if str(req.get("audioUrl") or "").strip() else "audio"
+        req["source"] = {
+            "source_mode": source_mode,
+            "source_origin": "connected",
+            "source_value": str(req.get("audioUrl") or "").strip() or str(req.get("text") or "").strip(),
+            "source_preview": str(req.get("text") or "").strip(),
+            "source_label": "frontend_oneshot",
+            "audioDurationSec": req.get("audioDurationSec"),
+            "metadata": {},
+        }
+    if not isinstance(req.get("context_refs"), dict) or not req.get("context_refs"):
+        refs_by_role = req.get("refsByRole") if isinstance(req.get("refsByRole"), dict) else {}
+        context_refs: dict[str, Any] = {}
+        for role in CONNECT_REFS_MAIN_ROLES:
+            raw_refs = refs_by_role.get(role)
+            refs = [str(item).strip() for item in (raw_refs if isinstance(raw_refs, list) else []) if str(item).strip()]
+            if refs:
+                context_refs[role] = {
+                    "label": role,
+                    "source_label": role,
+                    "preview": refs[0],
+                    "value": refs[0],
+                    "refs": refs,
+                    "count": len(refs),
+                    "meta": {"connected": True},
+                }
+        selected_by_role = {
+            "character_1": str(req.get("selectedCharacterRefUrl") or "").strip(),
+            "style": str(req.get("selectedStyleRefUrl") or "").strip(),
+            "location": str(req.get("selectedLocationRefUrl") or "").strip(),
+        }
+        selected_props = [str(item).strip() for item in (req.get("selectedPropsRefUrls") if isinstance(req.get("selectedPropsRefUrls"), list) else []) if str(item).strip()]
+        if selected_props and "props" not in context_refs:
+            context_refs["props"] = {
+                "label": "props",
+                "source_label": "props",
+                "preview": selected_props[0],
+                "value": selected_props[0],
+                "refs": selected_props,
+                "count": len(selected_props),
+                "meta": {"connected": True},
+            }
+        for role, selected_url in selected_by_role.items():
+            if selected_url and role not in context_refs:
+                context_refs[role] = {
+                    "label": role,
+                    "source_label": role,
+                    "preview": selected_url,
+                    "value": selected_url,
+                    "refs": [selected_url],
+                    "count": 1,
+                    "meta": {"connected": True},
+                }
+        req["context_refs"] = context_refs
+    if isinstance(req.get("options"), dict):
+        req.setdefault("metadata", {})
+        if isinstance(req.get("metadata"), dict):
+            req["metadata"]["frontendOptions"] = req.get("options")
     if _should_use_scenario_director_fixture(req, reason="manual_override"):
         logger.warning("[clip_comfy_scenario_director_generate] using deterministic fixture reason=manual_override")
         return _build_scenario_director_fixture(req, fixture_reason="manual_override")

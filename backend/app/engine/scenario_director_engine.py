@@ -7530,38 +7530,9 @@ def _enforce_clip_phrase_and_duration_splits(storyboard_out: ScenarioDirectorSto
 
 
 def _harden_storyboard_out(storyboard_out: ScenarioDirectorStoryboardOut, payload: dict[str, Any]) -> ScenarioDirectorStoryboardOut:
-    content_type_policy = _get_content_type_policy(payload)
-    audio_duration_sec = _resolve_audio_duration_sec(payload)
-    if content_type_policy.get("value") == "music_video":
-        storyboard_out = _filter_short_music_intro_scenes(storyboard_out)
-    storyboard_out = _apply_scene_count_limit(storyboard_out)
-    storyboard_out = _filter_or_repair_weak_scenes(storyboard_out)
-    storyboard_out = _enforce_character_lock(payload, storyboard_out)
-    storyboard_out, _ = _enforce_explicit_role_assignments(payload, storyboard_out)
-    if content_type_policy.get("value") == "music_video":
-        storyboard_out = _enforce_single_character_music_video_policy(payload, storyboard_out)
-    storyboard_out = _apply_timing_variation(storyboard_out)
-    storyboard_out = _rebalance_ltx_modes(storyboard_out)
+    # Gemini output is the source of truth: keep only production-safe normalization,
+    # avoid semantic rewriting of scene count/timing/story arc.
     storyboard_out = _normalize_scene_timeline(storyboard_out)
-    if content_type_policy.get("value") == "music_video":
-        storyboard_out = _enforce_clip_phrase_and_duration_splits(storyboard_out, payload)
-        storyboard_out = _normalize_scene_timeline(storyboard_out)
-        storyboard_out = _absorb_clip_leading_intro_gap(storyboard_out)
-        storyboard_out = _apply_music_video_mode_policy(
-            storyboard_out,
-            content_type_policy=content_type_policy,
-            payload=payload,
-            audio_duration_sec=audio_duration_sec,
-        )
-        if str(storyboard_out.diagnostics.no_text_clip_policy or "").strip().lower() == "visual_arc_over_phrase_loop":
-            storyboard_out = _prevent_phrase_loop_in_music_video(storyboard_out)
-        storyboard_out = _enforce_music_video_clip_formula(
-            storyboard_out,
-            payload=payload,
-            audio_duration_sec=_safe_float(audio_duration_sec, 0.0),
-        )
-        storyboard_out.music_prompt = ""
-    storyboard_out = _limit_lip_sync_usage(storyboard_out, content_type_policy=content_type_policy if content_type_policy.get("value") == "music_video" else None)
     _assert_storyboard_quality(storyboard_out)
     return storyboard_out
 
@@ -9029,7 +9000,7 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     storyboard_out = _harden_storyboard_out(storyboard_out, payload)
-    storyboard_out, explicit_role_warnings = _enforce_explicit_role_assignments(payload, storyboard_out)
+    explicit_role_warnings: list[str] = []
     audio_duration_from_analysis = _safe_float(audio_analysis.get("audioDurationSec"), 0.0)
     audio_duration_from_payload = _safe_float(audio_context.get("audioDurationSec"), 0.0)
     audio_duration_sec = audio_duration_from_analysis or audio_duration_from_payload
@@ -9047,38 +9018,13 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     text_hint_present = bool(str(controls.get("directorNote") or "").strip())
     content_type_policy = _get_content_type_policy(payload)
     is_music_video_mode = str(content_type_policy.get("value") or "").strip().lower() == "music_video"
-    story_core_source = "director_note" if is_music_video_mode and text_hint_present else "source_of_truth"
-    story_frame_source = "director_note" if is_music_video_mode and text_hint_present else "source_of_truth"
-    rhythm_source = "audio" if is_music_video_mode else ""
-    story_frame_source_reason = "director_note_present" if is_music_video_mode and text_hint_present else "director_note_empty_use_source_truth"
-    rhythm_source_reason = "audio_drives_pacing_and_transitions" if is_music_video_mode else ""
-    story_core_source_reason = (
-        "music_video_director_note_sets_story_frame_audio_drives_rhythm_emotion_timing"
-        if story_core_source == "director_note"
-        else "story_frame_from_source_truth_audio_semantics_refs_anchor_cast_and_world"
-    )
-    cast_identity_lock_info = {"enabled": False, "lockReason": "not_music_video", "textRewritesApplied": 0}
-    if is_music_video_mode:
-        storyboard_out, cast_identity_lock_info = _enforce_music_video_cast_identity_lock(storyboard_out, payload)
-        storyboard_out.narrative_strategy.story_core_source = story_core_source
-        storyboard_out.narrative_strategy.story_frame_source = story_frame_source
-        storyboard_out.narrative_strategy.rhythm_source = rhythm_source
-        storyboard_out.narrative_strategy.story_frame_source_reason = story_frame_source_reason
-        storyboard_out.narrative_strategy.rhythm_source_reason = rhythm_source_reason
-        if not str(storyboard_out.narrative_strategy.why or "").strip():
-            storyboard_out.narrative_strategy.why = story_core_source_reason
-        planner_strategy = structured_planner_diagnostics.get("narrativeStrategy") if isinstance(structured_planner_diagnostics.get("narrativeStrategy"), dict) else {}
-        planner_strategy["storyCoreSource"] = story_core_source
-        planner_strategy["storyFrameSource"] = story_frame_source
-        planner_strategy["rhythmSource"] = rhythm_source
-        planner_strategy["storyFrameSourceReason"] = story_frame_source_reason
-        planner_strategy["rhythmSourceReason"] = rhythm_source_reason
-        planner_strategy["story_core_source"] = story_core_source
-        planner_strategy["story_frame_source"] = story_frame_source
-        planner_strategy["rhythm_source"] = rhythm_source
-        planner_strategy["story_frame_source_reason"] = story_frame_source_reason
-        planner_strategy["rhythm_source_reason"] = rhythm_source_reason
-        structured_planner_diagnostics["narrativeStrategy"] = planner_strategy
+    story_core_source = str(storyboard_out.narrative_strategy.story_core_source or "mixed").strip().lower() or "mixed"
+    story_frame_source = str(storyboard_out.narrative_strategy.story_frame_source or "").strip().lower()
+    rhythm_source = str(storyboard_out.narrative_strategy.rhythm_source or "").strip().lower()
+    story_frame_source_reason = str(storyboard_out.narrative_strategy.story_frame_source_reason or "").strip()
+    rhythm_source_reason = str(storyboard_out.narrative_strategy.rhythm_source_reason or "").strip()
+    story_core_source_reason = str(storyboard_out.narrative_strategy.why or "").strip() or "preserved_gemini_narrative_strategy"
+    cast_identity_lock_info = {"enabled": False, "lockReason": "preserved_gemini_output", "textRewritesApplied": 0}
     effective_role_type_by_role, role_assignment_source, role_override_applied = _resolve_effective_role_type_by_role(payload)
     coverage = _validate_audio_timeline_coverage(storyboard_out.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
     coverage_warnings: list[str] = list(coverage.get("warnings") or [])
@@ -9094,41 +9040,6 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     audio_led_warnings.extend(bias_warnings)
     timeline_refinement_attempted = False
     timeline_refinement_succeeded = False
-    if audio_duration_sec > 0 and coverage.get("timelineCoverageStatus") == "invalid":
-        timeline_refinement_attempted = True
-        refinement_body = {
-            **body,
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": _build_audio_coverage_refinement_prompt(payload, storyboard_out, coverage)}],
-                }
-            ],
-        }
-        refinement_response, refinement_model_used, refinement_attempted_models = _send_director_request(api_key, refinement_body)
-        attempted_models.extend(model for model in refinement_attempted_models if model not in attempted_models)
-        if isinstance(refinement_response, dict) and not refinement_response.get("__http_error__"):
-            refinement_raw_text = _extract_gemini_text(refinement_response)
-            try:
-                refinement_parsed = _parse_storyboard_payload(
-                    refinement_raw_text,
-                    parse_stage="timeline_refinement",
-                    finish_reason=_extract_gemini_finish_reason(refinement_response),
-                )
-                refinement_parsed, _, refinement_normalization_warnings = _normalize_scenario_director_scene_defaults(refinement_parsed)
-                refined_storyboard = ScenarioDirectorStoryboardOut.model_validate(refinement_parsed)
-                refined_storyboard = _harden_storyboard_out(refined_storyboard, payload)
-                refined_coverage = _validate_audio_timeline_coverage(refined_storyboard.scenes, audio_duration_sec, coverage_source=audio_duration_source if audio_duration_source in {"analysis", "payload"} else "fallback")
-                if refined_coverage.get("timelineCoverageStatus") == "ok":
-                    storyboard_out = refined_storyboard
-                    coverage = refined_coverage
-                    coverage_warnings = list(dict.fromkeys([*coverage_warnings, *refinement_normalization_warnings, *list(refined_coverage.get("warnings") or [])]))
-                    timeline_refinement_succeeded = True
-                    model_used = refinement_model_used
-            except (ScenarioDirectorError, ValidationError):
-                coverage_warnings.append("timeline_refinement_contract_invalid")
-        else:
-            coverage_warnings.append("timeline_refinement_request_failed")
     if audio_duration_sec > 0 and coverage.get("timelineCoverageStatus") == "invalid":
         raise ScenarioDirectorError(
             "contract_invalid_for_timeline",
