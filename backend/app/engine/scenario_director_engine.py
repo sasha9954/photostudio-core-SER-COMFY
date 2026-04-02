@@ -3745,7 +3745,7 @@ def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bo
         ]
     ).lower()
     distant_shots = {"wide", "extreme_wide", "full_body", "aerial"}
-    close_shots = {"close_up", "portrait", "medium_close", "chest_up", "shoulder_up", "face_close"}
+    close_shots = {"close_up", "portrait", "medium_close", "chest_up", "shoulder_up", "face_close", "medium", "waist_up", "three_quarter"}
     close_framings = {"face_close", "close_performance", "medium_close", "chest_up", "shoulder_up"}
     fallback_framings = {"tight_medium"}
     blocked_visibility_tokens = (
@@ -3782,28 +3782,28 @@ def _evaluate_lipsync_mouth_visibility(scene: ScenarioDirectorScene) -> tuple[bo
 
 
 def _force_lipsync_friendly_composition(scene: ScenarioDirectorScene) -> None:
-    scene.shot_type = "close_up"
-    scene.performance_framing = "face_close"
+    scene.shot_type = "medium"
+    scene.performance_framing = "tight_medium"
     if not str(scene.scene_purpose or "").strip():
         scene.scene_purpose = "performance"
     scene.camera = _lip_sync_safe_camera_line()
     scene.viewer_hook = (
-        "Face/mouth readability is primary: near-frontal or 3/4 angle, chest-up/shoulder-up framing, clear lyric articulation."
+        "Face/mouth readability is primary: near-frontal or 3/4 angle, tight-medium/medium/3-4 framing, clear lyric articulation."
     )
     scene.frame_description = (
-        "Close facial performance frame (face-close/chest-up), near-frontal or gentle 3/4 angle, mouth fully visible and unobstructed."
+        "Performance frame prioritized as tight medium -> medium -> 3/4 body with lower boundary slightly below waist up to upper thigh; near-frontal or gentle 3/4 angle, mouth fully visible and unobstructed."
     )
     scene.action_in_frame = (
         "Performer delivers lyrics directly to camera with readable mouth articulation; no back view, no silhouette, no mouth occlusion."
     )
     scene.image_prompt = (
-        "Tight performance portrait, near-frontal or 3/4, clear visible mouth, expressive lip articulation, no hand/mic/hair blocking lips."
+        "Performance still frame with tight-medium/medium/3-4 body priority, near-frontal or 3/4, clear visible mouth, readable neck/shoulders/upper torso, include hands when possible, no hand/mic/hair blocking lips."
     )
     scene.video_prompt = (
         "Maintain close lip-sync framing on performer face, stable near-frontal/3-4 angle, preserve readable mouth articulation throughout."
     )
     if not str(scene.scene_goal or "").strip() or "lip-sync" not in str(scene.scene_goal or "").strip().lower():
-        scene.scene_goal = "Lip-sync performance with clearly readable mouth articulation in close framing."
+        scene.scene_goal = "Lip-sync performance with clearly readable mouth articulation in tight-medium/medium framing."
 
 
 def _infer_presentation_from_texts(texts: list[str]) -> str:
@@ -6193,7 +6193,7 @@ def _apply_music_video_mode_policy(
         scene.performance_framing = performance_framing
         lip_sync_signal = _scene_has_lip_sync_signal(scene)
         human_performer = _scene_has_human_performer(scene)
-        close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
+        close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body"} and performance_framing not in {
             "non_performance",
             "wide_performance",
         }
@@ -6260,7 +6260,7 @@ def _apply_music_video_mode_policy(
             shot_type = str(scene.shot_type or shot_type)
             performance_framing = str(scene.performance_framing or performance_framing)
             lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
-            close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
+            close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body"} and performance_framing not in {
                 "non_performance",
                 "wide_performance",
             }
@@ -6287,7 +6287,7 @@ def _apply_music_video_mode_policy(
             ltx_mode = "lip_sync_music"
             lip_sync = True
             send_audio_to_generator = True
-            performance_framing = "face_close" if performance_framing == "" else performance_framing
+            performance_framing = "tight_medium" if performance_framing == "" else performance_framing
             scene_start = _safe_float(scene.time_start, 0.0)
             scene_end = max(scene_start, _safe_float(scene.time_end, scene_start))
             base_slice_start = _safe_float(scene.audio_slice_start_sec, scene_start)
@@ -8411,6 +8411,8 @@ def _build_request_text(
         "Weak/repetitive/poetic lyrics are emotional cues, not mandatory literal world instructions.\n"
         "If effective director note text exists (including payload.text), treat it as an active story-frame/world-direction instruction.\n"
         "The clip must live in ONE coherent real-world venue family across all scenes (same world, different zones/angles only).\n"
+        "SAME VENUE / DIFFERENT ZONES is mandatory for consecutive scenes: keep venue identity stable but rotate recognizable connected sub-zones/background compositions (for example railing edge, open deck, bar counter area, lounge seating zone, skyline-facing corner, walkway, side wall, entry/stair zone).\n"
+        "Do not repeat the exact same corner/background composition in consecutive scenes unless storyboard explicitly asks to hold the same setup.\n"
         "Opening scene must establish this grounded photoreal baseline immediately (no editorial/fashion abstraction baseline).\n"
         "If no location ref is provided, choose one production-friendly real venue and keep it stable across the whole clip.\n"
         "Allowed variation is camera, blocking, and lighting mood INSIDE the same venue family, not world switching per scene.\n"
@@ -8425,6 +8427,8 @@ def _build_request_text(
         "Avoid generic standing, repetitive looking-around, endless spinning, bland symbolic walking, mannequin stiffness.\n"
         "Repeated phrases should escalate visually and cinematically rather than repeating identical actions/environments.\n"
         "If character refs exist, identity lock is mandatory across ALL scenes: same exact face, hair, body silhouette/proportions, outfit identity, and overall styling.\n"
+        "Human continuity hardening: same apparent age across all scenes; no younger/older drift, no fuller/thinner drift; preserve cheek/jaw fullness, neck/shoulder build, waist/hip/torso silhouette, and same overall body read.\n"
+        "Face/hair/accessory/color hardening: keep same face structure; keep hair color/length/parting/volume; preserve accessories once established with no random invention/disappearance; preserve stable base colors for skin tone, hair, garments/fabrics, and accessories.\n"
         "Never reinterpret or drift character identity (no face drift, wardrobe drift, body drift, or random restyling).\n"
         "Do not reduce scenes artificially.\n"
         "Do not optimize for old clip formulas or fixed route quotas.\n"
@@ -8634,6 +8638,9 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "- For ~30 second vocal music clip, lip_sync_music is important.\n"
         "- Include multiple lip_sync_music scenes.\n"
         "- Minimum 2 scenes must use route=lip_sync_music when vocals are present.\n"
+        "- PHOTO-side framing default for lip_sync_music image base: tight medium -> medium -> 3/4 body with lower frame boundary slightly below waist up to upper thigh.\n"
+        "- Keep face, mouth, neck, shoulders, and upper torso readable; include hands when possible.\n"
+        "- Avoid extreme close-up as default and avoid distant full-body as default unless explicit scene meaning requires it.\n"
         "- Do not output all scenes as i2v by default.\n"
         "SCENE SEGMENTATION:\n"
         "- Keep phrase-based segmentation aligned to audio phrases.\n"
