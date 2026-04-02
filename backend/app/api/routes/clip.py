@@ -9113,7 +9113,12 @@ def clip_image(payload: ClipImageIn):
         scene_active_roles = [role for role in scene_active_roles if role not in must_not_appear_roles]
         scene_contract["activeRoles"] = scene_active_roles
     is_environment_only_scene = {"character_1", "character_2", "character_3", "group"}.issubset(must_not_appear_roles)
-    scene_duration_hint = _safe_float(raw_scene_contract.get("duration") or raw_scene_contract.get("requested_duration_sec"), 0.0)
+    duration_raw = raw_scene_contract.get("duration")
+    if not duration_raw:
+        duration_raw = raw_scene_contract.get("requested_duration_sec")
+    scene_duration_hint = _safe_float(duration_raw)
+    if scene_duration_hint is None:
+        scene_duration_hint = 0.0
     auto_environment_establishing = (
         scene_duration_hint > 0 and scene_duration_hint < 1.6
         and _is_environment_only_establishing_scene(contract=scene_contract, scene_delta=scene_delta, scene_text=scene_text)
