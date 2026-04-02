@@ -6193,7 +6193,7 @@ def _apply_music_video_mode_policy(
         scene.performance_framing = performance_framing
         lip_sync_signal = _scene_has_lip_sync_signal(scene)
         human_performer = _scene_has_human_performer(scene)
-        close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
+        close_capable = shot_type not in {"wide", "extreme_wide", "aerial"} and performance_framing not in {
             "non_performance",
             "wide_performance",
         }
@@ -6254,13 +6254,13 @@ def _apply_music_video_mode_policy(
             and not forced_transition_scene
         )
         forced_lipsync_composition_applied = False
-        if preforce_lipsync_candidate and (not close_capable or not lip_sync_mouth_visible):
+        if preforce_lipsync_candidate and (not close_capable and not lip_sync_mouth_visible):
             _force_lipsync_friendly_composition(scene)
             forced_lipsync_composition_applied = True
             shot_type = str(scene.shot_type or shot_type)
             performance_framing = str(scene.performance_framing or performance_framing)
             lip_sync_mouth_visible, lip_sync_visibility_reason = _evaluate_lipsync_mouth_visibility(scene)
-            close_capable = shot_type not in {"wide", "extreme_wide", "aerial", "full_body", "medium"} and performance_framing not in {
+            close_capable = shot_type not in {"wide", "extreme_wide", "aerial"} and performance_framing not in {
                 "non_performance",
                 "wide_performance",
             }
@@ -8410,10 +8410,11 @@ def _build_request_text(
         "Prioritize photoreal cinematic, emotionally alive, shootable performance imagery in EVERY scene.\n"
         "Weak/repetitive/poetic lyrics are emotional cues, not mandatory literal world instructions.\n"
         "If effective director note text exists (including payload.text), treat it as an active story-frame/world-direction instruction.\n"
-        "The clip must live in ONE coherent real-world venue family across all scenes (same world, different zones/angles only).\n"
+        "The clip must live in ONE coherent real-world venue family across all scenes (same world continuity is hard).\n"
         "Opening scene must establish this grounded photoreal baseline immediately (no editorial/fashion abstraction baseline).\n"
         "If no location ref is provided, choose one production-friendly real venue and keep it stable across the whole clip.\n"
-        "Allowed variation is camera, blocking, and lighting mood INSIDE the same venue family, not world switching per scene.\n"
+        "Prefer progression through connected sub-zones/angles/blocking/lighting inside that same venue family when it strengthens scene evolution.\n"
+        "Intentional setup repetition is allowed when it clearly serves refrain, emphasis, intimacy, tension, or dramatic hold.\n"
         "If location ref exists, treat it as a hard anchor and respect it.\n"
         "Hard negative defaults unless explicitly requested: no salt plains, no barren desert, no cracked wasteland, no repetitive desolate emptiness.\n"
         "Marine/desolation words should usually become lighting mood/atmosphere/emotional tone, not literal ground texture.\n"
@@ -8421,9 +8422,11 @@ def _build_request_text(
         "Route planning must avoid all-i2v output for vocal-driven clips.\n"
         "For ~30s vocal music clip, lip_sync_music is mandatory in multiple scenes: minimum 2 scenes.\n"
         "Pick strongest hook/vocal lines for lip_sync_music with clear face-readable emotional performance beats.\n"
+        "For lip-sync image bases, prefer tight medium / medium / 3/4 body framing as a default readability baseline.\n"
+        "If the strongest beat is better served by close-up or full-body framing, keep that intentional framing choice.\n"
         "Each scene must include at least one of: vocal performance, body performance, camera performance, emotional performance.\n"
         "Avoid generic standing, repetitive looking-around, endless spinning, bland symbolic walking, mannequin stiffness.\n"
-        "Repeated phrases should escalate visually and cinematically rather than repeating identical actions/environments.\n"
+        "Repeated phrases should usually escalate visually and cinematically; keep intentional repetition when it is the stronger dramatic/music choice.\n"
         "If character refs exist, identity lock is mandatory across ALL scenes: same exact face, hair, body silhouette/proportions, outfit identity, and overall styling.\n"
         "Never reinterpret or drift character identity (no face drift, wardrobe drift, body drift, or random restyling).\n"
         "Do not reduce scenes artificially.\n"
