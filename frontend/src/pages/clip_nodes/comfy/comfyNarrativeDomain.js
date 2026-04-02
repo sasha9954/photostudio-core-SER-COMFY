@@ -957,7 +957,16 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
   if (!compactScenes.length) return null;
   const continuityLock = Boolean(inputUnderstanding?.same_character_across_all_scenes);
   const identityFields = continuityLock
-    ? ["face_identity", "hair_identity", "clothing_identity", "body_proportions", "body_silhouette"]
+    ? [
+      "face_identity",
+      "hair_identity",
+      "garment_identity",
+      "body_identity",
+      "makeup_identity",
+      "accessory_identity",
+      "age_consistency",
+      "color_identity",
+    ]
     : [];
   const scenes = compactScenes.map((scene, index) => {
     const startSec = Number(scene?.start_time_sec ?? 0) || 0;

@@ -1258,10 +1258,20 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     normalizedScene.identityLockApplied = true;
   }
   if (normalizedScene.identityLockApplied && !(Array.isArray(normalizedScene.identityLockFieldsUsed) && normalizedScene.identityLockFieldsUsed.length)) {
-    normalizedScene.identityLockFieldsUsed = ["face_identity", "outfit_identity", "world_identity"];
+    normalizedScene.identityLockFieldsUsed = [
+      "face_identity",
+      "hair_identity",
+      "garment_identity",
+      "body_identity",
+      "makeup_identity",
+      "accessory_identity",
+      "age_consistency",
+      "color_identity",
+      "world_identity",
+    ];
   }
   if (normalizedScene.identityLockApplied && !normalizeText(normalizedScene.identityLockNotes)) {
-    normalizedScene.identityLockNotes = "Lock character face/outfit and world/location continuity from connected refs.";
+    normalizedScene.identityLockNotes = "Lock face/hair/garment/body/makeup/accessories/age/colors and world continuity from connected refs.";
   }
 
   if (SCENARIO_STORYBOARD_TRACE) {

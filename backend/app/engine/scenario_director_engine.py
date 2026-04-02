@@ -4414,10 +4414,13 @@ def _build_character_identity_visible_lock(
     cues = _extract_character_identity_cues(payload, role=role)
     if has_explicit_refs:
         cues.setdefault("face_identity", "same woman as character_1 reference across all scenes; no face redesign")
-        cues.setdefault("hair_identity", "no hairstyle redesign across scenes unless explicitly requested")
+        cues.setdefault("hair_identity", "no hairstyle redesign across scenes; keep same hair color, cut/length, parting, and volume unless explicitly requested")
         cues.setdefault("garment_identity", "wardrobe remains identical across scenes unless storyboard explicitly requests costume change")
-        cues.setdefault("body_identity", "body type and age presentation stay consistent with the reference identity")
+        cues.setdefault("body_identity", "same body shape, proportions, silhouette, height/build read across all scenes; no fuller/thinner drift")
         cues.setdefault("makeup_identity", "makeup style remains stable across scenes; no spontaneous redesign")
+        cues.setdefault("accessory_identity", "accessories stay stable across scenes when established; no random invention/disappearance unless explicitly requested")
+        cues.setdefault("age_consistency", "same apparent age across all scenes; no face-age drift and no maturity drift")
+        cues.setdefault("color_identity", "keep stable base colors across scenes for skin tone, hair color, garment/fabric color, and accessory color; lighting may vary without redesigning base colors")
     fields_used = [key for key, value in cues.items() if str(value).strip()]
     if not cues:
         return "", []
@@ -4431,8 +4434,14 @@ def _build_character_identity_visible_lock(
         str(cues.get("footwear_identity") or ""),
         str(cues.get("body_identity") or ""),
         str(cues.get("makeup_identity") or ""),
+        str(cues.get("accessory_identity") or ""),
+        str(cues.get("age_consistency") or ""),
+        str(cues.get("color_identity") or ""),
         "no ethnicity drift, no silent wardrobe redesign, no sleeve removal, no silhouette change",
         "no jewelry/accessory invention unless the scene explicitly requests it",
+        "same apparent age and same body silhouette/proportions across all scenes",
+        "hairstyle, accessories, and visible styling remain stable unless explicitly changed by storyboard",
+        "skin tone, hair color, and garment colors remain consistent across scenes",
     ]
     if is_first_scene:
         locks.append("first scene lock: hold face, hair, sleeves, dress silhouette, signature details, and boots exactly as reference")
@@ -6482,7 +6491,16 @@ def _apply_music_video_mode_policy(
             else ("identity_lock_insufficient_source" if "character_1" in {str(actor).strip().lower() for actor in (scene.actors or [])} else "")
         )
         if scene.identity_lock_applied:
-            required_lock_fields = ["face_identity", "hair_identity", "garment_identity", "body_identity", "makeup_identity"]
+            required_lock_fields = [
+                "face_identity",
+                "hair_identity",
+                "garment_identity",
+                "body_identity",
+                "makeup_identity",
+                "accessory_identity",
+                "age_consistency",
+                "color_identity",
+            ]
             normalized_fields = [str(field or "").strip() for field in (identity_fields_used or []) if str(field or "").strip()]
             for required in required_lock_fields:
                 if required not in normalized_fields:
