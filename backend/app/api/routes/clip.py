@@ -29,7 +29,11 @@ from app.engine.gemini_rest import post_generate_content
 from app.engine.comfy_reference_profile import build_reference_profiles, resolve_reference_role_type, summarize_profiles
 from app.engine.comfy_remote import run_comfy_image_to_video
 from app.engine.audio_analyzer import analyze_audio
-from app.engine.prompt_layers import build_clip_video_motion_prompt, build_physics_first_image_blocks
+from app.engine.prompt_layers import (
+    build_clip_video_motion_prompt,
+    build_ltx_video_canon_block,
+    build_physics_first_image_blocks,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1010,16 +1014,20 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
         f"- identityLockFieldsUsed={', '.join(identity_fields)}",
         f"- environmentLock={bool(contract.get('environmentLock'))}",
         f"- styleLock={bool(contract.get('styleLock'))}",
+        f"- sessionBaseline={bool(contract.get('sessionBaseline'))}",
+        f"- previousContinuityMemoryActive={bool(contract.get('previousContinuityMemory'))}",
         f"- outfitLock={bool(contract.get('outfitLock', True))}",
         "- character references are actor references: same face, hair, body/silhouette, and full outfit continuity across scenes",
         "- outfit lock is strict: preserve garment type, cut, fabric feel, color family, footwear, accessories, and decorative details unless explicit wardrobe change is requested",
-        "- scene progression must be new angles/zones/sub-locations of the same venue/world unless explicitly changed",
+        "- scene progression must be different zones/corners/angles/sub-locations of the same venue/world unless explicitly changed",
+        "- same world, different zones rule: keep architecture family, material family, production design family, and venue identity stable across the clip",
         "- keep one world identity and one lighting/shadow/color family across the full clip",
         "- photoreal cinematic realism is mandatory by default",
         "- forbid cartoon, illustrative, glossy editorial, concept-art, or over-designed AI render drift",
     ]
     if opening_shot:
         lines.append("- opening shot must establish a stable photoreal baseline for all subsequent scenes")
+        lines.append("- opening shot must avoid fashion-editorial overdesign and stay grounded in believable live-action realism")
     return "\n".join(lines)
 
 
@@ -1171,6 +1179,17 @@ def _compose_video_effective_prompt(
     identity_lock_block = _build_hard_identity_lock_block(scene_human_visual_anchors=scene_human_visual_anchors) if has_humans else ""
     opening_shot = not bool(contract.get("previousContinuityMemory"))
     hard_continuity_contract_block = _build_hard_continuity_contract_block(scene_contract=contract, opening_shot=opening_shot)
+    route_hint = " ".join(
+        [
+            str(scene_type or "").strip().lower(),
+            str(contract.get("route") or "").strip().lower(),
+            str(contract.get("video_generation_route") or contract.get("videoGenerationRoute") or "").strip().lower(),
+            str(contract.get("render_mode") or contract.get("renderMode") or "").strip().lower(),
+            str(contract.get("ltx_mode") or contract.get("ltxMode") or "").strip().lower(),
+        ]
+    )
+    ltx_canon_is_lip_sync = "lip_sync" in route_hint or "lipsync" in route_hint
+    ltx_video_canon_block = build_ltx_video_canon_block(lip_sync=ltx_canon_is_lip_sync)
     anchor_roles: list[str] = []
     for anchor in (scene_human_visual_anchors or []):
         text = str(anchor or "")
@@ -1198,7 +1217,16 @@ def _compose_video_effective_prompt(
     # location-only / threat-presence shots still preserve intended directing tone.
     genre_hardening_block = _build_genre_hardening_block(genre_intent=genre_intent)
     effective_prompt = "\n\n".join(
-        part for part in [base_effective_prompt, hard_continuity_contract_block, identity_lock_block, genre_hardening_block, duet_hardening_block] if str(part or "").strip()
+        part
+        for part in [
+            base_effective_prompt,
+            hard_continuity_contract_block,
+            ltx_video_canon_block,
+            identity_lock_block,
+            genre_hardening_block,
+            duet_hardening_block,
+        ]
+        if str(part or "").strip()
     ).strip()
     return effective_prompt, {
         "has_humans": has_humans,
@@ -1214,6 +1242,8 @@ def _compose_video_effective_prompt(
         "genreHardeningApplied": bool(genre_hardening_block),
         "genreHardeningSource": genre_source,
         "genreHardeningPreview": _prompt_preview(genre_hardening_block, 320),
+        "ltxCanonApplied": True,
+        "ltxCanonLipSyncMode": ltx_canon_is_lip_sync,
         "duetHardeningApplied": bool(duet_hardening_block),
         "duetHardeningSource": duet_hardening_source,
         "duetContractDetected": duet_contract_detected,
@@ -4050,7 +4080,17 @@ class BrainIn(BaseModel):
     direct_gemini_storyboard_mode: bool | None = None
 
 
-def _build_session_world_anchors(*, text: str, character_refs: list[str], location_refs: list[str], style_refs: list[str], style_key: str) -> dict[str, str]:
+def _build_session_world_anchors(
+    *,
+    text: str,
+    character_refs: list[str],
+    location_refs: list[str],
+    style_refs: list[str],
+    style_key: str,
+    mode: str = "",
+    scenario_key: str = "",
+    shoot_key: str = "",
+) -> dict[str, str]:
     text_l = (text or "").strip().lower()
     style_hint = (style_key or "").strip()
 
@@ -4181,11 +4221,54 @@ def _build_session_world_anchors(*, text: str, character_refs: list[str], locati
             "style": "photoreal forest realism with stable canopy light behavior and atmospheric depth continuity",
         },
     ]
+    def _token_hit_count(haystack: str, keywords: list[str]) -> int:
+        score = 0
+        for keyword in keywords:
+            needle = str(keyword or "").strip().lower()
+            if needle and needle in haystack:
+                score += 1
+        return score
+
+    mode_l = str(mode or "").strip().lower()
+    scenario_l = str(scenario_key or "").strip().lower()
+    shoot_l = str(shoot_key or "").strip().lower()
+    style_l = str(style_key or "").strip().lower()
+    full_signal = " ".join([text_l, mode_l, scenario_l, shoot_l, style_l]).strip()
+
+    energetic_tokens = ("club", "concert", "stage", "crowd", "dance", "beat", "drop", "chorus", "night", "neon")
+    introspective_tokens = ("intimate", "quiet", "soft", "slow", "alone", "solitary", "whisper", "melancholy", "piano")
+    urban_tokens = ("street", "alley", "city", "downtown", "rooftop", "metro")
+    nature_tokens = ("forest", "woods", "beach", "coast", "shore", "desert", "dune", "mountain")
+    industrial_tokens = ("industrial", "factory", "warehouse", "hangar", "concrete", "metal", "underground")
+
     selected_pack = world_style_packs[0]
+    best_score = float("-inf")
     for pack in world_style_packs:
-        if any(keyword in text_l for keyword in (pack.get("keywords") or [])):
+        pack_key = str(pack.get("key") or "").strip().lower()
+        keyword_hits = _token_hit_count(full_signal, list(pack.get("keywords") or []))
+        score = float(keyword_hits) * 4.0
+
+        if "club" in pack_key or "nightlife" in pack_key or "theater" in pack_key:
+            if any(token in full_signal for token in energetic_tokens):
+                score += 2.0
+            if any(token in full_signal for token in introspective_tokens):
+                score -= 0.25
+        if "urban" in pack_key and any(token in full_signal for token in urban_tokens):
+            score += 1.5
+        if any(token in pack_key for token in ("forest", "coastal", "desert")) and any(token in full_signal for token in nature_tokens):
+            score += 1.75
+        if "industrial" in pack_key and any(token in full_signal for token in industrial_tokens):
+            score += 2.25
+        if "music_video" in mode_l and ("club" in pack_key or "theater" in pack_key):
+            score += 1.0
+        if "cinema" in shoot_l and ("cinematic" in pack_key or "theater" in pack_key):
+            score += 0.5
+        if "minimal" in style_l and "minimalist" in pack_key:
+            score += 1.0
+
+        if score > best_score:
+            best_score = score
             selected_pack = pack
-            break
 
     if location_refs:
         location_anchor = "same exact world/location identity as location reference images"
@@ -5743,6 +5826,9 @@ def clip_plan(payload: BrainIn):
         location_refs=location_refs,
         style_refs=style_refs,
         style_key=style_key,
+        mode=mode,
+        scenario_key=scenario_key,
+        shoot_key=shoot_key,
     )
 
     semantic_whitelist = _extract_semantic_whitelist(
@@ -8329,6 +8415,15 @@ def _build_comfy_image_prompt_assembly(
     }
     opening_shot = not bool(contract.get("previousContinuityMemory"))
     hard_continuity_contract_block = _build_hard_continuity_contract_block(scene_contract=contract, opening_shot=opening_shot)
+    opening_shot_realism_block = ""
+    if opening_shot:
+        opening_shot_realism_block = "\n".join([
+            "OPENING SHOT PHOTOREAL BASELINE LOCK:",
+            "- establish the canonical live-action baseline for all following scenes",
+            "- realistic skin, realistic fabric behavior, realistic lens response, realistic dynamic range",
+            "- avoid glossy fashion-editorial polish, illustrative styling, or overdesigned AI aesthetics",
+            "- lock world/style baseline now so subsequent scenes stay in the same venue and lighting family",
+        ])
 
     identity_layer_block = "\n".join([
         "IDENTITY LAYER (PRIORITY 1):",
@@ -8466,6 +8561,7 @@ def _build_comfy_image_prompt_assembly(
 
     assembled_prompt = "\n\n".join([
         hard_continuity_contract_block,
+        opening_shot_realism_block,
         identity_layer_block,
         physics_blocks["lightWorldBlock"],
         physics_blocks["subjectIdentityBlock"],
