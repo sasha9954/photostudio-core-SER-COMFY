@@ -12415,9 +12415,9 @@ onClipSec: (nodeId, value) => {
                     || out?.audioDuration
                     || 30
                   );
-                  const scenesRaw = Array.isArray(normalizedDirector?.directorOutput?.scenes)
-                    ? normalizedDirector.directorOutput.scenes
-                    : (Array.isArray(normalizedDirector?.storyboardOut?.scenes) ? normalizedDirector.storyboardOut.scenes : []);
+                  const scenesRaw = Array.isArray(normalizedDirector?.storyboardOut?.scenes)
+                    ? normalizedDirector.storyboardOut.scenes
+                    : [];
                   const validation = out?.plannerDebug?.validation || {};
 
                   const existingScenesById = normalizeSceneCollectionWithSceneId(((nodesRef.current || []).find((x) => x.id === nodeId)?.data?.scenes || []), "scene");

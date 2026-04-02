@@ -648,16 +648,12 @@ export function resolveScenarioFinalRouteKey(scene = {}) {
   const routeCandidates = [
     source.resolvedWorkflowKey,
     source.resolved_workflow_key,
-    source.renderMode,
-    source.render_mode,
     source.plannedVideoGenerationRoute,
     source.planned_video_generation_route,
     source.videoGenerationRoute,
     source.video_generation_route,
     source.ltxMode,
     source.ltx_mode,
-    resolveScenarioExplicitWorkflowKey(source),
-    resolveScenarioWorkflowKey(source),
   ];
   for (const candidate of routeCandidates) {
     const normalized = normalizeText(candidate).toLowerCase();
@@ -1386,71 +1382,62 @@ function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
 }
 
 export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
-  const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
-  const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
+  const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, {});
+  const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, {});
   const format = resolveFormatAlias(
     storyboardOut?.format,
     storyboardOut?.aspectRatio,
     storyboardOut?.aspect_ratio,
-    storyboardOut?.canvas,
-    directorOutput?.format,
-    directorOutput?.aspectRatio,
-    directorOutput?.aspect_ratio,
-    directorOutput?.canvas
+    storyboardOut?.canvas
   );
   const refsByRole = mergeObjectMapsPreferNonEmpty(
     storyboardOut?.refsByRole ?? storyboardOut?.refs_by_role,
-    directorOutput?.refsByRole ?? directorOutput?.refs_by_role
+    {}
   );
   const connectedRefsByRole = mergeObjectMapsPreferNonEmpty(
     storyboardOut?.connectedRefsByRole ?? storyboardOut?.connected_refs_by_role,
-    directorOutput?.connectedRefsByRole ?? directorOutput?.connected_refs_by_role
+    {}
   );
   const roleTypeByRole = mergeObjectMapsPreferNonEmpty(
     storyboardOut?.roleTypeByRole ?? storyboardOut?.role_type_by_role,
-    directorOutput?.roleTypeByRole ?? directorOutput?.role_type_by_role
+    {}
   );
   const connectedContextSummary = mergeStructuredPreferNonEmpty(
     storyboardOut?.connectedContextSummary ?? storyboardOut?.connected_context_summary,
-    directorOutput?.connectedContextSummary ?? directorOutput?.connected_context_summary,
+    "",
     ""
   );
   const heroParticipants = mergeStringListsPreferNonEmpty(
     storyboardOut?.heroParticipants ?? storyboardOut?.hero_participants,
-    directorOutput?.heroParticipants ?? directorOutput?.hero_participants
+    []
   );
   const supportingParticipants = mergeStringListsPreferNonEmpty(
     storyboardOut?.supportingParticipants ?? storyboardOut?.supporting_participants,
-    directorOutput?.supportingParticipants ?? directorOutput?.supporting_participants
+    []
   );
   const mustAppearRoles = mergeStringListsPreferNonEmpty(
     storyboardOut?.mustAppearRoles ?? storyboardOut?.must_appear_roles,
-    directorOutput?.mustAppearRoles ?? directorOutput?.must_appear_roles
+    []
   );
   const contextRefs = mergeStructuredPreferNonEmpty(
     storyboardOut?.contextRefs ?? storyboardOut?.context_refs,
-    directorOutput?.contextRefs ?? directorOutput?.context_refs,
+    {},
     {}
   );
   const refDirectives = mergeObjectMapsPreferNonEmpty(
     storyboardOut?.refDirectives ?? storyboardOut?.ref_directives,
-    directorOutput?.refDirectives ?? directorOutput?.ref_directives
+    {}
   );
 
-  const scenesRaw = Array.isArray(storyboardOut?.scenes)
-    ? storyboardOut.scenes
-    : Array.isArray(directorOutput?.scenes)
-      ? directorOutput.scenes
-      : [];
+  const scenesRaw = Array.isArray(storyboardOut?.scenes) ? storyboardOut.scenes : [];
   const scenes = scenesRaw.map((scene, idx) => {
     const tracedSceneId = normalizeText(scene?.sceneId ?? scene?.scene_id) || `S${idx + 1}`;
     if (shouldTraceScenarioRoleScene(tracedSceneId)) {
       const plannerSceneRaw = Array.isArray(storyboardOut?.scenes) ? (storyboardOut.scenes[idx] || null) : null;
-      const directorSceneRaw = Array.isArray(directorOutput?.scenes) ? (directorOutput.scenes[idx] || null) : null;
       console.debug("[SCENARIO ROLE TRACE] raw planner/director scene", {
         sceneId: tracedSceneId,
         plannerSceneRaw,
-        directorSceneRaw,
+        directorSceneRaw: null,
       });
     }
     return normalizeScenarioScene(scene, idx, {
@@ -1470,32 +1457,30 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   });
 
   const storySummary = normalizeDualField({
-    ru: storyboardOut?.story_summary_ru ?? directorOutput?.history?.summaryRu ?? preferRuFrom(directorOutput?.history, storyboardOut?.story_summary),
-    en: storyboardOut?.story_summary_en ?? storyboardOut?.story_summary ?? directorOutput?.history?.summaryEn ?? directorOutput?.history?.summary,
+    ru: storyboardOut?.story_summary_ru ?? preferRuFrom({}, storyboardOut?.story_summary),
+    en: storyboardOut?.story_summary_en ?? storyboardOut?.story_summary,
   });
   const world = normalizeDualField({
-    ru: storyboardOut?.world_ru ?? directorOutput?.history?.worldRu ?? scenes.find((scene) => !!scene.locationRu)?.locationRu,
-    en: storyboardOut?.world_en ?? directorOutput?.history?.worldEn ?? scenes.find((scene) => !!scene.locationEn)?.locationEn,
+    ru: storyboardOut?.world_ru ?? scenes.find((scene) => !!scene.locationRu)?.locationRu,
+    en: storyboardOut?.world_en ?? scenes.find((scene) => !!scene.locationEn)?.locationEn,
   });
   const previewPrompt = normalizeDualField({
-    ru: storyboardOut?.preview_prompt_ru ?? directorOutput?.history?.previewPromptRu ?? storySummary.ru,
-    en: storyboardOut?.preview_prompt_en ?? directorOutput?.history?.previewPromptEn ?? storySummary.en,
+    ru: storyboardOut?.preview_prompt_ru ?? storySummary.ru,
+    en: storyboardOut?.preview_prompt_en ?? storySummary.en,
   });
   const actors = Array.from(new Set(scenes.flatMap((scene) => (Array.isArray(scene.actors) ? scene.actors : [])).filter(Boolean)));
   const locations = Array.from(new Set(scenes.map((scene) => normalizeText(scene.locationEn || scene.locationRu)).filter(Boolean)));
-  const globalMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut || {}, directorOutput || {});
-  const musicPromptSource = resolveScenarioMusicPromptSource(storyboardOut || {}, directorOutput || {});
+  const globalMusicPrompt = resolveScenarioGlobalMusicPrompt(storyboardOut || {}, {});
+  const musicPromptSource = resolveScenarioMusicPromptSource(storyboardOut || {}, {});
   const musicPromptRu = normalizeText(
     storyboardOut?.musicPromptRu
     ?? storyboardOut?.music_prompt_ru
-    ?? directorOutput?.musicPromptRu
-    ?? directorOutput?.music_prompt_ru
+    ?? ""
   );
   const musicPromptEn = normalizeText(
     storyboardOut?.musicPromptEn
     ?? storyboardOut?.music_prompt_en
-    ?? directorOutput?.musicPromptEn
-    ?? directorOutput?.music_prompt_en
+    ?? ""
   );
 
   const normalizedPackage = {
@@ -1523,14 +1508,10 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     audioUrl: normalizeText(
       storyboardOut?.audioUrl
       ?? storyboardOut?.audio_url
-      ?? directorOutput?.audioUrl
-      ?? directorOutput?.audio_url
     ),
     audioDurationSec: toNumber(
       storyboardOut?.audioDurationSec
-      ?? storyboardOut?.audio_duration_sec
-      ?? directorOutput?.audioDurationSec
-      ?? directorOutput?.audio_duration_sec,
+      ?? storyboardOut?.audio_duration_sec,
       0
     ),
     globalMusicPrompt,
@@ -1539,17 +1520,17 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
     fallbackMusicPrompt: musicPromptSource.fallbackText,
     musicPromptRu,
     musicPromptEn,
-    bgMusicPrompt: normalizeText(storyboardOut?.bgMusicPrompt ?? directorOutput?.bgMusicPrompt) || globalMusicPrompt,
-    musicStatus: normalizeText(storyboardOut?.musicStatus ?? storyboardOut?.music_status ?? directorOutput?.musicStatus ?? directorOutput?.music_status),
-    musicUrl: normalizeText(storyboardOut?.musicUrl ?? storyboardOut?.music_url ?? directorOutput?.musicUrl ?? directorOutput?.music_url),
-    plannerDebug: storyboardOut?.plannerDebug ?? storyboardOut?.planner_debug ?? directorOutput?.plannerDebug ?? directorOutput?.planner_debug,
-    generationHints: storyboardOut?.generationHints ?? storyboardOut?.generation_hints ?? directorOutput?.generationHints ?? directorOutput?.generation_hints,
+    bgMusicPrompt: normalizeText(storyboardOut?.bgMusicPrompt) || globalMusicPrompt,
+    musicStatus: normalizeText(storyboardOut?.musicStatus ?? storyboardOut?.music_status),
+    musicUrl: normalizeText(storyboardOut?.musicUrl ?? storyboardOut?.music_url),
+    plannerDebug: storyboardOut?.plannerDebug ?? storyboardOut?.planner_debug,
+    generationHints: storyboardOut?.generationHints ?? storyboardOut?.generation_hints,
     globalVisualLock,
     globalCameraProfile,
-    modelAssignments: storyboardOut?.modelAssignments ?? storyboardOut?.model_assignments ?? directorOutput?.modelAssignments ?? directorOutput?.model_assignments,
-    providerHints: storyboardOut?.providerHints ?? storyboardOut?.provider_hints ?? directorOutput?.providerHints ?? directorOutput?.provider_hints,
-    debug: storyboardOut?.debug ?? directorOutput?.debug,
-    meta: storyboardOut?.meta ?? directorOutput?.meta,
+    modelAssignments: storyboardOut?.modelAssignments ?? storyboardOut?.model_assignments,
+    providerHints: storyboardOut?.providerHints ?? storyboardOut?.provider_hints,
+    debug: storyboardOut?.debug,
+    meta: storyboardOut?.meta,
   };
   if (CLIP_TRACE_SCENARIO_FORMAT) {
     console.debug("[SCENARIO FORMAT] normalized package", {
