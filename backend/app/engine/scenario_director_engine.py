@@ -23,6 +23,7 @@ from app.engine.audio_analyzer import (
     derive_audio_semantic_profile,
 )
 from app.engine.gemini_rest import post_generate_content
+from app.engine.prompt_layers import build_ltx_video_canon_block
 
 ALLOWED_SOURCE_MODES = {"audio", "video_file", "video_link"}
 ALLOWED_LTX_MODES = {"i2v", "i2v_as", "f_l", "f_l_as", "continuation", "lip_sync", "lip_sync_music"}
@@ -4646,7 +4647,10 @@ def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene, payload: dict[s
         )
         lipsync_line = "Face readability and mouth continuity stay clear for emotional singing, with transformation delayed until lip motion is established"
     identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
-    return _quality_filter_visible_prompt(_join_visible_prompt_parts([sentence, motion_line, camera_line, emotion_line, lipsync_line, identity_lock]))
+    ltx_canon_block = build_ltx_video_canon_block(lip_sync=_is_lip_sync_music_scene(scene))
+    return _quality_filter_visible_prompt(
+        _join_visible_prompt_parts([sentence, motion_line, camera_line, emotion_line, lipsync_line, identity_lock, ltx_canon_block])
+    )
 
 
 def _build_music_video_image_prompt(scene: ScenarioDirectorScene, payload: dict[str, Any] | None = None) -> str:
@@ -4709,6 +4713,7 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
             "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body.",
             "Optional safe variant: performer may gently rotate with camera while background shifts behind trajectory, preserving character integrity.",
             "Environment remains background support; no running/chasing/spinning as primary action.",
+            build_ltx_video_canon_block(lip_sync=True),
         ]
     )
     scene.image_prompt = _quality_filter_visible_prompt(scene.image_prompt)

@@ -125,6 +125,10 @@ def build_physics_first_image_blocks(
         "no duplicated people",
         "no plastic skin",
         "no CGI look",
+        "no cartoon look",
+        "no illustrative look",
+        "no glossy editorial fashion rendering",
+        "no concept-art rendering",
         "no cutout edges",
         "no pasted-on subject",
         "no glam studio retouch",
@@ -183,4 +187,45 @@ def build_clip_video_motion_prompt(
         lines.append(f"- timing: {duration_text}")
     if format_text:
         lines.append(f"- framing: compose motion for {format_text}")
+    return "\n".join(lines)
+
+
+def build_ltx_video_canon_block(*, lip_sync: bool) -> str:
+    base_physics = [
+        "LTX 2.3 PHYSICS / ANATOMY HARD CONSTRAINTS:",
+        "- correct arm, leg, torso, shoulder, neck, and head anatomy at all times",
+        "- no intersecting limbs, no arm through torso, no hand through body, no leg interpenetration",
+        "- no broken wrists/elbows, no impossible shoulder deformation, no torso clipping",
+        "- no head over-rotation, no neck twist beyond natural range, no impossible torso rotation",
+    ]
+    mic_rules = [
+        "MICROPHONE INTERACTION CONSTRAINTS:",
+        "- no ghost hand on microphone and no duplicated hands",
+        "- hand must fully release microphone when action says release",
+        "- no residual hand remaining on microphone after release",
+        "- microphone interaction must remain physically realistic and readable",
+    ]
+    if lip_sync:
+        lines = [
+            "LTX 2.3 LIP-SYNC PERFORMANCE CANON:",
+            "- emotional singing performance with expressive vocal delivery and emotionally readable eyes",
+            "- clear mouth articulation with natural jaw/lips timing, breath detail, and micro-expressions",
+            "- subtle head motion and slight shoulder/body sway for live-session feel",
+            "- camera language: gentle orbit or slight arc or slow push-in with tasteful professional live shooting feel",
+            "- never dead static straight-on avatar framing unless explicitly required by scene instruction",
+            "- keep performance alive and human, not centered talking-doll blocking",
+            *base_physics,
+            *mic_rules,
+        ]
+        return "\n".join(lines)
+
+    lines = [
+        "LTX 2.3 REGULAR PERFORMANCE MOTION CANON:",
+        "- controlled elegant motion; physically plausible body mechanics throughout the shot",
+        "- no sudden jerks, no chaotic motion spikes, no violent movement bursts, no random camera behavior",
+        "- avoid AI twitching artifacts and unstable micro-shakes in body or camera",
+        "- camera progression must stay motivated and smooth inside one coherent world",
+        *base_physics,
+        *mic_rules,
+    ]
     return "\n".join(lines)
