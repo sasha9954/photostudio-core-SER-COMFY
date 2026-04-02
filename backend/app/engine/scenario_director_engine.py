@@ -8388,7 +8388,13 @@ def _build_scenario_director_http_error(response: dict[str, Any], *, fallback_co
     )
 
 
-def _parse_storyboard_payload(raw_text: str, *, parse_stage: str = "initial", finish_reason: str = "") -> dict[str, Any]:
+def _parse_storyboard_payload(
+    raw_text: str,
+    *,
+    parse_stage: str = "initial",
+    finish_reason: str = "",
+    direct_gemini_storyboard_mode: bool = False,
+) -> dict[str, Any]:
     logger.debug(
         "[SCENARIO_DIRECTOR] raw response received chars=%s parse_stage=%s finish_reason=%s",
         len(str(raw_text or "")),
@@ -8409,6 +8415,30 @@ def _parse_storyboard_payload(raw_text: str, *, parse_stage: str = "initial", fi
             },
         )
     logger.debug("[SCENARIO_DIRECTOR] json extracted keys=%s", ",".join(list(extracted.keys())[:8]))
+    if direct_gemini_storyboard_mode:
+        candidate = extracted
+        if isinstance(candidate.get("storyboard_out"), dict):
+            candidate = candidate["storyboard_out"]
+        elif isinstance(candidate.get("storyboardOut"), dict):
+            candidate = candidate["storyboardOut"]
+        elif isinstance(candidate.get("output"), dict) and isinstance(candidate["output"].get("scenes"), list):
+            candidate = candidate["output"]
+        if not isinstance(candidate, dict):
+            raise ScenarioDirectorError(
+                "gemini_invalid_contract_shape",
+                "Gemini returned invalid Scenario Director shape in direct mode.",
+                status_code=502,
+                details={"parseStage": parse_stage, "keys": list(extracted.keys())[:12]},
+            )
+        if not isinstance(candidate.get("scenes"), list):
+            raise ScenarioDirectorError(
+                "gemini_invalid_contract_scenes",
+                "Gemini returned invalid Scenario Director scenes in direct mode.",
+                status_code=502,
+                details={"parseStage": parse_stage},
+            )
+        normalized, _, _ = _normalize_scenario_director_scene_defaults(dict(candidate))
+        return normalized
     repaired = _repair_scenario_director_payload(extracted, parse_stage=parse_stage)
     return repaired
 
@@ -9490,7 +9520,12 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
     )
     retried_for_json = False
     try:
-        parsed_payload = _parse_storyboard_payload(raw_text, parse_stage="initial", finish_reason=finish_reason)
+        parsed_payload = _parse_storyboard_payload(
+            raw_text,
+            parse_stage="initial",
+            finish_reason=finish_reason,
+            direct_gemini_storyboard_mode=direct_gemini_storyboard_mode,
+        )
     except ScenarioDirectorError as first_exc:
         retried_for_json = True
         retry_body = {
@@ -9533,7 +9568,12 @@ def run_scenario_director(payload: dict[str, Any]) -> dict[str, Any]:
             retry_model_used,
         )
         model_used = retry_model_used
-        parsed_payload = _parse_storyboard_payload(raw_text, parse_stage="strict_json_retry", finish_reason=retry_finish_reason)
+        parsed_payload = _parse_storyboard_payload(
+            raw_text,
+            parse_stage="strict_json_retry",
+            finish_reason=retry_finish_reason,
+            direct_gemini_storyboard_mode=direct_gemini_storyboard_mode,
+        )
 
     parsed_payload, normalized_contract_fields, normalization_warnings = _normalize_scenario_director_scene_defaults(parsed_payload)
     structured_planner_diagnostics = _extract_structured_diagnostics(parsed_payload)
