@@ -1297,7 +1297,19 @@ export default function ScenarioStoryboardEditor({
                             >
                               Создать изображение
                             </button>
-                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { imageUrl: "", imageStatus: "idle" })}>Удалить</button>
+                            <button
+                              className="clipSB_btn clipSB_btnSecondary"
+                              type="button"
+                              onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
+                                imageUrl: "",
+                                imageStatus: "idle",
+                                imageError: "",
+                                imageHint: "",
+                                imageDegradeReason: "",
+                              })}
+                            >
+                              Удалить
+                            </button>
                           </div>
                         </div>
                         <div className="clipSB_scenarioEditorImageRight clipSB_scenarioEditorImageRightMain">
@@ -1354,7 +1366,19 @@ export default function ScenarioStoryboardEditor({
                           ) : null}
                           <div className="clipSB_scenarioEditorBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "start_frame", generateMeta)} disabled={startFrameStatus === "loading"}>Создать изображение</button>
-                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { startImageUrl: "", startFrameImageUrl: "", startFramePreviewUrl: "", startFrameStatus: "idle" })}>Удалить</button>
+                            <button
+                              className="clipSB_btn clipSB_btnSecondary"
+                              type="button"
+                              onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
+                                startImageUrl: "",
+                                startFrameImageUrl: "",
+                                startFramePreviewUrl: "",
+                                startFrameStatus: "idle",
+                                startFrameError: "",
+                              })}
+                            >
+                              Удалить
+                            </button>
                           </div>
                         </div>
                         <div className="clipSB_scenarioEditorFrameCard">
@@ -1379,7 +1403,20 @@ export default function ScenarioStoryboardEditor({
                           ) : null}
                           <div className="clipSB_scenarioEditorBtnRow">
                             <button className="clipSB_btn" type="button" onClick={() => onGenerateScene?.(nodeId, selectedSceneId, "end_frame", generateMeta)} disabled={endFrameStatus === "loading" || !isFirstLastVideoMode}>Создать изображение</button>
-                            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onUpdateScene?.(nodeId, selectedSceneId, { endImageUrl: "", endFrameImageUrl: "", endFramePreviewUrl: "", endFrameStatus: "idle" })} disabled={!isFirstLastVideoMode}>Удалить</button>
+                            <button
+                              className="clipSB_btn clipSB_btnSecondary"
+                              type="button"
+                              onClick={() => onUpdateScene?.(nodeId, selectedSceneId, {
+                                endImageUrl: "",
+                                endFrameImageUrl: "",
+                                endFramePreviewUrl: "",
+                                endFrameStatus: "idle",
+                                endFrameError: "",
+                              })}
+                              disabled={!isFirstLastVideoMode}
+                            >
+                              Удалить
+                            </button>
                           </div>
                         </div>
                       </div>

@@ -7,6 +7,7 @@ function normalizeApiErrorMessage(res, data){
   const d = data?.detail ?? data?.message ?? data?.error ?? null;
   const hint = typeof data?.hint === "string" ? data.hint.trim() : "";
   const code = typeof data?.code === "string" ? data.code.trim() : "";
+  const raw = typeof data?.raw === "string" ? data.raw.trim() : "";
   if (hint) return code ? `${hint} (${code})` : hint;
   if(Array.isArray(d)){
     const parts = d.map(it=>{
@@ -23,6 +24,7 @@ function normalizeApiErrorMessage(res, data){
     const base = d.message || JSON.stringify(d);
     return code ? `${base} (${code})` : base;
   }
+  if (raw) return code ? `${raw} (${code})` : raw;
   return code ? `HTTP ${res.status} (${code})` : `HTTP ${res.status}`;
 }
 
