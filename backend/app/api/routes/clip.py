@@ -1121,7 +1121,7 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
         "- keep visible accessories stable once established; no random accessory invention or disappear/reappear drift unless explicitly requested",
         "- keep stable base colors for skin tone, hair, garments/fabrics, and accessories across scenes; lighting can vary but must not redesign base colors",
         "- outfit lock is strict: preserve garment type, cut, fabric feel, color family, footwear, accessories, and decorative details unless explicit wardrobe change is requested",
-        "- scene progression must be different zones/corners/angles/sub-locations of the same venue/world unless explicitly changed",
+        "- keep same venue/world continuity; prefer progression through connected zones/corners/angles/sub-locations when it improves scene evolution",
         "- same world, different zones rule: keep architecture family, material family, production design family, and venue identity stable across the clip",
         "- keep one world identity and one lighting/shadow/color family across the full clip",
         "- photoreal cinematic realism is mandatory by default",
@@ -9748,13 +9748,13 @@ def clip_image(payload: ClipImageIn):
                     "CINEMATIC SCENE PROGRESSION RULES:\n"
                     "Scenes must behave like a cinematic storyboard.\n"
                     "Each scene must represent a new visual moment in time.\n"
-                    "Consecutive scenes must not repeat the same composition, camera position, or character pose.\n"
-                    "Every new scene must introduce at least one visible change.\n"
+                    "Avoid accidental repetitive staging across consecutive scenes (same composition/camera position/pose without narrative reason).\n"
+                    "Prefer introducing at least one visible change per new scene.\n"
                     "Allowed visible changes: camera angle/distance/position, character pose/movement/orientation, framing change, or interaction with environment.\n"
                     "If a character is moving, show progression stages across scenes (start movement, continue, approach destination, stop, turn, react).\n"
-                    "Avoid repeating the same shot type in consecutive scenes.\n"
+                    "Avoid defaulting to the same shot type in consecutive scenes unless repetition is clearly intentional.\n"
                     "Use natural cinematic progression like wide→medium→close, back→side→front, movement→pause→reaction, or environment→subject→detail.\n"
-                    "Each scene must feel like the next camera shot from the same film sequence, never a repeated frame.\n\n"
+                    "Intentional repetition is allowed when it supports emotional arc, musical refrain, continuity beat, or dramatic hold.\n\n"
                     "CHARACTER POSE VARIATION RULE:\n"
                     "Reference images define character identity only.\n"
                     "References must preserve face identity, body proportions, hairstyle, clothing/logos, and accessories.\n"
@@ -9767,8 +9767,8 @@ def clip_image(payload: ClipImageIn):
                     "Walking progression examples: left step, right step, slowing down, stopping, shifting weight.\n"
                     "Reaction progression examples: noticing, head turn, focus, emotional response.\n\n"
                     "POSE REPETITION PREVENTION:\n"
-                    "Avoid repeating the same body pose, stance, or gesture across consecutive scenes.\n"
-                    "Adjacent scenes must not show the exact same pose unless storyboard intent explicitly requires stillness.\n\n"
+                    "Avoid unintentional repetition of the same body pose, stance, or gesture across consecutive scenes.\n"
+                    "Adjacent scenes may keep the same pose when storyboard intent explicitly calls for stillness or sustained tension.\n\n"
                     "REFERENCE POSE RELEASE RULE:\n"
                     "The visible pose in reference images must not dominate generated scenes.\n"
                     "Use references strictly for identity guidance; characters must behave like live actors performing current scene action.\n\n"
