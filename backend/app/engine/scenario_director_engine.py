@@ -210,9 +210,10 @@ def _normalize_scene_canon_by_route(
         portrait_signal = any(marker in descriptor_text for marker in NON_LIP_PORTRAIT_MARKERS)
         action_signal = any(marker in descriptor_text for marker in NON_LIP_ACTION_MARKERS)
         if has_risky_rotation_bias:
+            sanitized_scene_meaning = _strip_risky_rotation_markers(normalized_description)
             normalized_description = (
-                f"{normalized_description}. Keep motion progression safe and spatial: favor travel through zones, controlled step/pivot/gesture, "
-                "and camera-led reveal/tracking/parallax over sharp spins or rotation-first choreography."
+                f"{sanitized_scene_meaning}. Scene drives forward through space with safe step/pivot/gesture progression, changing body angles, "
+                "and camera-led reveal/tracking/parallax; beat shapes mood and intensity without rotation-first choreography."
             ).strip(". ")
         elif portrait_signal and not action_signal:
             normalized_description = (
@@ -231,6 +232,56 @@ def _normalize_scene_canon_by_route(
         if framing not in NON_LIP_ACTION_FRAMINGS:
             framing = "wide_action"
     return normalized_description.strip(), framing
+
+
+def _strip_risky_rotation_markers(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    cleaned = raw
+    risky_phrases = sorted(
+        set((*LIP_SYNC_SPIN_RISK_MARKERS, *NON_LIP_RISKY_ROTATION_MARKERS)),
+        key=len,
+        reverse=True,
+    )
+    for phrase in risky_phrases:
+        token = str(phrase or "").strip()
+        if not token:
+            continue
+        cleaned = re.sub(rf"\b{re.escape(token)}\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,;:.])", r"\1", cleaned)
+    cleaned = re.sub(r"([,;:.]){2,}", r"\1", cleaned)
+    cleaned = cleaned.strip(" ,;:.")
+    return cleaned
+
+
+def _normalize_image_prompt_by_route(*, route: str, image_prompt: str, fallback_text: str = "") -> str:
+    route_key = str(route or "").strip().lower()
+    base = _strip_risky_rotation_markers(image_prompt)
+    if not base:
+        base = _strip_risky_rotation_markers(fallback_text)
+    if route_key == "lip_sync_music":
+        if not base:
+            return (
+                "Singer-performance-first frame: emotional lyric delivery with readable face/mouth/neck/shoulders/upper torso, "
+                "expressive hands, subtle sway, gentle body pulse, and beat-driven emotional intensity."
+            )
+        return (
+            f"{base}. Singer-performance-first readability: emotional lyric delivery through face/mouth/neck/shoulders/upper torso, "
+            "expressive hands, subtle sway, and beat-driven emotional intensity."
+        ).strip()
+    if route_key in {"i2v", "first_last"}:
+        if not base:
+            return (
+                "Action-space progression with safe step/pivot/gesture, zone progression, evolving body angles, and camera-led dynamism; "
+                "beat shapes mood and intensity."
+            )
+        return (
+            f"{base}. Movement stays spatial and safe with step/pivot/gesture progression, evolving body angles, camera-led dynamism, "
+            "and beat-shaped mood/intensity."
+        ).strip()
+    return base or str(image_prompt or "").strip() or str(fallback_text or "").strip()
 
 SCENARIO_CANONICAL_ROLES = (
     "character_1",
@@ -1518,6 +1569,8 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
             is_lip_sync = route == "lip_sync_music"
             needs_two_frames = route == "first_last"
             internal_route = "f_l" if route == "first_last" else route
+            render_mode = "lip_sync_music" if is_lip_sync else ("first_last" if needs_two_frames else "image_video")
+            ltx_mode = "lip_sync_music" if is_lip_sync else ("f_l" if needs_two_frames else "i2v")
             description, performance_framing = _normalize_scene_canon_by_route(
                 route=route,
                 description=description,
@@ -1566,11 +1619,11 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
                     "action_in_frame": action_in_frame,
                     "camera": camera_text,
                     "what_from_audio_this_scene_uses": description,
-                    "render_mode": "image_video",
+                    "render_mode": render_mode,
                     "resolved_workflow_key": mapped_workflow_key,
                     "video_generation_route": internal_route,
                     "planned_video_generation_route": route,
-                    "ltx_mode": "lip_sync_music" if is_lip_sync else ("f_l" if needs_two_frames else "i2v"),
+                    "ltx_mode": ltx_mode,
                     "needs_two_frames": needs_two_frames,
                     "lip_sync": is_lip_sync,
                     "send_audio_to_generator": is_lip_sync,
@@ -1579,7 +1632,11 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
                     "audio_slice_end_sec": scene_end if is_lip_sync else 0.0,
                     "audio_slice_expected_duration_sec": scene_duration if is_lip_sync else 0.0,
                     "shot_type": shot_type,
-                    "image_prompt": description,
+                    "image_prompt": _normalize_image_prompt_by_route(
+                        route=route,
+                        image_prompt=description,
+                        fallback_text=action_in_frame,
+                    ),
                     "video_prompt": action_in_frame,
                     "performance_framing": performance_framing,
                     "identity_lock_applied": same_character,
@@ -9759,6 +9816,11 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             scene.setdefault("characters", [])
         internal_route = "f_l" if is_first_last_route else route
         lip_sync_route_state_consistent = is_lip_sync_route
+        image_prompt_value = _normalize_image_prompt_by_route(
+            route=route,
+            image_prompt=str(scene.get("visualPrompt") or "").strip(),
+            fallback_text=" ".join(part for part in (summary_text, motion_text, camera_text) if part).strip(),
+        )
         legacy_scenes.append(
             {
                 "scene_id": str(scene.get("sceneId") or f"S{idx}").strip() or f"S{idx}",
@@ -9774,7 +9836,7 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
                 "frame_description": summary_text,
                 "action_in_frame": motion_text,
                 "camera": camera_text,
-                "image_prompt": str(scene.get("visualPrompt") or "").strip(),
+                "image_prompt": image_prompt_value,
                 "video_prompt": motion_text or "Beat-synced camera and subject motion evolving through the scene.",
                 "ltx_mode": "lip_sync_music" if is_lip_sync_route else ("f_l" if is_first_last_route else "i2v"),
                 "ltx_reason": "Audio-first single-call route mapped via strict enum contract.",

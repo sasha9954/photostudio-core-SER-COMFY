@@ -770,6 +770,43 @@ def _route_has_risky_rotation_bias(*values: str) -> bool:
     return any(marker in text for marker in DIRECT_ROUTE_RISKY_ROTATION_MARKERS)
 
 
+def _strip_route_risky_rotation_markers(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    cleaned = raw
+    for marker in sorted(set(DIRECT_ROUTE_RISKY_ROTATION_MARKERS), key=len, reverse=True):
+        cleaned = re.sub(rf"\b{re.escape(marker)}\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,;:.])", r"\1", cleaned)
+    cleaned = cleaned.strip(" ,;:.")
+    return cleaned
+
+
+def _normalize_image_prompt_by_route(*, route: str, image_prompt: str, fallback_text: str = "") -> str:
+    route_key = str(route or "").strip().lower()
+    base = _strip_route_risky_rotation_markers(image_prompt) or _strip_route_risky_rotation_markers(fallback_text)
+    if route_key == "lip_sync_music":
+        if not base:
+            return (
+                "Singer-performance-first frame with emotional lyric delivery, readable face/mouth/neck/shoulders/upper torso, "
+                "expressive hands, subtle sway, and beat-driven emotional intensity."
+            )
+        return (
+            f"{base}. Singer-performance-first readability and emotional lyric delivery remain the primary visual focus."
+        ).strip()
+    if route_key in {"i2v", "first_last"}:
+        if not base:
+            return (
+                "Action-space progression with safe step/pivot/gesture, zone progression, evolving body angles, and camera-led dynamism; "
+                "beat shapes mood and intensity."
+            )
+        return (
+            f"{base}. Action-space progression stays safe via step/pivot/gesture and evolving body angles, with camera-led dynamism and beat-shaped intensity."
+        ).strip()
+    return base or str(image_prompt or "").strip() or str(fallback_text or "").strip()
+
+
 def _coerce_optional_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -7700,8 +7737,12 @@ If any of the required descriptive fields are returned in English, the output is
                 camera_motion = lip_sync_safe_camera
             if not video_prompt or risky_rotation_bias:
                 video_prompt = character_action
-            if not image_prompt_value:
-                image_prompt_value = visual_prompt or visual_desc or character_action
+            if not image_prompt_value or risky_rotation_bias:
+                image_prompt_value = _normalize_image_prompt_by_route(
+                    route=source_route,
+                    image_prompt=image_prompt_value or visual_prompt or visual_desc,
+                    fallback_text=character_action,
+                )
         elif route_is_non_lip:
             non_lip_safe_motion = (
                 "Beat-led progression through action space with safe step/pivot/gesture, evolving head/shoulder/body angles, "
@@ -7717,7 +7758,23 @@ If any of the required descriptive fields are returned in English, the output is
             if not video_prompt or risky_rotation_bias:
                 video_prompt = character_action
             if not image_prompt_value or risky_rotation_bias:
-                image_prompt_value = visual_prompt or visual_desc or character_action
+                image_prompt_value = _normalize_image_prompt_by_route(
+                    route=source_route,
+                    image_prompt=image_prompt_value or visual_prompt or visual_desc,
+                    fallback_text=character_action,
+                )
+        elif risky_rotation_bias:
+            image_prompt_value = _normalize_image_prompt_by_route(
+                route=source_route,
+                image_prompt=image_prompt_value or visual_prompt or visual_desc,
+                fallback_text=character_action or video_prompt,
+            )
+        if route_is_lipsync or route_is_non_lip:
+            image_prompt_value = _normalize_image_prompt_by_route(
+                route=source_route,
+                image_prompt=image_prompt_value,
+                fallback_text=character_action or video_prompt,
+            )
 
         continuity_memory = _sanitize_continuity_memory(s.get("continuityMemory"))
         if not continuity_memory:
