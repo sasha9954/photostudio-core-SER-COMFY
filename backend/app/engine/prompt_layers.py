@@ -205,15 +205,39 @@ def build_ltx_video_canon_block(*, lip_sync: bool) -> str:
         "- no residual hand remaining on microphone after release",
         "- microphone interaction must remain physically realistic and readable",
     ]
+    camera_orientation_lock_rules = [
+        "CAMERA ORIENTATION / HORIZON LOCK:",
+        "- keep horizon stable and vertical axis stable throughout the shot",
+        "- camera remains upright and physically readable; no upside-down framing and no full frame inversion",
+        "- no vertical roll, no barrel-roll feeling, no top-over flip, no camera tumbling, no uncontrolled axial rotation",
+        "- if orbit is used, keep it as a gentle left/right side arc around subject, not a flip or inversion",
+        "- subject may turn/sway/move, but camera orientation must remain controlled, grounded, and upright by default",
+    ]
+    allowed_camera_motion_rules = [
+        "ALLOWED CAMERA MOTION:",
+        "- slow push-in or slow pull-back",
+        "- subtle left-right drift, gentle side move, small cinematic parallax",
+        "- partial arc around performer with soft orbit only around the left/right side of the subject",
+        "- cinematic camera movement should feel controlled, professional, and grounded",
+    ]
+    forbidden_camera_motion_rules = [
+        "FORBIDDEN CAMERA MOTION:",
+        "- no camera rotating upward/downward around its own axis",
+        "- no frame flipping upside down, no strong dutch roll, no vertical twisting rotation",
+        "- no full circular roll, no acrobatic spinning camera, no overhead flip into inverted view, no rollercoaster camera behavior",
+    ]
     if lip_sync:
         lines = [
             "LTX 2.3 LIP-SYNC PERFORMANCE CANON:",
             "- emotional singing performance with expressive vocal delivery and emotionally readable eyes",
             "- clear mouth articulation with natural jaw/lips timing, breath detail, and micro-expressions",
             "- subtle head motion and slight shoulder/body sway for live-session feel",
-            "- camera language: gentle orbit or slight arc or slow push-in with tasteful professional live shooting feel",
+            "- camera language: gentle side arc or slow push-in with tasteful professional live shooting feel",
             "- never dead static straight-on avatar framing unless explicitly required by scene instruction",
             "- keep performance alive and human, not centered talking-doll blocking",
+            *camera_orientation_lock_rules,
+            *allowed_camera_motion_rules,
+            *forbidden_camera_motion_rules,
             *base_physics,
             *mic_rules,
         ]
@@ -225,6 +249,9 @@ def build_ltx_video_canon_block(*, lip_sync: bool) -> str:
         "- no sudden jerks, no chaotic motion spikes, no violent movement bursts, no random camera behavior",
         "- avoid AI twitching artifacts and unstable micro-shakes in body or camera",
         "- camera progression must stay motivated and smooth inside one coherent world",
+        *camera_orientation_lock_rules,
+        *allowed_camera_motion_rules,
+        *forbidden_camera_motion_rules,
         *base_physics,
         *mic_rules,
     ]

@@ -4775,9 +4775,9 @@ def _is_lip_sync_music_scene(scene: ScenarioDirectorScene) -> bool:
 
 def _lip_sync_safe_camera_line() -> str:
     return (
-        "Steady close performance camera, static or very slow push-in with minimal drift; soft partial arc only "
-        "(about 90–180°, up to ~270° only when very gentle and performer integrity stays stable), never full 360° camera wrap; "
-        "performer may gently rotate with camera while background shifts behind trajectory."
+        "Steady close performance camera, static or very slow push-in with minimal drift; allow only gentle left/right side arc "
+        "(about 90–180° partial orbit) around performer; no full 360° wrap, no inversion, no vertical roll, no axial twist; "
+        "camera stays upright with stable horizon while performer may gently rotate and remain face-readable."
     )
 
 
@@ -4834,9 +4834,12 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.video_prompt = _join_visible_prompt_parts(
         [
             "Emotional singing performance in tight medium framing with persistent face/mouth readability.",
-            "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle partial arc, not a full orbit.",
+            "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle left/right side partial arc, not a flip or inversion.",
+            "Keep horizon and vertical axis stable: camera remains upright and physically readable at all times.",
+            "No upside-down framing, no full frame inversion, no vertical roll/barrel-roll, no top-over flip, no tumbling, no uncontrolled axial rotation.",
             "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body.",
-            "Optional safe variant: performer may gently rotate with camera while background shifts behind trajectory, preserving character integrity.",
+            "Subject may sway/turn for performance, but camera orientation stays controlled and upright.",
+            "Optional safe variant: performer may gently rotate while camera stays upright and background shifts behind trajectory, preserving character integrity.",
             "Environment remains background support; no running/chasing/spinning as primary action.",
             build_ltx_video_canon_block(lip_sync=True),
         ]
@@ -4861,6 +4864,12 @@ def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) 
         "low resolution",
         "teleporting limbs",
         "floating objects",
+        "upside-down framing",
+        "full frame inversion",
+        "vertical roll",
+        "barrel roll",
+        "camera tumbling",
+        "uncontrolled axial rotation",
     ]
     if scene and (bool(scene.lip_sync) or str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music"):
         negatives.extend(["closed mouth", "static face", "bad lip-sync", "no expression"])
