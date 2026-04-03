@@ -9521,6 +9521,15 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
         characters = ["character_1"] if has_character_1 else []
         route = _parse_gemini_scene_route_strict(scene.get("route"), scene_index=idx - 1, parse_stage=parse_stage)
         scene_type = str(scene.get("scene_type") or scene.get("sceneType") or "").strip()
+        primary_semantic = (
+            scene.get("primary_semantic")
+            if isinstance(scene.get("primary_semantic"), dict)
+            else (
+                scene.get("primarySemantic")
+                if isinstance(scene.get("primarySemantic"), dict)
+                else (scene.get("semantic") if isinstance(scene.get("semantic"), dict) else {})
+            )
+        )
         transition_hint = str(primary_semantic.get("transitionHint") or "").strip().lower()
         boundary_reason = "phrase"
         if any(token in transition_hint for token in ("energy", "drop", "lift", "peak", "hit")):
