@@ -3303,11 +3303,23 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
         ).strip().lower()
         if scene_task_mode not in {"keep_identity", "virtual_try_on", "story_costume_change", "motion_only", "camera_only", "style_transfer"}:
             scene_task_mode = "keep_identity"
-        scene_outfit_profile = _build_scene_outfit_profile_from_payload(payload, role="character_1")
+        source_outfit_profile = _build_scene_outfit_profile_from_payload(payload, role="character_1")
+        target_outfit_profile = _extract_target_outfit_profile_from_payload(payload)
+        source_outfit_replaced = scene_task_mode == "virtual_try_on" and bool(target_outfit_profile)
+        effective_outfit_profile = target_outfit_profile if source_outfit_replaced else source_outfit_profile
+        confidence_scores = _normalize_scene_outfit_confidence_scores(
+            payload.get("confidenceScores") if isinstance(payload.get("confidenceScores"), dict) else {},
+            fallback=_safe_float(scene.confidence, 0.5),
+        )
         scene_item["taskMode"] = scene_task_mode
         scene_item["task_mode"] = scene_task_mode
-        scene_item["outfitProfile"] = scene_outfit_profile
-        scene_item["confidenceScores"] = {"outfitProfile": _safe_float(scene.confidence, 0.5)}
+        scene_item["sourceOutfitProfile"] = source_outfit_profile
+        scene_item["targetOutfitProfile"] = target_outfit_profile
+        scene_item["effectiveOutfitProfile"] = effective_outfit_profile
+        scene_item["outfitProfile"] = effective_outfit_profile
+        scene_item["sourceOutfitReplaced"] = source_outfit_replaced
+        scene_item["outfitIdentitySource"] = "targetOutfitProfile" if source_outfit_replaced else "sourceOutfitProfile"
+        scene_item["confidenceScores"] = confidence_scores
         scenes.append(scene_item)
         video.append(
             {
@@ -3360,8 +3372,13 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                     "directorGenreIntent": scene.director_genre_intent,
                     "taskMode": scene_task_mode,
                     "task_mode": scene_task_mode,
-                    "outfitProfile": scene_outfit_profile,
-                    "confidenceScores": {"outfitProfile": _safe_float(scene.confidence, 0.5)},
+                    "sourceOutfitProfile": source_outfit_profile,
+                    "targetOutfitProfile": target_outfit_profile,
+                    "effectiveOutfitProfile": effective_outfit_profile,
+                    "outfitProfile": effective_outfit_profile,
+                    "sourceOutfitReplaced": source_outfit_replaced,
+                    "outfitIdentitySource": "targetOutfitProfile" if source_outfit_replaced else "sourceOutfitProfile",
+                    "confidenceScores": confidence_scores,
                 },
             }
         )
@@ -4774,6 +4791,70 @@ def _build_scene_outfit_profile_from_payload(payload: dict[str, Any], *, role: s
         "family_module": family_module,
         "family_fields": family_fields_map.get(family_module, []),
     }
+
+
+def _normalize_scene_outfit_confidence_scores(raw_scores: Any, *, fallback: float = 0.5) -> dict[str, float]:
+    scores = raw_scores if isinstance(raw_scores, dict) else {}
+    aliases = {
+        "outfitProfile": "coarse",
+        "outfit_profile": "coarse",
+        "garmentCategory": "garment_category",
+        "coverageIdentity": "coverage_identity",
+        "constructionIdentity": "construction_identity",
+        "silhouetteIdentity": "silhouette_identity",
+        "materialIdentity": "material_identity",
+        "signatureDetailsIdentity": "signature_details_identity",
+        "colorIdentity": "color_identity",
+        "footwearIdentity": "footwear_identity",
+        "accessoryIdentity": "accessory_identity",
+    }
+    keys = [
+        "garment_category",
+        "coverage_identity",
+        "construction_identity",
+        "silhouette_identity",
+        "material_identity",
+        "signature_details_identity",
+        "color_identity",
+        "footwear_identity",
+        "accessory_identity",
+    ]
+    normalized: dict[str, float] = {}
+    coarse: float | None = None
+    for key, value in scores.items():
+        canonical = aliases.get(str(key), str(key))
+        confidence = _safe_float(value)
+        if confidence is None:
+            continue
+        confidence = max(0.0, min(1.0, float(confidence)))
+        if canonical == "coarse":
+            coarse = confidence
+        elif canonical in keys:
+            normalized[canonical] = confidence
+    if coarse is None:
+        coarse = max(0.0, min(1.0, float(_safe_float(fallback, 0.5))))
+    for key in keys:
+        normalized.setdefault(key, coarse)
+    return normalized
+
+
+def _extract_target_outfit_profile_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "targetOutfitProfile",
+        "target_outfit_profile",
+        "targetGarmentProfile",
+        "target_garment_profile",
+        "wardrobeOverride",
+        "wardrobe_override",
+        "outfitOverride",
+        "outfit_override",
+        "tryOnGarmentProfile",
+        "try_on_garment_profile",
+    ):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
 
 
 def _build_character_identity_visible_lock(
