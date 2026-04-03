@@ -10194,6 +10194,13 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             scene_phrase_match.get("matchedPhraseTexts"),
         )
         primary_phrase = str(scene_phrase_match.get("primaryPhrase") or "").strip()
+        raw_boundary_reason = str(scene.get("boundary_reason") or scene.get("boundaryReason") or "").strip().lower()
+        if raw_boundary_reason in {"phrase", "pause", "semantic", "energy", "fallback"}:
+            boundary_reason = raw_boundary_reason
+        elif raw_boundary_reason in {"phrase_boundary", "pause_boundary", "energy_boundary"}:
+            boundary_reason = raw_boundary_reason.replace("_boundary", "")
+        else:
+            boundary_reason = "phrase" if primary_phrase else "fallback"
         if (not direct_gemini_storyboard_mode) and _is_short_music_intro_segment(
             text=primary_phrase,
             t0=scene_start,
