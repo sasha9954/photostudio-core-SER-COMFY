@@ -4288,10 +4288,20 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     if str(lip_data.get("performance_framing") or "").strip().lower() not in LIP_SYNC_PERFORMANCE_FRAMINGS:
         lip_data["performance_framing"] = "tight_medium"
     lip_data["camera"] = _lip_sync_safe_camera_line()
-    lip_data["frame_description"] = (
-        "Final vocal payoff direct-to-camera: tight readable singing emotion with eyes, mouth, neck, and shoulders clearly visible."
+    lip_summary = "Final vocal payoff lands in-camera with emotionally precise lyric articulation and performance intensity."
+    lip_motion = "Controlled singer-forward movement, expressive phrase-timed hands, subtle body pulse, and readable mouth articulation."
+    lip_visual_prompt = (
+        "Final lip-sync payoff, tight-medium singer framing, eyes/mouth/neck/shoulders readable, direct emotional delivery, no outro hold."
     )
-    lip_data["action_in_frame"] = "She performs the last vocal punch to camera with clear lyric articulation and controlled emotional intensity."
+    lip_video_prompt = "Performer delivers the true final vocal line to camera with clear articulation and controlled emotional push."
+    lip_data["scene_goal"] = "Deliver the final vocal payoff directly to camera before release."
+    lip_data["frame_description"] = lip_summary
+    lip_data["action_in_frame"] = lip_video_prompt
+    lip_data["summary"] = lip_summary
+    lip_data["motion"] = lip_motion
+    lip_data["visualPrompt"] = lip_visual_prompt
+    lip_data["image_prompt"] = lip_visual_prompt
+    lip_data["video_prompt"] = lip_video_prompt
     lip_data["workflow_decision_reason"] = (
         f"{str(last_scene.workflow_decision_reason or '').strip()} Final hybrid outro split: isolated final lip-sync payoff before ending hold."
     ).strip()
@@ -4318,10 +4328,21 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     hold_data["audio_slice_expected_duration_sec"] = hold_data["duration"]
     hold_data["audio_slice_bounds_filled_from_scene"] = False
     hold_data["lip_sync_route_state_consistent"] = True
+    hold_summary = hold_frame
+    hold_motion = "Lingering gaze, final breath, softened shoulders, minimal post-vocal micro-movement, and slow pull-back hold."
+    hold_visual_prompt = (
+        "Ending afterimage hold, no active singing, emotional residue, lingering gaze, final breath, gentle slow pull-back."
+    )
+    hold_video_prompt = hold_action
     hold_data["scene_goal"] = hold_goal
-    hold_data["frame_description"] = hold_frame
-    hold_data["action_in_frame"] = hold_action
+    hold_data["frame_description"] = hold_summary
+    hold_data["action_in_frame"] = hold_video_prompt
     hold_data["camera"] = hold_camera
+    hold_data["summary"] = hold_summary
+    hold_data["motion"] = hold_motion
+    hold_data["visualPrompt"] = hold_visual_prompt
+    hold_data["image_prompt"] = hold_visual_prompt
+    hold_data["video_prompt"] = hold_video_prompt
     hold_data["local_phrase"] = None
     hold_data["what_from_audio_this_scene_uses"] = "Post-phrase resonance and release after vocals, without active singing articulation."
     hold_data["workflow_decision_reason"] = (
@@ -4332,8 +4353,6 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     updated_scenes = scenes[:-1]
     updated_scenes.append(ScenarioDirectorScene.model_validate(lip_data))
     updated_scenes.append(ScenarioDirectorScene.model_validate(hold_data))
-    for idx, scene in enumerate(updated_scenes):
-        scene.display_index = idx
     storyboard_out.scenes = updated_scenes
     diagnostics.final_scene_split_applied = True
     diagnostics.final_scene_split_reason = "final_non_lip_hybrid_outro_scene_split"
@@ -6926,6 +6945,8 @@ def _apply_music_video_mode_policy(
     scenes = storyboard_out.scenes or []
     if not scenes:
         return storyboard_out
+    storyboard_out = _maybe_split_final_hybrid_outro_scene(storyboard_out)
+    scenes = storyboard_out.scenes or []
     has_existing_first_last = any(
         str(scene.render_mode or "").strip().lower() in {"first_last", "first_last_sound"} or _coerce_bool(scene.needs_two_frames, False)
         for scene in scenes
@@ -7534,8 +7555,6 @@ def _apply_music_video_mode_policy(
         prev_shot_type = str(scene.shot_type or shot_type)
         kept_scenes.append(scene)
     storyboard_out.scenes = kept_scenes
-    storyboard_out = _maybe_split_final_hybrid_outro_scene(storyboard_out)
-    kept_scenes = storyboard_out.scenes or []
     if kept_scenes:
         if not str(storyboard_out.story.title or "").strip():
             storyboard_out.story.title = "Audio-first music video arc"
