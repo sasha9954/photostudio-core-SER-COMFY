@@ -1732,6 +1732,9 @@ function buildAudioSliceReadyPatch({
   startSec = null,
   endSec = null,
   durationSec = null,
+  audioSliceKind = "",
+  musicVocalLipSyncAllowed = null,
+  requiresAudioSensitiveVideo = null,
   expectedDurationSec = null,
   backendDurationSec = null,
   speechSafeAdjusted = false,
@@ -1758,6 +1761,17 @@ function buildAudioSliceReadyPatch({
     extractedAudioDurationSec: normalizedDuration,
     audioSliceExpectedDurationSec: normalizedExpected,
     audioSliceBackendDurationSec: Number.isFinite(Number(backendDurationSec)) ? Number(backendDurationSec) : normalizedDuration,
+    audioSliceKind: String(audioSliceKind || "").trim().toLowerCase(),
+    musicVocalLipSyncAllowed: (
+      musicVocalLipSyncAllowed == null
+        ? undefined
+        : Boolean(musicVocalLipSyncAllowed)
+    ),
+    requiresAudioSensitiveVideo: (
+      requiresAudioSensitiveVideo == null
+        ? undefined
+        : Boolean(requiresAudioSensitiveVideo)
+    ),
     audioSliceActualDurationSec: null,
     audioSliceError: "",
     audioSliceLoadError: "",
@@ -2094,11 +2108,18 @@ function collectSceneVideoStateStats(scenes, prefix = "scene") {
 function isLipSyncScene(scene) {
   if (!scene || typeof scene !== "object") return false;
   const ltxMode = String(scene.ltxMode || scene.ltx_mode || "").trim().toLowerCase();
+  const renderMode = String(scene.renderMode || scene.render_mode || "").trim().toLowerCase();
+  const resolvedWorkflowKey = normalizeScenarioWorkflowKeyForProduction(
+    scene.resolvedWorkflowKey || scene.resolved_workflow_key || ""
+  );
   return !!(
     scene.lipSync === true
     || scene.isLipSync === true
     || ltxMode === "lip_sync"
-    || String(scene.renderMode || "").trim().toLowerCase() === "avatar_lipsync"
+    || ltxMode === "lip_sync_music"
+    || renderMode === "avatar_lipsync"
+    || renderMode === "lip_sync_music"
+    || resolvedWorkflowKey === "lip_sync_music"
   );
 }
 
@@ -10581,12 +10602,19 @@ Aspect ratio: ${imageFormat}`,
       const outEndSec = Number(out?.endSec ?? out?.t1 ?? endSec);
       const durationSec = normalizeDurationSec(out?.durationSec ?? out?.audioSliceBackendDurationSec ?? out?.duration);
       const expectedDuration = Math.max(0, outEndSec - outStartSec);
+      const resolvedAudioSliceKind = String(out?.audioSliceKind || out?.audio_slice_kind || "").trim().toLowerCase();
+      const resolvedMusicVocalLipSyncAllowed = out?.musicVocalLipSyncAllowed ?? out?.music_vocal_lipsync_allowed;
+      const resolvedRequiresAudioSensitiveVideo = out?.requiresAudioSensitiveVideo ?? out?.requires_audio_sensitive_video;
       console.debug("[SCENARIO AUDIO SLICE RESPONSE]", {
         ok: Boolean(out?.ok),
         sceneId,
         sliceUrl: resolvedSliceUrl,
         usedAudioUrl: String(out?.audioUrl || scenarioAudioUrl || ""),
         actualDurationSec: durationSec,
+        audioSliceKind: resolvedAudioSliceKind || "none",
+        musicVocalLipSyncAllowed: resolvedMusicVocalLipSyncAllowed == null ? null : Boolean(resolvedMusicVocalLipSyncAllowed),
+        renderMode: String(scene?.renderMode || "").trim().toLowerCase(),
+        ltxMode: String(scene?.ltxMode || "").trim().toLowerCase(),
         error: "",
       });
       updateScenarioScene(
@@ -10598,6 +10626,9 @@ Aspect ratio: ${imageFormat}`,
           durationSec: durationSec ?? expectedDuration,
           expectedDurationSec: expectedDuration,
           backendDurationSec: durationSec,
+          audioSliceKind: resolvedAudioSliceKind,
+          musicVocalLipSyncAllowed: resolvedMusicVocalLipSyncAllowed,
+          requiresAudioSensitiveVideo: resolvedRequiresAudioSensitiveVideo,
           speechSafeAdjusted: out?.speechSafeAdjusted,
           speechSafeShiftMs: out?.speechSafeShiftMs,
           sliceMayCutSpeech: out?.sliceMayCutSpeech,
@@ -10610,6 +10641,9 @@ Aspect ratio: ${imageFormat}`,
         audioSliceStartSec: outStartSec,
         audioSliceEndSec: outEndSec,
         audioSliceStatus: "ready",
+        audioSliceKind: resolvedAudioSliceKind,
+        musicVocalLipSyncAllowed: resolvedMusicVocalLipSyncAllowed == null ? undefined : Boolean(resolvedMusicVocalLipSyncAllowed),
+        requiresAudioSensitiveVideo: resolvedRequiresAudioSensitiveVideo == null ? undefined : Boolean(resolvedRequiresAudioSensitiveVideo),
       };
     } catch (e) {
       console.error(e);
@@ -10672,6 +10706,9 @@ Aspect ratio: ${imageFormat}`,
         audioSliceStartSec: Number(directResult?.audioSliceStartSec),
         audioSliceEndSec: Number(directResult?.audioSliceEndSec),
         audioSliceStatus: String(directResult?.audioSliceStatus || "").trim(),
+        audioSliceKind: String(directResult?.audioSliceKind || directResult?.audio_slice_kind || "").trim().toLowerCase(),
+        musicVocalLipSyncAllowed: directResult?.musicVocalLipSyncAllowed ?? directResult?.music_vocal_lipsync_allowed,
+        requiresAudioSensitiveVideo: directResult?.requiresAudioSensitiveVideo ?? directResult?.requires_audio_sensitive_video,
       };
     }
 
@@ -10684,6 +10721,9 @@ Aspect ratio: ${imageFormat}`,
       audioSliceStartSec: Number(refreshedScene?.audioSliceStartSec ?? refreshedScene?.audioSliceT0),
       audioSliceEndSec: Number(refreshedScene?.audioSliceEndSec ?? refreshedScene?.audioSliceT1),
       audioSliceStatus: String(refreshedScene?.audioSliceStatus || "").trim(),
+      audioSliceKind: String(refreshedScene?.audioSliceKind || refreshedScene?.audio_slice_kind || "").trim().toLowerCase(),
+      musicVocalLipSyncAllowed: refreshedScene?.musicVocalLipSyncAllowed ?? refreshedScene?.music_vocal_lipsync_allowed,
+      requiresAudioSensitiveVideo: refreshedScene?.requiresAudioSensitiveVideo ?? refreshedScene?.requires_audio_sensitive_video,
     };
   }, [handleScenarioTakeAudioByIndex, resolveScenarioSceneIndex]);
 
@@ -10947,6 +10987,8 @@ Aspect ratio: ${imageFormat}`,
     const audioSliceStartSecOverride = Number(options?.audioSliceStartSecOverride);
     const audioSliceEndSecOverride = Number(options?.audioSliceEndSecOverride);
     let attachedAudioSliceUrl = String(audioSliceUrlOverride || targetScene?.audioSliceUrl || "").trim();
+    let effectiveAudioSliceKind = String(targetScene?.audioSliceKind || targetScene?.audio_slice_kind || "").trim().toLowerCase();
+    let effectiveMusicVocalLipSyncAllowed = targetScene?.musicVocalLipSyncAllowed ?? targetScene?.music_vocal_lipsync_allowed;
     const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
     traceScenarioVideo("[SCENARIO VIDEO TRACE 7] workflow_resolved", {
       sceneId,
@@ -10990,6 +11032,12 @@ Aspect ratio: ${imageFormat}`,
       try {
         const extracted = await handleScenarioEditorExtractSceneAudio(targetNodeId, sceneId);
         attachedAudioSliceUrl = String(extracted?.audioSliceUrl || extracted?.sliceUrl || "").trim();
+        if (!effectiveAudioSliceKind) {
+          effectiveAudioSliceKind = String(extracted?.audioSliceKind || extracted?.audio_slice_kind || "").trim().toLowerCase();
+        }
+        if (effectiveMusicVocalLipSyncAllowed == null) {
+          effectiveMusicVocalLipSyncAllowed = extracted?.musicVocalLipSyncAllowed ?? extracted?.music_vocal_lipsync_allowed;
+        }
         traceScenarioVideo("[SCENARIO VIDEO TRACE 9] after_auto_slice", {
           sceneId,
           selectedSceneId: requestedSceneId,
@@ -11037,8 +11085,8 @@ Aspect ratio: ${imageFormat}`,
       }
       return;
     }
-    const musicVocalLipSyncAllowed = Boolean(targetScene?.musicVocalLipSyncAllowed ?? targetScene?.music_vocal_lipsync_allowed);
-    const audioSliceKind = String(targetScene?.audioSliceKind || targetScene?.audio_slice_kind || "").trim().toLowerCase();
+    const musicVocalLipSyncAllowed = Boolean(effectiveMusicVocalLipSyncAllowed);
+    const audioSliceKind = String(effectiveAudioSliceKind || "").trim().toLowerCase();
     if (effectiveWorkflowKey === "lip_sync_music" && !attachedAudioSliceUrl) {
       logScenarioVideoBlocked("validate_audio", "lip_sync_audio_missing", {
         sceneId,
