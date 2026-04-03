@@ -13084,6 +13084,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                         "sceneId": str(payload.sceneId or "").strip(),
                         "jobId": job_id,
                         "status": "done",
+                        "resolvedWorkflowKey": str((out.get("debug") or {}).get("workflow_key") if isinstance(out.get("debug"), dict) else "") or resolved_workflow_hint,
                         "code": "",
                         "error": "",
                         "secondFramePatchApplied": second_frame_patch_applied,
@@ -13112,6 +13113,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                         "sceneId": str(payload.sceneId or "").strip(),
                         "jobId": job_id,
                         "status": "error",
+                        "resolvedWorkflowKey": str((out.get("debug") or {}).get("workflow_key") if isinstance(out.get("debug"), dict) else "") or resolved_workflow_hint,
                         "code": str(out.get("code") or "").strip(),
                         "error": str(out.get("details") or out.get("hint") or out.get("code") or "")[:300],
                         "secondFramePatchApplied": second_frame_patch_applied,
@@ -13351,10 +13353,9 @@ def clip_video(payload: ClipVideoIn):
     if final_workflow_key in {"lip_sync", "lip_sync_music"}:
         provider = requested_provider or "kie"
         provider_reason = "dedicated_lipsync_provider_strategy"
-        if provider == "comfy_remote":
-            provider = "kie"
-            forced_provider_override = True
-            override_reason = "lipsync_route_disallows_comfy_remote"
+        if requested_provider == "comfy_remote":
+            provider = "comfy_remote"
+            provider_reason = "requested_comfy_remote_lipsync_preserved"
     raw_workflow_key_for_compat = str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()
     normalized_workflow_key_for_compat = _normalize_ltx_workflow_key(raw_workflow_key_for_compat)
     is_lipsync_provider_route = (
@@ -13362,14 +13363,10 @@ def clip_video(payload: ClipVideoIn):
         or normalized_workflow_key_for_compat in {"lip_sync", "lip_sync_music"}
         or str(raw_workflow_key_for_compat or "").strip().lower() in {"lip_sync", "lip_sync_music"}
     )
-    bypass_ltx_model_compatibility = (
-        provider != "comfy_remote"
-        and mode == "lipsync"
-        and is_lipsync_provider_route
-    )
+    bypass_ltx_model_compatibility = bool(mode == "lipsync" and is_lipsync_provider_route)
     bypass_reason = "none"
     if bypass_ltx_model_compatibility:
-        bypass_reason = "lip_sync_provider_route"
+        bypass_reason = "lip_sync_provider_route_non_ltx_model"
         resolved_model_key = explicit_model
         resolved_model_spec = None
         model_source = "lipsync_provider"
@@ -13793,6 +13790,7 @@ def clip_video(payload: ClipVideoIn):
                     "resolvedWorkflowKey": final_workflow_key,
                     "workflowFile": workflow_path,
                     "stage": "before_upload_prompt_submit",
+                    "submitTarget": "comfy_remote",
                     "hasPrimaryImage": bool(image_bytes),
                     "hasStartImage": bool(start_image_bytes),
                     "hasEndImage": bool(end_image_bytes),
@@ -13932,6 +13930,7 @@ def clip_video(payload: ClipVideoIn):
                     "resolvedWorkflowKey": final_workflow_key,
                     "workflowFile": workflow_path,
                     "stage": "success",
+                    "submitTarget": "comfy_remote",
                     "uploadReached": True,
                     "promptSubmitReached": True,
                     "jobId": str(comfy_out.get("taskId") or ""),
@@ -13988,6 +13987,8 @@ def clip_video(payload: ClipVideoIn):
             "providerDurationSec": round(float(comfy_out.get("requestedDurationSec") or requested_duration), 3),
             "debug": {
                 **comfy_debug,
+                "workflow_key": final_workflow_key,
+                "workflow_file": workflow_path,
                 "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
                 "effectivePromptPreview": prompt_debug.get("effectivePromptPreview"),
                 "effectivePromptLength": prompt_debug.get("effectivePromptLength"),
@@ -14399,6 +14400,8 @@ def clip_video(payload: ClipVideoIn):
         "requestedDurationSec": round(requested_duration, 3),
         "providerDurationSec": provider_duration_sec,
         "debug": {
+            "workflow_key": final_workflow_key,
+            "workflow_file": workflow_path,
             "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
             "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
             "effectivePromptLength": len(effective_prompt),
