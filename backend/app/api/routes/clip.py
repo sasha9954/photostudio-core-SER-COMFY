@@ -1214,11 +1214,19 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
             "face_identity",
             "hair_identity",
             "body_identity",
+            "garment_silhouette_identity",
+            "sleeve_identity",
+            "bodice_identity",
+            "neckline_identity",
+            "skirt_volume_identity",
+            "rose_applique_identity",
+            "lining_color_identity",
             "garment_identity",
             "makeup_identity",
             "accessory_identity",
             "age_consistency",
             "color_identity",
+            "footwear_identity",
             "world_identity",
         ]
     lines = [
@@ -1232,7 +1240,14 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
         f"- outfitLock={bool(contract.get('outfitLock', True))}",
         "- character references are actor references: same face, hair, body/silhouette, and full outfit continuity across scenes",
         "- same apparent age and same body shape/silhouette must hold across ALL scene images; no face-age drift and no body proportion drift",
+        "- face/hair identity lock and garment identity lock are separate and both must hold simultaneously",
         "- keep same face structure, hair identity, and hairstyle specifics (color, length, volume, parting) unless storyboard explicitly changes them",
+        "- garment lock is global across all scene routes including lip_sync_music: reference photo is source-of-truth for garment construction",
+        "- preserve the same exact dress construction: sleeve length/volume, shoulder construction, bodice cut, neckline family, waist construction, skirt shape/fullness/silhouette",
+        "- preserve rose applique identity exactly: same rose count, placement zones, and relative scale; do not replace with a new floral design",
+        "- preserve magenta lining logic exactly: same color family and same visibility behavior tied to pose/motion; no random removal or overexposure",
+        "- preserve footwear identity exactly: boots must remain boots with stable silhouette/category",
+        "- do not redesign garment, do not simplify to sleeveless version, and do not reinterpret as a different fashion dress",
         "- keep visible accessories stable once established; no random accessory invention or disappear/reappear drift unless explicitly requested",
         "- keep stable base colors for skin tone, hair, garments/fabrics, and accessories across scenes; lighting can vary but must not redesign base colors",
         "- outfit lock is strict: preserve garment type, cut, fabric feel, color family, footwear, accessories, and decorative details unless explicit wardrobe change is requested",
@@ -1245,6 +1260,32 @@ def _build_hard_continuity_contract_block(*, scene_contract: dict[str, Any] | No
     if opening_shot:
         lines.append("- opening shot must establish a stable photoreal baseline for all subsequent scenes")
         lines.append("- opening shot must avoid fashion-editorial overdesign and stay grounded in believable live-action realism")
+    return "\n".join(lines)
+
+
+def _build_global_garment_lock_block(*, is_lip_sync_route: bool) -> str:
+    lines = [
+        "GLOBAL GARMENT LOCK (ROUTE-AGNOSTIC, NON-NEGOTIABLE):",
+        "- reference photo is source-of-truth for garment construction, not only for face/hair",
+        "- preserve the same exact dress as reference",
+        "- preserve sleeve length and sleeve volume exactly",
+        "- preserve bodice cut, neckline family, waist construction, and shoulder construction",
+        "- preserve skirt shape/fullness/silhouette",
+        "- preserve rose applique count/placement/relative scale exactly",
+        "- preserve magenta lining logic and visibility behavior exactly",
+        "- preserve footwear identity exactly",
+        "- do not redesign garment",
+        "- do not simplify to sleeveless version",
+        "- do not reinterpret as a different fashion dress",
+        "- do not replace applique pattern with a new rose design",
+        "- do not shift from long dress to short/different silhouette",
+    ]
+    if is_lip_sync_route:
+        lines.extend([
+            "LIP-SYNC INTERACTION RULE:",
+            "- emotional performance upgrade must NOT loosen garment lock",
+            "- phrase-driven hand gestures are allowed, but must not trigger sleeve/bodice/skirt/lining redesign",
+        ])
     return "\n".join(lines)
 
 
@@ -8629,6 +8670,7 @@ def _build_comfy_image_prompt_assembly(
         str(contract.get("planned_video_generation_route") or ""),
         str(contract.get("render_mode") or ""),
     ]).lower()
+    is_lip_sync_route = "lip_sync" in route_hint or "lipsync" in route_hint
     is_non_lip_route = ("lip_sync" not in route_hint) and any(marker in route_hint for marker in ("i2v", "first_last", "f_l", "image_video"))
 
     def _normalized_gender_presentation(raw: Any) -> str:
@@ -8901,6 +8943,7 @@ def _build_comfy_image_prompt_assembly(
     scene_meaning_block = "\n".join(scene_meaning_lines)
     non_lip_identity_first_block = ""
     non_lip_lyric_guard_block = ""
+    global_garment_lock_block = _build_global_garment_lock_block(is_lip_sync_route=is_lip_sync_route)
     if is_non_lip_route:
         non_lip_identity_first_block = "\n".join([
             "NON-LIP IDENTITY-OUTFIT LOCK (PRIORITY 0, STRICT):",
@@ -8984,6 +9027,7 @@ def _build_comfy_image_prompt_assembly(
         opening_shot_realism_block,
         framing_and_staging_block,
         identity_layer_block,
+        global_garment_lock_block,
         physics_blocks["lightWorldBlock"],
         physics_blocks["subjectIdentityBlock"],
         physics_blocks["physicalSceneStateBlock"],
@@ -9081,6 +9125,7 @@ def _build_comfy_image_prompt_assembly(
         "lightWorldBlockPreview": physics_blocks["lightWorldBlock"],
         "subjectIdentityBlockPreview": physics_blocks["subjectIdentityBlock"],
         "sceneMeaningBlockPreview": scene_meaning_block,
+        "globalGarmentLockBlockPreview": global_garment_lock_block,
         "nonLipIdentityFirstBlockPreview": non_lip_identity_first_block,
         "nonLipLyricGuardBlockPreview": non_lip_lyric_guard_block,
         "continuityBlockPreview": continuity_block,
@@ -9284,6 +9329,13 @@ def clip_image(payload: ClipImageIn):
     identity_lock_fields_min = [
         "face_identity",
         "hair_identity",
+        "garment_silhouette_identity",
+        "sleeve_identity",
+        "bodice_identity",
+        "neckline_identity",
+        "skirt_volume_identity",
+        "rose_applique_identity",
+        "lining_color_identity",
         "body_identity",
         "silhouette_identity",
         "outfit_identity",
@@ -9384,26 +9436,32 @@ def clip_image(payload: ClipImageIn):
     scene_contract["mustAppear"] = must_appear_roles
     scene_contract["mustAppearCastRoles"] = must_appear_roles
     route_hint_lower = str(route_hint or scene_contract.get("sourceRoute") or "").strip().lower()
+    has_character_1_ref = bool(comfy_refs_by_role.get("character_1"))
+    character_1_is_active = "character_1" in scene_active_roles or "character_1" in must_appear_roles
+    if has_character_1_ref and character_1_is_active:
+        scene_contract["identityLock"] = True
+        scene_contract["identityLockApplied"] = True
+        scene_contract["outfitLock"] = True
+        scene_contract["garmentLock"] = True
+        scene_contract["hairFaceIdentityLock"] = True
+        scene_contract["garmentIdentityLock"] = True
+        fields = [str(x or "").strip() for x in (scene_contract.get("identityLockFieldsUsed") or []) if str(x or "").strip()]
+        fields.extend([
+            "face_identity",
+            "hair_identity",
+            "hair_structure_identity",
+            "garment_silhouette_identity",
+            "sleeve_identity",
+            "bodice_identity",
+            "neckline_identity",
+            "skirt_volume_identity",
+            "rose_applique_identity",
+            "lining_color_identity",
+            "footwear_identity",
+        ])
+        scene_contract["identityLockFieldsUsed"] = list(dict.fromkeys(fields))
     non_lip_route = route_hint_lower in {"i2v", "first_last", "f_l"}
     if non_lip_route:
-        has_character_1_ref = bool(comfy_refs_by_role.get("character_1"))
-        character_1_is_active = "character_1" in scene_active_roles or "character_1" in must_appear_roles
-        if has_character_1_ref and character_1_is_active:
-            scene_contract["identityLock"] = True
-            scene_contract["identityLockApplied"] = True
-            scene_contract["outfitLock"] = True
-            fields = [str(x or "").strip() for x in (scene_contract.get("identityLockFieldsUsed") or []) if str(x or "").strip()]
-            fields.extend([
-                "face_identity",
-                "hair_identity",
-                "hair_structure_identity",
-                "garment_silhouette_identity",
-                "sleeve_identity",
-                "rose_applique_identity",
-                "lining_color_identity",
-                "footwear_identity",
-            ])
-            scene_contract["identityLockFieldsUsed"] = list(dict.fromkeys(fields))
         scene_contract["active_connected_character_roles"] = [
             role for role in ("character_1", "character_2", "character_3")
             if bool(comfy_refs_by_role.get(role)) and (role in scene_active_roles or role in must_appear_roles)

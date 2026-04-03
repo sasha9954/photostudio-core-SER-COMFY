@@ -189,16 +189,16 @@ def _normalize_scene_canon_by_route(
         if spin_risk_count >= 2 or (spin_risk_count >= 1 and performance_signal_count == 0):
             normalized_description = (
                 "Singer performs emotionally to camera with clear lyric articulation; face, mouth, neck, shoulders, and upper torso "
-                "stay readable, expressive hands support meaning, and camera motion stays controlled with gentle push/pull or side arc."
+                "stay readable, phrase-driven expressive hands support meaning, and camera motion stays controlled with gentle push/pull or side arc."
             )
         elif is_empty_description:
             normalized_description = (
                 "Singer-performance-first moment: emotion is delivered through singing, with readable face/mouth/neck/shoulders/upper torso, "
-                "expressive hands, subtle sway, and beat-driven emotional intensity escalation."
+                "phrase-driven hand acting, subtle upper-body pulse, and beat-driven emotional intensity escalation."
             )
         elif performance_signal_count == 0:
             normalized_description = (
-                f"{normalized_description}. Singer remains camera-readable with emotional lyric delivery and clear mouth articulation."
+                f"{normalized_description}. Singer remains camera-readable with emotional lyric delivery, clear mouth articulation, and phrase-driven hand/upper-body performance."
             ).strip(". ")
         if normalized_description and "beat-driven emotional intensity" not in normalized_description.lower():
             normalized_description = (
@@ -299,11 +299,11 @@ def _normalize_image_prompt_by_route(*, route: str, image_prompt: str, fallback_
         if not base:
             return (
                 "Singer-performance-first frame: emotional lyric delivery with readable face/mouth/neck/shoulders/upper torso, "
-                "expressive hands, subtle sway, gentle body pulse, and beat-driven emotional intensity."
+                "phrase-driven expressive hands, controlled upper-body pulse, subtle forward intention/weight shift, and beat-driven emotional intensity."
             )
         return (
             f"{base}. Singer-performance-first readability: emotional lyric delivery through face/mouth/neck/shoulders/upper torso, "
-            "expressive hands, subtle sway, and beat-driven emotional intensity."
+            "phrase-driven hand acting, controlled upper-body pulse, and beat-driven emotional intensity."
         ).strip()
     if route_key in {"i2v", "first_last"}:
         if not base:
@@ -1577,6 +1577,13 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
         continuity_lock_fields = [
             "face_identity",
             "hair_identity",
+            "garment_silhouette_identity",
+            "sleeve_identity",
+            "bodice_identity",
+            "neckline_identity",
+            "skirt_volume_identity",
+            "rose_applique_identity",
+            "lining_color_identity",
             "body_identity",
             "silhouette_identity",
             "outfit_identity",
@@ -1622,7 +1629,7 @@ def _repair_scenario_director_payload(payload: dict, *, parse_stage: str = "init
                 )
                 if description_is_risky:
                     action_in_frame = (
-                        "Singer-performance-first shot: emotional lyric delivery with expressive hands, subtle sway, and gentle body pulse; "
+                        "Singer-performance-first shot: emotional lyric delivery with phrase-driven expressive hands, chest-open outward phrasing, and gentle upper-body pulse; "
                         "avoid spin-first/full-body spectacle as the main idea."
                     )
                 camera_text = (
@@ -4681,11 +4688,18 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
         cues["garment_identity"] = "the same dress silhouette and overall outfit identity remain unchanged"
         if "black dress" in blob:
             cues["garment_identity"] = "the same black dress silhouette and overall outfit identity remain unchanged"
+        cues.setdefault("garment_silhouette_identity", "garment silhouette identity remains unchanged from reference")
+        cues.setdefault("bodice_identity", "bodice construction and cut remain exactly the same")
+        cues.setdefault("neckline_identity", "neckline family remains exactly the same")
+        cues.setdefault("skirt_volume_identity", "skirt volume/fullness and long-dress silhouette remain the same")
     if any(token in blob for token in ("boot", "heels", "footwear", "chunky boots")):
         cues["footwear_identity"] = "footwear category stays fixed, with boots remaining boots"
     signature_parts: list[str] = []
     if any(token in blob for token in ("rose", "floral", "petal")):
         signature_parts.append("rose/floral garment details stay visible")
+        cues["rose_applique_identity"] = "rose applique count/placement/relative scale remain unchanged"
+    if any(token in blob for token in ("magenta", "lining", "inner lining", "colored lining", "pink trim")):
+        cues["lining_color_identity"] = "magenta lining color family and visibility logic remain unchanged"
     if any(token in blob for token in ("pink detail", "pink trim", "accent", "embroid", "trim", "ornament", "signature")):
         signature_parts.append("signature accents and trims remain intact")
     if signature_parts:
@@ -4709,6 +4723,14 @@ def _build_character_identity_visible_lock(
         cues.setdefault("face_identity", "same woman as character_1 reference across all scenes; no face redesign")
         cues.setdefault("hair_identity", "no hairstyle redesign across scenes; keep same hair color, cut/length, parting, and volume unless explicitly requested")
         cues.setdefault("garment_identity", "wardrobe remains identical across scenes unless storyboard explicitly requests costume change")
+        cues.setdefault("garment_silhouette_identity", "same exact dress silhouette and construction as reference; no redesign")
+        cues.setdefault("sleeve_identity", "same sleeve length and sleeve volume as reference; no sleeve removal")
+        cues.setdefault("bodice_identity", "same bodice cut and structure as reference")
+        cues.setdefault("neckline_identity", "same neckline family as reference")
+        cues.setdefault("skirt_volume_identity", "same skirt fullness/volume/silhouette as reference")
+        cues.setdefault("rose_applique_identity", "same rose applique count/placement/relative scale as reference")
+        cues.setdefault("lining_color_identity", "same magenta lining logic and visibility behavior as reference")
+        cues.setdefault("footwear_identity", "same footwear identity and category as reference")
         cues.setdefault("body_identity", "same body shape, proportions, silhouette, height/build read across all scenes; no fuller/thinner drift")
         cues.setdefault("makeup_identity", "makeup style remains stable across scenes; no spontaneous redesign")
         cues.setdefault("accessory_identity", "accessories stay stable across scenes when established; no random invention/disappearance unless explicitly requested")
@@ -4721,7 +4743,13 @@ def _build_character_identity_visible_lock(
     locks: list[str] = [
         str(cues.get("face_identity") or ""),
         str(cues.get("hair_identity") or ""),
+        str(cues.get("garment_silhouette_identity") or ""),
         str(cues.get("sleeve_identity") or ""),
+        str(cues.get("bodice_identity") or ""),
+        str(cues.get("neckline_identity") or ""),
+        str(cues.get("skirt_volume_identity") or ""),
+        str(cues.get("rose_applique_identity") or ""),
+        str(cues.get("lining_color_identity") or ""),
         str(cues.get("garment_identity") or ""),
         str(cues.get("signature_details") or ""),
         str(cues.get("footwear_identity") or ""),
@@ -4735,6 +4763,8 @@ def _build_character_identity_visible_lock(
         "same apparent age and same body silhouette/proportions across all scenes",
         "hairstyle, accessories, and visible styling remain stable unless explicitly changed by storyboard",
         "skin tone, hair color, and garment colors remain consistent across scenes",
+        "face/hair identity lock and garment lock are separate and both must hold",
+        "do not redesign sleeves, shoulders, bodice, neckline, waist, skirt construction, rose layout, lining behavior, or footwear identity",
     ]
     if is_first_scene:
         locks.append("first scene lock: hold face, hair, sleeves, dress silhouette, signature details, and boots exactly as reference")
@@ -5001,10 +5031,14 @@ def build_ltx_visible_video_prompt(scene: ScenarioDirectorScene, payload: dict[s
     if _is_lip_sync_music_scene(scene):
         camera_line = _lip_sync_safe_camera_line()
         motion_line = (
-            "Emotional singing performance with clear mouth readability, subtle head motion, subtle body sway, "
-            "micro-expressions, breath detail, and minimal locomotion; no chase/run/stunt action"
+            "Emotional singing performance with clear mouth readability, phrase-driven hand acting, lyric-marking finger/hand phrasing, "
+            "one-hand-to-chest and open-outward gesture vocabulary, coordinated head/shoulder/hand accents, controlled upper-body pulse, "
+            "small forward intention/weight shift, micro-expressions, breath detail, and minimal locomotion; no chase/run/stunt action"
         )
-        lipsync_line = "Face readability and mouth continuity stay clear for emotional singing, with transformation delayed until lip motion is established"
+        lipsync_line = (
+            "Face readability and mouth continuity stay clear for emotional singing; expressive hand/upper-body freedom is allowed but must never block lipsync readability "
+            "or loosen wardrobe continuity."
+        )
     identity_lock, _ = _build_character_identity_visible_lock(scene, payload=payload, role="character_1")
     ltx_canon_block = build_ltx_video_canon_block(lip_sync=_is_lip_sync_music_scene(scene))
     return _quality_filter_visible_prompt(
@@ -5076,8 +5110,9 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     location = str(scene.location or "the same world location").strip()
     if not str(scene.action_in_frame or "").strip():
         scene.action_in_frame = (
-            "Emotional singing performance with face and mouth clearly readable; subtle head motion, gentle body sway, "
-            "micro-expressions and breath detail; minimal locomotion, no running or chase action."
+            "Emotional singing performance with face and mouth clearly readable; phrase-driven expressive hand gestures, "
+            "one-hand-to-chest / open-outward lyric phrasing, coordinated head-shoulder-hand accents, controlled upper-body pulse, "
+            "small forward intention with minimal locomotion, and no running or chase action."
         )
     if not str(scene.camera or "").strip():
         scene.camera = _lip_sync_safe_camera_line()
@@ -5092,11 +5127,14 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
     scene.video_prompt = _join_visible_prompt_parts(
         [
             "Emotional singing performance in tight medium framing with persistent face/mouth readability.",
+            "Allow phrase-driven hand acting and expressive upper-body performance: lyric-marking fingers/hands, one hand to chest, one hand open outward, controlled torso pulse, and coordinated head/shoulder/hand emphasis.",
+            "Performance should feel alive, not frozen: permit small forward intention and subtle weight shift while preserving stable lipsync readability.",
             "Camera behavior is locked/smooth: static or very slow push-in with minimal drift; if orbit language appears, treat it as a gentle left/right side partial arc, not a flip or inversion.",
             "Keep horizon and vertical axis stable: camera remains upright and physically readable at all times.",
             "No upside-down framing, no full frame inversion, no vertical roll/barrel-roll, no top-over flip, no tumbling, no uncontrolled axial rotation.",
             "No full 360° orbit around performer, no aggressive circular chase camera, no fast rotational move around face/body.",
             "Subject may sway/turn for performance, but camera orientation stays controlled and upright.",
+            "Garment continuity remains strict during performance: emotional gestures must not redesign sleeves, bodice, neckline, skirt silhouette, rose layout, lining visibility logic, or footwear identity.",
             "Optional safe variant: performer may gently rotate while camera stays upright and background shifts behind trajectory, preserving character integrity.",
             "Environment remains background support; no running/chasing/spinning as primary action.",
             build_ltx_video_canon_block(lip_sync=True),
@@ -6797,10 +6835,18 @@ def _apply_music_video_mode_policy(
             required_lock_fields = [
                 "face_identity",
                 "hair_identity",
+                "garment_silhouette_identity",
+                "sleeve_identity",
+                "bodice_identity",
+                "neckline_identity",
+                "skirt_volume_identity",
+                "rose_applique_identity",
+                "lining_color_identity",
                 "garment_identity",
                 "body_identity",
                 "makeup_identity",
                 "accessory_identity",
+                "footwear_identity",
                 "age_consistency",
                 "color_identity",
             ]
@@ -7060,6 +7106,13 @@ def _enforce_single_character_music_video_policy(payload: dict[str, Any], storyb
                 scene.identity_lock_fields_used = [
                     "face_identity",
                     "hair_identity",
+                    "garment_silhouette_identity",
+                    "sleeve_identity",
+                    "bodice_identity",
+                    "neckline_identity",
+                    "skirt_volume_identity",
+                    "rose_applique_identity",
+                    "lining_color_identity",
                     "body_identity",
                     "silhouette_identity",
                     "garment_identity",
