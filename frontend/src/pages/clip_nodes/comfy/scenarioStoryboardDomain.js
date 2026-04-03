@@ -1071,6 +1071,10 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     source?.canvas,
     inheritedPackageFormat
   );
+  const nestedSceneContract = source?.sceneContract && typeof source.sceneContract === "object" && !Array.isArray(source.sceneContract)
+    ? source.sceneContract
+    : {};
+  const mergedSceneContractSource = { ...nestedSceneContract, ...source };
   const normalizedScene = {
     sceneId: normalizeText(source.sceneId ?? source.scene_id) || `S${index + 1}`,
     t0,
@@ -1183,6 +1187,25 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ),
     appearanceDriftRisk: normalizeText(source.appearanceDriftRisk ?? source.appearance_drift_risk) || appearanceDriftRiskFromClip,
     transitionType: source.transitionType ?? source.transition_type,
+    taskMode: mergedSceneContractSource.taskMode ?? mergedSceneContractSource.task_mode,
+    task_mode: mergedSceneContractSource.task_mode ?? mergedSceneContractSource.taskMode,
+    sourceOutfitProfile: mergedSceneContractSource.sourceOutfitProfile,
+    targetOutfitProfile: mergedSceneContractSource.targetOutfitProfile,
+    effectiveOutfitProfile: mergedSceneContractSource.effectiveOutfitProfile,
+    outfitProfile: mergedSceneContractSource.outfitProfile,
+    sourceOutfitReplaced: mergedSceneContractSource.sourceOutfitReplaced,
+    outfitIdentitySource: mergedSceneContractSource.outfitIdentitySource,
+    confidenceScores: mergedSceneContractSource.confidenceScores,
+    heroAppearanceContract: mergedSceneContractSource.heroAppearanceContract,
+    worldContinuityContract: mergedSceneContractSource.worldContinuityContract,
+    locationContinuityContract: mergedSceneContractSource.locationContinuityContract,
+    styleContinuityContract: mergedSceneContractSource.styleContinuityContract,
+    previousStableImageAnchorApplied: mergedSceneContractSource.previousStableImageAnchorApplied,
+    previousStableImageAnchorAvailable: mergedSceneContractSource.previousStableImageAnchorAvailable,
+    previousStableImageAnchorUrlResolved: mergedSceneContractSource.previousStableImageAnchorUrlResolved,
+    previousStableImageAnchorUsed: mergedSceneContractSource.previousStableImageAnchorUsed,
+    previousStableImageAnchorReason: mergedSceneContractSource.previousStableImageAnchorReason,
+    audioEmotionDirection: mergedSceneContractSource.audioEmotionDirection,
     shotType: source.shotType ?? source.shot_type,
     continuity: source.continuity,
     worldScaleContext: source.worldScaleContext ?? source.world_scale_context,

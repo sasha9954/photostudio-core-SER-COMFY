@@ -363,6 +363,27 @@ function buildScenarioSceneContractPayload(scene = {}) {
       ?? scene?.durationSec
       ?? Math.max(0, Number(scene?.t1 ?? 0) - Number(scene?.t0 ?? 0))
   );
+  const identityContractPassthrough = {
+    taskMode: scene?.taskMode,
+    task_mode: scene?.task_mode,
+    sourceOutfitProfile: scene?.sourceOutfitProfile,
+    targetOutfitProfile: scene?.targetOutfitProfile,
+    effectiveOutfitProfile: scene?.effectiveOutfitProfile,
+    outfitProfile: scene?.outfitProfile,
+    sourceOutfitReplaced: scene?.sourceOutfitReplaced,
+    outfitIdentitySource: scene?.outfitIdentitySource,
+    confidenceScores: scene?.confidenceScores,
+    heroAppearanceContract: scene?.heroAppearanceContract,
+    worldContinuityContract: scene?.worldContinuityContract,
+    locationContinuityContract: scene?.locationContinuityContract,
+    styleContinuityContract: scene?.styleContinuityContract,
+    previousStableImageAnchorApplied: scene?.previousStableImageAnchorApplied,
+    previousStableImageAnchorAvailable: scene?.previousStableImageAnchorAvailable,
+    previousStableImageAnchorUrlResolved: scene?.previousStableImageAnchorUrlResolved,
+    previousStableImageAnchorUsed: scene?.previousStableImageAnchorUsed,
+    previousStableImageAnchorReason: scene?.previousStableImageAnchorReason,
+    audioEmotionDirection: scene?.audioEmotionDirection,
+  };
   return {
     sceneId: scene?.sceneId || "",
     sceneType: scene?.sceneType,
@@ -439,6 +460,7 @@ function buildScenarioSceneContractPayload(scene = {}) {
     resolvedWorkflowKey,
     resolvedModelKey,
     requestedDurationSec: Number.isFinite(requestedDurationSec) ? Math.max(0, requestedDurationSec) : undefined,
+    ...identityContractPassthrough,
   };
 }
 
@@ -10022,6 +10044,18 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/image", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
+      const heroAppearanceContractPayload = scenarioContractPayload?.heroAppearanceContract;
+      const outfitProfilePayload = scenarioContractPayload?.effectiveOutfitProfile || scenarioContractPayload?.outfitProfile || scenarioContractPayload?.sourceOutfitProfile;
+      console.debug("[SCENARIO IMAGE CONTRACT DEBUG] before /api/clip/image", {
+        sceneId,
+        hasHeroAppearanceContract: hasScenarioContractValue(heroAppearanceContractPayload),
+        hasSourceOutfitProfile: hasScenarioContractValue(scenarioContractPayload?.sourceOutfitProfile),
+        hasEffectiveOutfitProfile: hasScenarioContractValue(scenarioContractPayload?.effectiveOutfitProfile),
+        hasConfidenceScores: hasScenarioContractValue(scenarioContractPayload?.confidenceScores),
+        heroAppearanceContractKeys: heroAppearanceContractPayload && typeof heroAppearanceContractPayload === "object" ? Object.keys(heroAppearanceContractPayload) : [],
+        outfitProfileKeys: outfitProfilePayload && typeof outfitProfilePayload === "object" ? Object.keys(outfitProfilePayload) : [],
+        hasLocationContinuityContract: hasScenarioContractValue(scenarioContractPayload?.locationContinuityContract),
+      });
       if (shouldTraceSelectedScene) {
         const finalTargetSceneForImage = {
           primaryRole: scenarioContractPayload?.primaryRole || refsForImageRequest?.primaryRole || "",

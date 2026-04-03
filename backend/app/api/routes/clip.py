@@ -1460,6 +1460,12 @@ def _extract_clip_image_scene_contract(payload: ClipImageIn, refs_obj: Any = Non
         "locationContinuityContract",
         "styleContinuityContract",
         "confidenceScores",
+        "previousStableImageAnchorApplied",
+        "previousStableImageAnchorAvailable",
+        "previousStableImageAnchorUrlResolved",
+        "previousStableImageAnchorUsed",
+        "previousStableImageAnchorReason",
+        "audioEmotionDirection",
     ]
     for key in passthrough_keys:
         if key not in contract and payload_map.get(key) is not None:
@@ -10253,6 +10259,27 @@ def clip_image(payload: ClipImageIn):
     session_style_anchor = str(getattr(refs_obj, "sessionStyleAnchor", "") or "").strip()
     session_baseline = getattr(refs_obj, "sessionBaseline", None)
     raw_scene_contract = _extract_clip_image_scene_contract(payload, refs_obj=refs_obj)
+    hero_contract_debug = raw_scene_contract.get("heroAppearanceContract")
+    outfit_profile_debug = (
+        raw_scene_contract.get("effectiveOutfitProfile")
+        if isinstance(raw_scene_contract.get("effectiveOutfitProfile"), dict)
+        else raw_scene_contract.get("outfitProfile")
+        if isinstance(raw_scene_contract.get("outfitProfile"), dict)
+        else raw_scene_contract.get("sourceOutfitProfile")
+        if isinstance(raw_scene_contract.get("sourceOutfitProfile"), dict)
+        else {}
+    )
+    logger.info(
+        "[SCENARIO IMAGE CONTRACT DEBUG] sceneId=%s hasHeroAppearanceContract=%s hasSourceOutfitProfile=%s hasEffectiveOutfitProfile=%s hasConfidenceScores=%s heroAppearanceContractKeys=%s outfitProfileKeys=%s hasLocationContinuityContract=%s",
+        scene_id,
+        bool(_normalize_hero_appearance_contract(hero_contract_debug)),
+        isinstance(raw_scene_contract.get("sourceOutfitProfile"), dict) and bool(raw_scene_contract.get("sourceOutfitProfile")),
+        isinstance(raw_scene_contract.get("effectiveOutfitProfile"), dict) and bool(raw_scene_contract.get("effectiveOutfitProfile")),
+        isinstance(raw_scene_contract.get("confidenceScores"), dict) and bool(raw_scene_contract.get("confidenceScores")),
+        sorted(list((_normalize_hero_appearance_contract(hero_contract_debug)).keys())),
+        sorted(list(outfit_profile_debug.keys())) if isinstance(outfit_profile_debug, dict) else [],
+        bool(str(raw_scene_contract.get("locationContinuityContract") or "").strip()),
+    )
     world_scale_context_source = "none"
     world_scale_context_reason = "unset"
     world_scale_context = _normalize_world_scale_context(getattr(refs_obj, "worldScaleContext", None))

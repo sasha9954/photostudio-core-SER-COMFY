@@ -5106,6 +5106,43 @@ def _extract_character_identity_cues(payload: dict[str, Any], *, role: str = "ch
         cues["garment_top_identity"] = "top_with_jeans"
         cues.setdefault("silhouette_identity", "outfit silhouette identity remains unchanged from the reference")
         cues.setdefault("material_identity", "material family identity remains stable")
+    if any(token in blob for token in ("v-neck", "v neck", "deep v")):
+        cues["neckline_identity"] = "v_neck"
+    elif any(token in blob for token in ("crew neck", "crewneck", "round neck", "round-neck")):
+        cues["neckline_identity"] = "crew_neck"
+    elif any(token in blob for token in ("square neck", "square-neck")):
+        cues["neckline_identity"] = "square_neck"
+    elif any(token in blob for token in ("sweetheart neckline", "sweetheart neck", "sweetheart")):
+        cues["neckline_identity"] = "sweetheart_neckline"
+    elif any(token in blob for token in ("halter neckline", "halter neck", "halter")):
+        cues["neckline_identity"] = "halter_neckline"
+    elif any(token in blob for token in ("off shoulder", "off-shoulder", "bare shoulder")):
+        cues["neckline_identity"] = "off_shoulder_neckline"
+    elif any(token in blob for token in ("high neck", "high-neck", "turtleneck", "turtle neck", "mock neck")):
+        cues["neckline_identity"] = "high_neck"
+    elif any(token in blob for token in ("collared", "collar shirt", "shirt collar", "polo collar")):
+        cues["neckline_identity"] = "collared_neckline"
+    if not cues.get("garment_top_identity"):
+        if strong_casual_separates:
+            cues["garment_top_identity"] = "top_with_jeans"
+        elif any(token in blob for token in ("crop top", "cropped top")):
+            cues["garment_top_identity"] = "crop_top"
+        elif any(token in blob for token in ("t-shirt", "t shirt", "tshirt", "tee")):
+            cues["garment_top_identity"] = "t_shirt_top"
+        elif any(token in blob for token in ("tank top", "tank", "cami", "camisole", "spaghetti strap")):
+            cues["garment_top_identity"] = "tank_or_cami_top"
+        elif any(token in blob for token in ("blouse", "peasant top")):
+            cues["garment_top_identity"] = "blouse_top"
+        elif any(token in blob for token in ("hoodie", "hooded sweatshirt")):
+            cues["garment_top_identity"] = "hoodie_top"
+        elif any(token in blob for token in ("jacket", "coat", "parka", "trench", "outerwear")):
+            cues["garment_top_identity"] = "jacket_or_coat_top"
+        elif any(token in blob for token in ("tailored", "blazer", "suit jacket", "structured top", "lapel")):
+            cues["garment_top_identity"] = "tailored_top"
+        elif strong_dress_evidence or any(token in blob for token in ("dress", "gown")):
+            cues["garment_top_identity"] = "dress_top"
+        elif any(token in blob for token in ("swimwear", "swimsuit", "bikini")):
+            cues["garment_top_identity"] = "swimwear_top"
     signature_parts: list[str] = []
     if any(token in blob for token in ("rose", "floral", "petal")):
         signature_parts.append("rose/floral garment details stay visible")
