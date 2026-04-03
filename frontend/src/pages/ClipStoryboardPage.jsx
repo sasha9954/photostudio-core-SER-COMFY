@@ -10553,7 +10553,8 @@ Aspect ratio: ${imageFormat}`,
           audioStoryMode: String(scenarioSelected?.audioStoryMode || ""),
         },
       });
-      if (!out?.ok || !out?.audioSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
+      const resolvedSliceUrl = String(out?.audioSliceUrl || out?.sliceUrl || "").trim();
+      if (!out?.ok || !resolvedSliceUrl) throw new Error(out?.hint || out?.code || "audio_slice_failed");
       const outStartSec = Number(out?.startSec ?? out?.t0 ?? startSec);
       const outEndSec = Number(out?.endSec ?? out?.t1 ?? endSec);
       const durationSec = normalizeDurationSec(out?.durationSec ?? out?.audioSliceBackendDurationSec ?? out?.duration);
@@ -10561,7 +10562,7 @@ Aspect ratio: ${imageFormat}`,
       console.debug("[SCENARIO AUDIO SLICE RESPONSE]", {
         ok: Boolean(out?.ok),
         sceneId,
-        sliceUrl: String(out?.audioSliceUrl || out?.sliceUrl || ""),
+        sliceUrl: resolvedSliceUrl,
         usedAudioUrl: String(out?.audioUrl || scenarioAudioUrl || ""),
         actualDurationSec: durationSec,
         error: "",
@@ -10569,7 +10570,7 @@ Aspect ratio: ${imageFormat}`,
       updateScenarioScene(
         idx,
         buildAudioSliceReadyPatch({
-          url: String(out.audioSliceUrl || ""),
+          url: resolvedSliceUrl,
           startSec: outStartSec,
           endSec: outEndSec,
           durationSec: durationSec ?? expectedDuration,
@@ -10581,7 +10582,8 @@ Aspect ratio: ${imageFormat}`,
         })
       );
       return {
-        audioSliceUrl: String(out.audioSliceUrl || ""),
+        audioSliceUrl: resolvedSliceUrl,
+        sliceUrl: resolvedSliceUrl,
         audioSliceDurationSec: durationSec ?? expectedDuration,
         audioSliceStartSec: outStartSec,
         audioSliceEndSec: outEndSec,
@@ -11128,6 +11130,14 @@ Aspect ratio: ${imageFormat}`,
       if (CLIP_TRACE_SCENARIO_TRANSFER) {
         console.debug("[SCENARIO TRANSFER] before /api/clip/video/start", buildScenarioTransferLogData(targetScene, scenarioContractPayload));
       }
+      const lipSyncRoute = effectiveWorkflowKey === "lip_sync_music";
+      const safeAudioSliceStartSec = Number(targetScene?.audioSliceStartSec ?? targetScene?.audio_slice_start_sec ?? targetScene?.t0 ?? targetScene?.start ?? 0);
+      const safeAudioSliceEndSec = Number(targetScene?.audioSliceEndSec ?? targetScene?.audio_slice_end_sec ?? targetScene?.t1 ?? targetScene?.end ?? safeAudioSliceStartSec);
+      const safeAudioSliceExpectedDurationSec = Number(
+        targetScene?.audioSliceExpectedDurationSec
+        ?? targetScene?.audio_slice_expected_duration_sec
+        ?? Math.max(0, safeAudioSliceEndSec - safeAudioSliceStartSec)
+      );
       const videoStartPayload = {
         sceneId,
         imageUrl: normalizedScenarioVideoSourceUrls.imageUrl,
@@ -11141,11 +11151,16 @@ Aspect ratio: ${imageFormat}`,
         transitionActionPrompt,
         transitionType,
         requestedDurationSec,
-        lipSync: effectiveLipSync,
+        lipSync: lipSyncRoute ? true : effectiveLipSync,
         renderMode: effectiveRenderMode,
         ltxMode: String(targetScene?.ltxMode || ""),
         imageStrategy,
         resolvedWorkflowKey: effectiveWorkflowKey,
+        video_generation_route: effectiveWorkflowKey,
+        send_audio_to_generator: lipSyncRoute ? shouldAttachAudioSlice : false,
+        audio_slice_start_sec: safeAudioSliceStartSec,
+        audio_slice_end_sec: safeAudioSliceEndSec,
+        audio_slice_expected_duration_sec: safeAudioSliceExpectedDurationSec,
         resolvedModelKey,
         workflowFileOverride: String(targetScene?.workflowFileOverride || ""),
         modelFileOverride: String(targetScene?.modelFileOverride || ""),
@@ -11202,11 +11217,30 @@ Aspect ratio: ${imageFormat}`,
         endpoint,
         timeoutMs: VIDEO_START_TIMEOUT_MS,
       });
+      if (lipSyncRoute) {
+        console.info("[SCENARIO LIP SYNC START]", {
+          sceneId,
+          route: effectiveWorkflowKey,
+          hasImageUrl: Boolean(videoStartPayload?.imageUrl),
+          hasAudioSliceUrl: Boolean(videoStartPayload?.audioSliceUrl),
+          audioSliceUrl: String(videoStartPayload?.audioSliceUrl || ""),
+          willCallVideoStart: true,
+        });
+      }
       const out = await fetchJson(endpoint, {
         method: "POST",
         timeoutMs: VIDEO_START_TIMEOUT_MS,
         body: videoStartPayload,
       });
+      if (lipSyncRoute) {
+        console.info("[SCENARIO LIP SYNC START RESPONSE]", {
+          sceneId,
+          ok: Boolean(out?.ok),
+          jobId: String(out?.jobId || ""),
+          code: String(out?.code || ""),
+          hint: String(out?.hint || ""),
+        });
+      }
       console.info("[SCENARIO VIDEO START INFO]", {
         stage: "after_start_post",
         sceneId,

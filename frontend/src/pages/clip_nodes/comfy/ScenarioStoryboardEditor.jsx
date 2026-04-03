@@ -675,7 +675,7 @@ export default function ScenarioStoryboardEditor({
     });
     try {
       const result = await onExtractSceneAudio?.(nodeId, sceneId);
-      const audioSliceUrl = String(result?.audioSliceUrl || result?.extractedAudioUrl || "").trim();
+      const audioSliceUrl = String(result?.audioSliceUrl || result?.sliceUrl || result?.extractedAudioUrl || "").trim();
       const masterAudioCandidateUrl = String(masterAudioUrl || "").trim();
       const globalAudioCandidateUrl = String(globalAudioUrl || "").trim();
       const safeAudioCandidateUrl = String(safeAudioData?.audioUrl || "").trim();
