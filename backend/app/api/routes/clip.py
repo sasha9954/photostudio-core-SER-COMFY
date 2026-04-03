@@ -13274,11 +13274,6 @@ def clip_video(payload: ClipVideoIn):
     elif continuation_requested:
         final_workflow_key = "continuation"
 
-    resolved_model_key, resolved_model_spec, model_source = _resolve_ltx_model_selection(
-        payload_model_key=explicit_model,
-        workflow_key=final_workflow_key,
-    )
-
     if final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS:
         mode = "continuous"
     elif final_workflow_key in LTX_CONTINUATION_WORKFLOW_KEYS:
@@ -13294,6 +13289,16 @@ def clip_video(payload: ClipVideoIn):
     if final_workflow_key == "lip_sync":
         provider = requested_provider or "kie"
         provider_reason = "dedicated_lipsync_provider_strategy"
+    bypass_ltx_model_compatibility = final_workflow_key == "lip_sync" and mode == "lipsync" and provider != "comfy_remote"
+    if bypass_ltx_model_compatibility:
+        resolved_model_key = explicit_model
+        resolved_model_spec = None
+        model_source = "lipsync_provider"
+    else:
+        resolved_model_key, resolved_model_spec, model_source = _resolve_ltx_model_selection(
+            payload_model_key=explicit_model,
+            workflow_key=final_workflow_key,
+        )
     print(
         "[CLIP VIDEO PROVIDER] "
         f"sceneId={scene_id} ltxMode={str(payload.ltxMode or '').strip()} "
@@ -13308,8 +13313,18 @@ def clip_video(payload: ClipVideoIn):
         f"provider={provider} mode={mode} "
         f"resolvedModelKey={resolved_model_key}"
     )
+    print(
+        "[CLIP VIDEO COMPAT CHECK] "
+        f"sceneId={scene_id} workflowKey={final_workflow_key} providerRoute={provider} modelKey={resolved_model_key or 'n/a'} "
+        f"mode={mode}"
+    )
+    if bypass_ltx_model_compatibility:
+        print(
+            "[CLIP VIDEO COMPAT CHECK] "
+            f"sceneId={scene_id} workflowKey={final_workflow_key} bypass_ltx_model_compatibility=true reason=lip_sync_provider_route"
+        )
 
-    if not resolved_model_spec:
+    if not bypass_ltx_model_compatibility and not resolved_model_spec:
         if final_workflow_key == "continuation":
             resolved_model_key = resolved_model_key or LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY.get("i2v", "")
             resolved_model_spec = LTX_MODEL_KEY_TO_MODEL_SPEC.get(resolved_model_key)
@@ -13318,7 +13333,11 @@ def clip_video(payload: ClipVideoIn):
                 status_code=422,
                 content={"ok": False, "code": "LTX_MODEL_NOT_FOUND", "hint": f"unknown_model_key:{resolved_model_key or 'empty'}"},
             )
-    if final_workflow_key != "continuation" and final_workflow_key not in set(resolved_model_spec.get("compatible_workflow_keys") or set()):
+    if (
+        not bypass_ltx_model_compatibility
+        and final_workflow_key != "continuation"
+        and final_workflow_key not in set(resolved_model_spec.get("compatible_workflow_keys") or set())
+    ):
         return JSONResponse(
             status_code=422,
             content={
