@@ -4754,6 +4754,56 @@ body.ps_clip_fullscreen .mainCol {
   object-fit: contain;
 }
 
+.clipSB_scenarioEditorImagePreview--clickable {
+  cursor: zoom-in;
+}
+
+.clipSB_scenarioLightboxOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 8200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(4, 8, 14, 0.78);
+  backdrop-filter: blur(4px);
+  animation: clipSBScenarioLightboxFadeIn 220ms ease;
+}
+
+.clipSB_scenarioLightboxContent {
+  width: min(94vw, 1320px);
+  max-height: 92vh;
+  display: grid;
+  gap: 10px;
+  animation: clipSBScenarioLightboxImageIn 260ms cubic-bezier(.22,.61,.36,1);
+}
+
+.clipSB_scenarioLightboxControls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.clipSB_scenarioLightboxImage {
+  width: 100%;
+  max-height: calc(92vh - 56px);
+  border-radius: 14px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.42);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.56), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+@keyframes clipSBScenarioLightboxFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes clipSBScenarioLightboxImageIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 .clipSB_scenarioEditorImagePreviewWrap .clipSB_scenarioEditorImagePreview,
 .clipSB_scenarioEditorImagePreviewWrap .clipSB_scenarioEditorPreviewPlaceholder {
   min-height: 100%;

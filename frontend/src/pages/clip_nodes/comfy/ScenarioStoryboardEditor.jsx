@@ -284,6 +284,9 @@ export default function ScenarioStoryboardEditor({
   const [activeTab, setActiveTab] = useState("phrases");
   const [infoModalOpen, setInfoModalOpen] = useState(false);
   const [audioSceneOpen, setAudioSceneOpen] = useState(false);
+  const [scenarioLightboxOpen, setScenarioLightboxOpen] = useState(false);
+  const [scenarioLightboxImageUrl, setScenarioLightboxImageUrl] = useState("");
+  const [scenarioLightboxSceneId, setScenarioLightboxSceneId] = useState("");
   const masterAudioRef = useRef(null);
   const bgMusicUploadRef = useRef(null);
   const phrasePlaybackRef = useRef({ sceneId: "", phraseIndex: -1, t0: 0, t1: 0 });
@@ -420,6 +423,51 @@ export default function ScenarioStoryboardEditor({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, infoModalOpen]);
+
+  const openScenarioImageLightbox = (imageUrl = "", sceneId = "") => {
+    const resolvedImageUrl = String(imageUrl || "").trim();
+    if (!resolvedImageUrl) return;
+    setScenarioLightboxImageUrl(resolvedImageUrl);
+    setScenarioLightboxSceneId(String(sceneId || "").trim());
+    setScenarioLightboxOpen(true);
+  };
+
+  const closeScenarioImageLightbox = () => {
+    setScenarioLightboxOpen(false);
+    setScenarioLightboxImageUrl("");
+    setScenarioLightboxSceneId("");
+  };
+
+  useEffect(() => {
+    if (!open || !scenarioLightboxOpen) return undefined;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      setScenarioLightboxOpen(false);
+      setScenarioLightboxImageUrl("");
+      setScenarioLightboxSceneId("");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+    };
+  }, [open, scenarioLightboxOpen]);
+
+  useEffect(() => {
+    if (open) return;
+    setScenarioLightboxOpen(false);
+    setScenarioLightboxImageUrl("");
+    setScenarioLightboxSceneId("");
+  }, [open]);
+
+  const scenarioLightboxDownloadName = useMemo(() => {
+    const safeSceneId = String(scenarioLightboxSceneId || "image").replace(/[^\w-]+/g, "-");
+    const extensionMatch = String(scenarioLightboxImageUrl || "").match(/\.(png|jpe?g|webp|gif|bmp|avif)(?:$|\?)/i);
+    const extension = extensionMatch?.[1] ? extensionMatch[1].toLowerCase() : "png";
+    return `scenario-scene-${safeSceneId}.${extension}`;
+  }, [scenarioLightboxImageUrl, scenarioLightboxSceneId]);
 
   const phrases = useMemo(() => {
     if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) return safeAudioData.phrases;
@@ -1318,7 +1366,7 @@ export default function ScenarioStoryboardEditor({
                             <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${imageStatus}`}>{imageStatus}</span>
                           </div>
                           <div className={`clipSB_scenarioEditorImagePreviewWrap${sourceImageUrl ? "" : " clipSB_scenarioEditorImagePreviewWrap--empty"}`}>
-                            {sourceImageUrl ? <img className="clipSB_scenarioEditorImagePreview" src={sourceImageUrl} alt={`scene-${selectedSceneId}-image`} /> : (
+                            {sourceImageUrl ? <img className="clipSB_scenarioEditorImagePreview clipSB_scenarioEditorImagePreview--clickable" src={sourceImageUrl} alt={`scene-${selectedSceneId}-image`} onClick={() => openScenarioImageLightbox(sourceImageUrl, selectedSceneId)} /> : (
                               <div className="clipSB_scenarioEditorPreviewPlaceholder" role="status" aria-live="polite">
                                 <div className="clipSB_scenarioEditorPreviewPlaceholderIcon" aria-hidden="true">🖼️</div>
                                 <div>Изображение сцены пока не создано</div>
@@ -1356,7 +1404,7 @@ export default function ScenarioStoryboardEditor({
                           </details>
                           <div className="clipSB_scenarioEditorFramePreviewWrap">
                             {startFrameSourceUrl ? (
-                              <img className="clipSB_scenarioEditorImagePreview" src={startFrameSourceUrl} alt={`scene-${selectedSceneId}-start-frame`} />
+                              <img className="clipSB_scenarioEditorImagePreview clipSB_scenarioEditorImagePreview--clickable" src={startFrameSourceUrl} alt={`scene-${selectedSceneId}-start-frame`} onClick={() => openScenarioImageLightbox(startFrameSourceUrl, selectedSceneId)} />
                             ) : <div className="clipSB_hint">preview первого кадра отсутствует</div>}
                           </div>
                           {startFrameErrorText ? (
@@ -1393,7 +1441,7 @@ export default function ScenarioStoryboardEditor({
                           </details>
                           <div className="clipSB_scenarioEditorFramePreviewWrap">
                             {endFrameSourceUrl ? (
-                              <img className="clipSB_scenarioEditorImagePreview" src={endFrameSourceUrl} alt={`scene-${selectedSceneId}-end-frame`} />
+                              <img className="clipSB_scenarioEditorImagePreview clipSB_scenarioEditorImagePreview--clickable" src={endFrameSourceUrl} alt={`scene-${selectedSceneId}-end-frame`} onClick={() => openScenarioImageLightbox(endFrameSourceUrl, selectedSceneId)} />
                             ) : <div className="clipSB_hint">{isFirstLastVideoMode ? "Последний кадр отсутствует" : "Последний кадр не требуется"}</div>}
                           </div>
                           {endFrameErrorText ? (
@@ -1626,6 +1674,25 @@ export default function ScenarioStoryboardEditor({
             )}
           </div>
         </div>
+        {scenarioLightboxOpen && scenarioLightboxImageUrl ? (
+          <div className="clipSB_scenarioLightboxOverlay" onClick={closeScenarioImageLightbox}>
+            <div className="clipSB_scenarioLightboxContent" onClick={(event) => event.stopPropagation()}>
+              <div className="clipSB_scenarioLightboxControls">
+                <a
+                  className="clipSB_btn clipSB_btnSecondary"
+                  href={scenarioLightboxImageUrl}
+                  download={scenarioLightboxDownloadName}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Скачать
+                </a>
+                <button className="clipSB_iconBtn" type="button" onClick={closeScenarioImageLightbox} aria-label="Закрыть просмотр">×</button>
+              </div>
+              <img className="clipSB_scenarioLightboxImage" src={scenarioLightboxImageUrl} alt={`scene-${scenarioLightboxSceneId || "image"}-preview`} />
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
