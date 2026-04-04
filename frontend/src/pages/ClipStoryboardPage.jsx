@@ -7567,6 +7567,7 @@ const comfyShowVideoSection = Boolean(
         : sceneRef;
       if (!Number.isInteger(resolvedIdx) || resolvedIdx < 0 || !scenes[resolvedIdx]) return n;
       const sceneAtIdx = scenes[resolvedIdx] || {};
+      const previousVideoStatus = String(sceneAtIdx?.videoStatus || "").trim().toLowerCase();
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO SCENE PATCH TARGET RESOLVED]", {
           targetNodeId,
@@ -7584,6 +7585,24 @@ const comfyShowVideoSection = Boolean(
         });
       }
       const normalizedPatch = normalizeLipSyncSceneStatePatch(sceneAtIdx, patch);
+      const nextVideoStatus = String(normalizedPatch?.videoStatus || "").trim().toLowerCase();
+      const isTerminalVideoPatch = ["error", "stopped", "not_found"].includes(nextVideoStatus);
+      if (isTerminalVideoPatch) {
+        const patchKeys = Object.keys(patch || {});
+        const protectedSourceFields = ["imageUrl", "startImageUrl", "endImageUrl", "audioSliceUrl"];
+        const attemptedProtectedWrite = protectedSourceFields.filter((field) => Object.prototype.hasOwnProperty.call(patch || {}, field));
+        const protectedSourceFieldsPreserved = attemptedProtectedWrite.every((field) => !Object.prototype.hasOwnProperty.call(normalizedPatch, field));
+        const mergedPreview = { ...sceneAtIdx, ...normalizedPatch };
+        console.info("[SCENARIO ERROR PATCH GUARD]", {
+          sceneId: String(sceneAtIdx?.sceneId || ""),
+          previousVideoStatus,
+          nextVideoStatus,
+          patchKeys,
+          protectedSourceFieldsPreserved,
+          imageStillPresent: Boolean(String(mergedPreview?.imageUrl || mergedPreview?.startImageUrl || mergedPreview?.endImageUrl || "").trim()),
+          audioSliceStillPresent: Boolean(String(mergedPreview?.audioSliceUrl || "").trim()),
+        });
+      }
       const nextScenes = scenes.map((s, i) => (i === resolvedIdx ? { ...s, ...normalizedPatch } : s));
       return { ...n, data: { ...n.data, scenes: nextScenes } };
     }));
@@ -7688,6 +7707,14 @@ const comfyShowVideoSection = Boolean(
       const error = String(payload?.error || "").trim();
       const message = String(payload?.message || "").trim();
       return error || hint || message || code || "video_job_failed";
+    };
+    const getScenarioSceneState = (sceneIdRaw) => {
+      const lookupSceneId = String(sceneIdRaw || "").trim();
+      if (!lookupSceneId) return null;
+      const nodeId = String(scenarioFlowSourceNode?.id || "").trim();
+      const sourceNode = (nodesRef.current || []).find((nodeItem) => String(nodeItem?.id || "") === nodeId) || null;
+      const activeScenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : scenarioScenes;
+      return (Array.isArray(activeScenes) ? activeScenes : []).find((scene) => String(scene?.sceneId || "").trim() === lookupSceneId) || null;
     };
     const applyScenarioVideoPatch = (patch = {}, context = {}) => {
       const normalizedPatch = patch && typeof patch === "object" ? patch : {};
@@ -8042,6 +8069,8 @@ const comfyShowVideoSection = Boolean(
         }
 
         if (status === "error" || status === "stopped" || status === "not_found") {
+          const sceneBeforeError = getScenarioSceneState(sceneId);
+          const generatingFlagBefore = isVideoJobInProgress(sceneBeforeError?.videoStatus);
           console.error("[SCENARIO VIDEO ERROR PROPAGATION]", {
             sceneId,
             jobId: String(settledMeta?.jobId || ""),
@@ -8062,7 +8091,26 @@ const comfyShowVideoSection = Boolean(
             hint: String(out?.hint || ""),
             message: extractScenarioVideoError(out),
           });
+          const sceneAfterError = getScenarioSceneState(sceneId);
+          const generatingFlagAfter = isVideoJobInProgress(sceneAfterError?.videoStatus);
           console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status, videoPanelActivatedAfterApply: false });
+          console.info("[SCENARIO VIDEO ERROR TERMINAL]", {
+            sceneId,
+            jobId: String(settledMeta?.jobId || ""),
+            previousVideoStatus: String(sceneBeforeError?.videoStatus || ""),
+            nextVideoStatus: "error",
+            videoError: extractScenarioVideoError(out),
+            pollingStopped: true,
+            activeJobCleared: true,
+            buttonBusyReset: !generatingFlagAfter,
+          });
+          console.info("[SCENARIO VIDEO EXIT GENERATING]", {
+            sceneId,
+            generatingFlagBefore,
+            generatingFlagAfter,
+            buttonDisabledBefore: generatingFlagBefore,
+            buttonDisabledAfter: generatingFlagAfter,
+          });
           clearActiveVideoJob(sceneId, { status, jobId: settledMeta.jobId });
           return;
         }
@@ -11832,6 +11880,7 @@ Aspect ratio: ${imageFormat}`,
       setScenarioVideoError(String(e?.message || e));
       updateScenarioScene(targetSceneIndex, { videoStatus: "error", videoError: String(e?.message || e), videoPanelActivated: false });
       console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: false });
+      clearActiveVideoJob(sceneId, { status: "error" });
     }
   }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene]);
 
