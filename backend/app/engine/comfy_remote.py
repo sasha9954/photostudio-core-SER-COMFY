@@ -229,6 +229,52 @@ def _parse_json_response(resp: Response, *, stage: str) -> tuple[dict | None, st
     return payload, None
 
 
+def _preview_value(value, *, limit: int = 280):
+    try:
+        raw = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list, tuple)) else str(value)
+    except Exception:
+        raw = repr(value)
+    if len(raw) <= limit:
+        return raw
+    return f"{raw[:limit]}…"
+
+
+def _extract_comfy_failed_trace(history_entry: dict) -> dict:
+    if not isinstance(history_entry, dict):
+        return {}
+    status_payload = history_entry.get("status") if isinstance(history_entry.get("status"), dict) else {}
+    messages = status_payload.get("messages") if isinstance(status_payload.get("messages"), list) else []
+    execution_error_payload = {}
+    for item in messages:
+        if isinstance(item, list) and len(item) >= 2 and str(item[0]).strip().lower() == "execution_error" and isinstance(item[1], dict):
+            execution_error_payload = item[1]
+            break
+    status_str = str(status_payload.get("status_str") or status_payload.get("status") or "").strip().lower()
+    completed = bool(status_payload.get("completed"))
+    has_execution_error = bool(execution_error_payload)
+    errors = history_entry.get("errors") if isinstance(history_entry.get("errors"), list) else []
+    failed = status_str in {"error", "failed"} or has_execution_error or bool(errors) or (status_str and not completed and status_str != "success")
+    if not failed:
+        return {}
+    return {
+        "comfy_status": status_str or "unknown",
+        "failed_node_id": str(execution_error_payload.get("node_id") or execution_error_payload.get("node") or ""),
+        "failed_node_type": str(execution_error_payload.get("node_type") or execution_error_payload.get("class_type") or ""),
+        "exception_type": str(execution_error_payload.get("exception_type") or execution_error_payload.get("type") or ""),
+        "error_message": str(
+            execution_error_payload.get("exception_message")
+            or execution_error_payload.get("error")
+            or execution_error_payload.get("message")
+            or history_entry.get("error")
+            or ""
+        ),
+        "traceback_preview": _preview_value(execution_error_payload.get("traceback") or execution_error_payload.get("tb") or ""),
+        "execution_error_payload": execution_error_payload,
+        "status_payload_preview": _preview_value(status_payload),
+        "outputs_payload_preview": _preview_value(history_entry.get("outputs")),
+    }
+
+
 def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
     safe_name = str(filename or "source.jpg").strip() or "source.jpg"
@@ -428,7 +474,14 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     return prompt_id, None
 
 
-def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: int) -> tuple[dict | None, str | None]:
+def wait_for_comfy_result(
+    prompt_id: str,
+    timeout_sec: int,
+    poll_interval_sec: int,
+    *,
+    workflow_key: str = "",
+    workflow_file: str = "",
+) -> tuple[dict | None, str | None]:
     safe_prompt_id = str(prompt_id or "").strip()
     if not safe_prompt_id:
         return None, "prompt_id_empty"
@@ -501,6 +554,18 @@ def wait_for_comfy_result(prompt_id: str, timeout_sec: int, poll_interval_sec: i
                     safe_prompt_id,
                     list(entry.keys())[:50],
                 )
+                failed_trace = _extract_comfy_failed_trace(entry)
+                if failed_trace:
+                    logger.error(
+                        "[COMFY FAILED TRACE] %s",
+                        {
+                            "prompt_id": safe_prompt_id,
+                            "workflow_key": str(workflow_key or "").strip(),
+                            "workflow_file": str(workflow_file or "").strip(),
+                            **failed_trace,
+                        },
+                    )
+                    return payload, f"comfy_execution_failed:{failed_trace.get('error_message') or failed_trace.get('exception_type') or failed_trace.get('comfy_status')}"
                 outputs = entry.get("outputs")
                 if isinstance(outputs, dict):
                     logger.info(
@@ -1231,6 +1296,31 @@ def _collect_audio_input_targets(
                 )
                 break
     return targets
+
+
+def _snapshot_node_inputs(workflow: dict, node_ids: list[str], *, allowed_keys: set[str] | None = None) -> list[dict]:
+    snapshots: list[dict] = []
+    for node_id in node_ids:
+        safe_node_id = str(node_id or "").strip()
+        if not safe_node_id:
+            continue
+        node = workflow.get(safe_node_id) if isinstance(workflow, dict) else None
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        filtered_inputs = {}
+        for key, value in inputs.items():
+            if allowed_keys and str(key) not in allowed_keys:
+                continue
+            filtered_inputs[str(key)] = _preview_value(value)
+        snapshots.append(
+            {
+                "node_id": safe_node_id,
+                "class_type": str(node.get("class_type") or "").strip(),
+                "inputs": filtered_inputs,
+            }
+        )
+    return snapshots
 
 
 def _build_workflow_adjacency(workflow: dict) -> dict[str, list[dict]]:
@@ -2035,6 +2125,37 @@ def run_comfy_image_to_video(
                 if audio_patch_err:
                     return None, f"capability_error:LTX_AUDIO_WORKFLOW_PATCH_FAILED:{audio_patch_err}"
                 lip_sync_proof_reason = "audio_patch_applied"
+                audio_patch_types = []
+                for target in audio_targets:
+                    node_id = str((target or {}).get("node_id") or "").strip()
+                    input_key = str((target or {}).get("input_key") or "").strip()
+                    if not node_id or not input_key:
+                        continue
+                    node = patched_workflow.get(node_id)
+                    if not isinstance(node, dict):
+                        continue
+                    inputs = node.get("inputs")
+                    if not isinstance(inputs, dict) or input_key not in inputs:
+                        continue
+                    patched_value = inputs.get(input_key)
+                    audio_patch_types.append(
+                        {
+                            "node_id": node_id,
+                            "class_type": str(node.get("class_type") or "").strip(),
+                            "input_key": input_key,
+                            "patched_value_type": type(patched_value).__name__,
+                            "patched_value_preview": _preview_value(patched_value),
+                        }
+                    )
+                logger.info(
+                    "[COMFY AUDIO PATCH TYPES] %s",
+                    {
+                        "workflowKey": normalized_workflow_key,
+                        "workflowFile": workflow_source,
+                        "audioTransportMode": audio_transport_mode,
+                        "audioPatchTypes": audio_patch_types,
+                    },
+                )
             else:
                 return None, f"capability_error:LTX_AUDIO_TRANSPORT_UNAVAILABLE:{selected_by}"
             final_reason = audio_transport_reason
@@ -2215,18 +2336,51 @@ def run_comfy_image_to_video(
             return None, "capability_error:LTX_CONTINUATION_SOURCE_INCOMPATIBLE:continuation source resolved to video asset but current continuation path requires image/frame source"
         return None, "capability_error:LTX_CONTINUATION_NOT_IMPLEMENTED:continuation mode requested by scene but current continuation execution strategy is not implemented yet"
 
+    discovered_audio_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredAudioNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
+    discovered_trim_audio_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredTrimAudioNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
+    discovered_audio_encode_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredAudioEncodeNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
+    discovered_create_video_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredCreateVideoNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
+    discovered_save_video_node_ids = [str(item) for item in (workflow_discovery_debug.get("discoveredSaveVideoNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [] if str(item).strip()]
     logger.info(
-        "[COMFY REMOTE] patched workflow values %s",
+        "[COMFY PATCHED VALUE SNAPSHOT] %s",
         {
-            "uploaded_name": uploaded_name,
-            "effective_prompt": effective_prompt,
-            "image": patched_workflow.get(str((workflow_discovery_debug.get("patchedImageNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "269"), {}).get("inputs", {}).get("image"),
-            "prompt": patched_workflow.get(str((workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:266"), {}).get("inputs", {}).get("value"),
-            "width": patched_workflow.get(str((workflow_discovery_debug.get("patchedWidthNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:257"), {}).get("inputs", {}).get("value"),
-            "height": patched_workflow.get(str((workflow_discovery_debug.get("patchedHeightNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:258"), {}).get("inputs", {}).get("value"),
-            "fps": fps,
-            "length": patched_workflow.get(str((workflow_discovery_debug.get("patchedLengthNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:225"), {}).get("inputs", {}).get("value"),
-            "audioFrames": patched_workflow.get("267:214", {}).get("inputs", {}).get("frames_number"),
+            "workflow_key": normalized_workflow_key,
+            "workflow_file": workflow_source,
+            "discoveredPromptTextNodeId": str((workflow_discovery_debug.get("discoveredPromptTextNodeId") if isinstance(workflow_discovery_debug, dict) else "") or ""),
+            "discoveredImageNodeIds": (workflow_discovery_debug.get("discoveredImageNodeIds") if isinstance(workflow_discovery_debug, dict) else []) or [],
+            "discoveredAudioNodeIds": discovered_audio_node_ids,
+            "discoveredTrimAudioNodeIds": discovered_trim_audio_node_ids,
+            "discoveredAudioEncodeNodeIds": discovered_audio_encode_node_ids,
+            "discoveredCreateVideoNodeIds": discovered_create_video_node_ids,
+            "discoveredSaveVideoNodeIds": discovered_save_video_node_ids,
+            "saveVideoFilenamePrefix": str((workflow_discovery_debug.get("saveVideoFilenamePrefix") if isinstance(workflow_discovery_debug, dict) else "") or ""),
+            "patched_prompt_value_preview": _preview_value(
+                patched_workflow.get(str((workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "267:266"), {}).get("inputs", {}).get("value")
+            ),
+            "patched_image_value": _preview_value(
+                patched_workflow.get(str((workflow_discovery_debug.get("patchedImageNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "269"), {}).get("inputs", {}).get("image")
+            ),
+            "patched_audio_input_value": _preview_value(effective_audio_value),
+            "patched_trim_audio_inputs": _snapshot_node_inputs(
+                patched_workflow,
+                discovered_trim_audio_node_ids,
+                allowed_keys={"audio", "duration", "duration_sec", "frames", "frames_number", "fps", "sample_rate"},
+            ),
+            "patched_audio_encode_inputs": _snapshot_node_inputs(
+                patched_workflow,
+                discovered_audio_encode_node_ids,
+                allowed_keys={"audio", "samples", "sample_rate", "vae", "audio_vae"},
+            ),
+            "patched_create_video_inputs": _snapshot_node_inputs(
+                patched_workflow,
+                discovered_create_video_node_ids,
+                allowed_keys={"images", "image", "audio", "latents", "vae", "fps", "frames", "num_frames"},
+            ),
+            "patched_savevideo_prefix": _snapshot_node_inputs(
+                patched_workflow,
+                discovered_save_video_node_ids,
+                allowed_keys={"filename_prefix"},
+            ),
         },
     )
     logger.info(
@@ -2276,6 +2430,8 @@ def run_comfy_image_to_video(
         prompt_id,
         timeout_sec=poll_timeout_sec,
         poll_interval_sec=max(2, int(settings.COMFY_POLL_INTERVAL_SEC or 2)),
+        workflow_key=normalized_workflow_key,
+        workflow_file=workflow_source,
     )
     if wait_err or not history:
         logger.warning(
