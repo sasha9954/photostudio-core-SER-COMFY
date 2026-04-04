@@ -4,6 +4,7 @@ import copy
 import logging
 import json
 import math
+import socket
 import time
 from pathlib import Path
 from urllib.parse import quote, urlparse, urlunparse
@@ -1138,8 +1139,14 @@ def _normalize_audio_url_for_remote_transport(audio_url: str | None) -> tuple[st
     except Exception:
         details["normalizationReason"] = "public_base_url_parse_failed"
         return original_url, details
-    if not str(parsed_public.scheme or "").strip() or not str(parsed_public.netloc or "").strip():
+    public_scheme = str(parsed_public.scheme or "").strip().lower()
+    public_netloc = str(parsed_public.netloc or "").strip()
+    public_host = str(parsed_public.hostname or "").strip().lower()
+    if not public_scheme or not public_netloc:
         details["normalizationReason"] = "public_base_url_invalid"
+        return original_url, details
+    if public_host in COMFY_AUDIO_UNSAFE_URL_HOSTS:
+        details["normalizationReason"] = "public_base_url_localhost"
         return original_url, details
 
     normalized_url = urlunparse(
@@ -1158,18 +1165,35 @@ def _normalize_audio_url_for_remote_transport(audio_url: str | None) -> tuple[st
     return normalized_url, details
 
 
-def _is_remote_safe_audio_url(audio_url: str) -> bool:
+def _assess_remote_audio_url_safety(audio_url: str) -> tuple[bool, str]:
     source = str(audio_url or "").strip()
     if not source:
-        return False
+        return False, "audio_url_missing"
     try:
         parsed = urlparse(source)
     except Exception:
-        return False
+        return False, "audio_url_parse_failed"
+
+    scheme = str(parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"}:
+        return False, "audio_url_scheme_not_http"
+
     host = str(parsed.hostname or "").strip().lower()
     if not host:
-        return False
-    return host not in COMFY_AUDIO_UNSAFE_URL_HOSTS
+        return False, "audio_url_hostname_missing"
+    if host in COMFY_AUDIO_UNSAFE_URL_HOSTS:
+        return False, "normalized_url_still_localhost"
+
+    try:
+        socket.getaddrinfo(host, parsed.port or (443 if scheme == "https" else 80))
+    except Exception:
+        return False, "normalized_host_not_reachable"
+
+    return True, "ok"
+
+
+def _is_remote_safe_audio_url(audio_url: str) -> bool:
+    return _assess_remote_audio_url_safety(audio_url)[0]
 
 
 def _targets_support_url_transport(audio_targets: list[dict]) -> bool:
@@ -1474,7 +1498,7 @@ def run_comfy_image_to_video(
         has_audio_bytes = bool(audio_bytes)
         original_audio_url = str(effective_audio_value or "").strip()
         normalized_audio_url = original_audio_url
-        is_original_audio_url_safe = _is_remote_safe_audio_url(original_audio_url) if has_audio_url else False
+        is_original_audio_url_safe, original_audio_url_safety_reason = _assess_remote_audio_url_safety(original_audio_url) if has_audio_url else (False, "audio_url_missing")
         normalization_log_payload = {
             "originalAudioUrl": original_audio_url,
             "normalizedAudioUrl": normalized_audio_url,
@@ -1484,7 +1508,7 @@ def run_comfy_image_to_video(
         }
         if has_audio_url:
             normalized_audio_url, normalization_log_payload = _normalize_audio_url_for_remote_transport(original_audio_url)
-        is_normalized_audio_url_safe = _is_remote_safe_audio_url(normalized_audio_url) if bool(normalized_audio_url) else False
+        is_normalized_audio_url_safe, normalized_audio_url_safety_reason = _assess_remote_audio_url_safety(normalized_audio_url) if bool(normalized_audio_url) else (False, "audio_url_missing")
         effective_audio_value = normalized_audio_url
         supports_url_transport = _targets_support_url_transport(audio_targets)
         normalized_audio_url_available = bool(normalized_audio_url) and is_normalized_audio_url_safe
@@ -1507,6 +1531,53 @@ def run_comfy_image_to_video(
                 upload_guard_reason = "url_or_path_transport_supported"
             elif is_normalized_audio_url_safe:
                 upload_guard_reason = "normalized_remote_safe_url_available"
+        selected_by = "pending"
+        selected_transport_reason = audio_transport_reason
+        if bool(normalized_audio_url) and is_normalized_audio_url_safe and supports_url_transport:
+            selected_by = "normalized_remote_safe_url+target_support"
+            selected_transport_mode = "url"
+            selected_transport_reason = "remote_safe_normalized_url_available"
+        elif upload_fallback_allowed:
+            selected_by = "audio_upload_fallback"
+            selected_transport_mode = "upload"
+            selected_transport_reason = "url_transport_unavailable_fallback_to_upload"
+        elif bool(normalized_audio_url) and not is_normalized_audio_url_safe:
+            selected_by = "normalized_url_rejected_unsafe_for_remote"
+            selected_transport_mode = "none"
+            selected_transport_reason = normalized_audio_url_safety_reason
+        elif bool(normalized_audio_url) and not supports_url_transport:
+            selected_by = "url_rejected_target_not_url_compatible"
+            selected_transport_mode = "none"
+            selected_transport_reason = "targets_not_url_compatible"
+        elif has_audio_bytes and not upload_fallback_allowed:
+            selected_by = f"upload_guard_blocked:{upload_guard_reason}"
+            selected_transport_mode = "none"
+            selected_transport_reason = upload_guard_reason
+        else:
+            selected_transport_mode = "none"
+        normalization_reason = str((normalization_log_payload or {}).get("normalizationReason") or "").strip() or "unknown"
+        if normalization_reason in {"public_base_url_missing", "public_base_url_invalid", "public_base_url_parse_failed", "public_base_url_localhost"}:
+            normalized_audio_url_safety_reason = normalization_reason
+        logger.info(
+            "[LIP_SYNC COMFY AUDIO TRANSPORT PRESELECT] %s",
+            {
+                "workflowKey": normalized_workflow_key,
+                "workflowFile": workflow_source,
+                "originalAudioUrl": original_audio_url,
+                "normalizedAudioUrl": normalized_audio_url,
+                "wasNormalized": bool((normalization_log_payload or {}).get("wasNormalized")),
+                "normalizationReason": normalization_reason,
+                "publicBaseUrl": str(settings.PUBLIC_BASE_URL or "").strip(),
+                "originalAudioUrlSafe": is_original_audio_url_safe,
+                "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
+                "normalizedAudioUrlSafetyReason": normalized_audio_url_safety_reason,
+                "supportsUrlTransport": supports_url_transport,
+                "uploadFallbackAllowed": upload_fallback_allowed,
+                "selectedTransportMode": selected_transport_mode,
+                "selectedBy": selected_by,
+                "reason": selected_transport_reason,
+            },
+        )
         logger.info(
             "[COMFY AUDIO TARGETS INSPECTION] %s",
             {
@@ -1531,6 +1602,7 @@ def run_comfy_image_to_video(
                 "wasNormalized": bool((normalization_log_payload or {}).get("wasNormalized")),
                 "originalAudioUrlSafe": is_original_audio_url_safe,
                 "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
+                "normalizedAudioUrlSafetyReason": normalized_audio_url_safety_reason,
                 "supportsUrlTransport": supports_url_transport,
                 "uploadFallbackAllowed": upload_fallback_allowed,
                 "reason": audio_transport_reason,
@@ -1570,13 +1642,20 @@ def run_comfy_image_to_video(
                 selected_by = "audio_upload_fallback"
             elif bool(normalized_audio_url) and not is_normalized_audio_url_safe:
                 audio_transport_mode = "none"
-                selected_by = "normalized_url_rejected_unsafe_for_remote"
+                selected_by = f"normalized_url_rejected_unsafe_for_remote:{normalized_audio_url_safety_reason}"
             elif bool(normalized_audio_url) and not supports_url_transport:
                 audio_transport_mode = "none"
                 selected_by = "url_rejected_target_not_url_compatible"
             elif has_audio_bytes and not upload_fallback_allowed:
                 audio_transport_mode = "none"
                 selected_by = f"upload_guard_blocked:{upload_guard_reason}"
+            if (
+                audio_transport_mode == "none"
+                and _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is False
+                and not is_normalized_audio_url_safe
+            ):
+                remote_url_reason = normalized_audio_url_safety_reason or "normalized_audio_url_unsafe"
+                return None, f"capability_error:LTX_AUDIO_REMOTE_URL_UNAVAILABLE:{remote_url_reason}"
             logger.info(
                 "[COMFY AUDIO UPLOAD GUARD] %s",
                 {
@@ -1640,6 +1719,8 @@ def run_comfy_image_to_video(
                 "wasNormalized": bool((normalization_log_payload or {}).get("wasNormalized")),
                 "originalAudioUrlSafe": is_original_audio_url_safe,
                 "normalizedAudioUrlSafe": is_normalized_audio_url_safe,
+                "normalizedAudioUrlSafetyReason": normalized_audio_url_safety_reason,
+                "originalAudioUrlSafetyReason": original_audio_url_safety_reason,
                 "supportsUrlTransport": supports_url_transport,
                 "uploadFallbackAllowed": upload_fallback_allowed,
             },
