@@ -1794,6 +1794,57 @@ function buildCanonicalAudioSliceSuccessPatch(basePatch = {}) {
   };
 }
 
+function enforceCanonicalAudioSliceState(scene = {}) {
+  const baseScene = scene && typeof scene === "object" ? scene : {};
+  const contract = baseScene?.sceneContract && typeof baseScene.sceneContract === "object" ? baseScene.sceneContract : {};
+  const resolvedWorkflowKey = String(
+    baseScene?.resolvedWorkflowKey
+    || baseScene?.resolved_workflow_key
+    || contract?.resolvedWorkflowKey
+    || ""
+  ).trim().toLowerCase();
+  const renderMode = String(baseScene?.renderMode || baseScene?.render_mode || contract?.renderMode || "").trim().toLowerCase();
+  const ltxMode = String(baseScene?.ltxMode || baseScene?.ltx_mode || contract?.ltxMode || "").trim().toLowerCase();
+  const audioSliceUrl = String(baseScene?.audioSliceUrl || contract?.audioSliceUrl || "").trim();
+  const hasAudioSlice = Boolean(audioSliceUrl);
+  const canonicalAudioReady = hasAudioSlice
+    && (resolvedWorkflowKey === "lip_sync_music" || renderMode === "lip_sync_music" || ltxMode === "lip_sync");
+  if (!canonicalAudioReady) {
+    return {
+      scene: baseScene,
+      canonicalAudioReady: false,
+      staleAudioMetadataOverwroteCanonical: false,
+    };
+  }
+  const staleAudioMetadataOverwroteCanonical = (
+    String(baseScene?.audioSliceKind || "").trim().toLowerCase() !== "music_vocal"
+    || !Boolean(baseScene?.musicVocalLipSyncAllowed)
+    || String(contract?.audioSliceKind || "").trim().toLowerCase() !== "music_vocal"
+    || !Boolean(contract?.musicVocalLipSyncAllowed)
+  );
+  const canonicalPatch = buildCanonicalAudioSliceSuccessPatch({
+    audioSliceUrl,
+    audioSliceKind: "music_vocal",
+    musicVocalLipSyncAllowed: true,
+    requiresAudioSensitiveVideo: true,
+    ltxMode: "lip_sync",
+    renderMode: "lip_sync_music",
+    resolvedWorkflowKey: "lip_sync_music",
+  });
+  return {
+    scene: {
+      ...baseScene,
+      ...canonicalPatch,
+      sceneContract: {
+        ...contract,
+        ...canonicalPatch,
+      },
+    },
+    canonicalAudioReady: true,
+    staleAudioMetadataOverwroteCanonical,
+  };
+}
+
 function buildCanonicalVideoStatusPatch(statusRaw = "", payload = {}, previousScene = {}) {
   const status = String(statusRaw || "").trim().toLowerCase();
   const out = payload && typeof payload === "object" ? payload : {};
@@ -1874,7 +1925,8 @@ function preserveScenarioCanonicalResult(prevScene = {}, nextScene = {}) {
     const donePatch = buildCanonicalVideoStatusPatch("done", {}, prev);
     Object.assign(merged, donePatch);
   }
-  return merged;
+  const canonicalAudioResult = enforceCanonicalAudioSliceState(merged);
+  return canonicalAudioResult.scene;
 }
 
 function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
@@ -1993,6 +2045,18 @@ function mergeVideoStateBySceneId(nextScenes, existingScenes, { panelField = "" 
       }
     }
     for (const field of [
+      "audioSliceKind",
+      "musicVocalLipSyncAllowed",
+      "requiresAudioSensitiveVideo",
+      "ltxMode",
+      "renderMode",
+      "resolvedWorkflowKey",
+    ]) {
+      if ((merged?.[field] == null || merged?.[field] === "") && prev?.[field] != null && prev?.[field] !== "") {
+        merged[field] = prev[field];
+      }
+    }
+    for (const field of [
       "audioSliceStartSec",
       "audioSliceEndSec",
       "audioSliceDurationSec",
@@ -2012,7 +2076,8 @@ function mergeVideoStateBySceneId(nextScenes, existingScenes, { panelField = "" 
     if (panelField && merged?.[panelField] == null && prev?.[panelField] != null) {
       merged[panelField] = prev[panelField];
     }
-    return merged;
+    const canonicalAudioResult = enforceCanonicalAudioSliceState(merged);
+    return canonicalAudioResult.scene;
   });
 }
 
@@ -7798,12 +7863,10 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           videoFieldsCleared: clearedVideoFieldCount > 0,
         });
       }
-      const mergedScene = { ...sceneAtIdx, ...normalizedPatch };
-      const canonicalAudioReady = Boolean(
-        String(mergedScene?.audioSliceUrl || "").trim()
-        && String(mergedScene?.audioSliceKind || "").trim().toLowerCase() === "music_vocal"
-        && Boolean(mergedScene?.musicVocalLipSyncAllowed)
-      );
+      const mergedSceneRaw = { ...sceneAtIdx, ...normalizedPatch };
+      const canonicalAudioResult = enforceCanonicalAudioSliceState(mergedSceneRaw);
+      const mergedScene = canonicalAudioResult.scene;
+      const canonicalAudioReady = Boolean(canonicalAudioResult.canonicalAudioReady);
       if (Object.prototype.hasOwnProperty.call(normalizedPatch, "audioSliceUrl")) {
         console.info("[SCENARIO AUDIO SLICE CANONICAL MERGE]", {
           sceneId: String(sceneAtIdx?.sceneId || ""),
@@ -7816,6 +7879,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             musicVocalLipSyncAllowed: Boolean(mergedScene?.sceneContract?.musicVocalLipSyncAllowed),
           },
           canonicalAudioReady,
+          staleAudioMetadataOverwroteCanonical: Boolean(canonicalAudioResult.staleAudioMetadataOverwroteCanonical),
         });
       }
       if (Object.prototype.hasOwnProperty.call(normalizedPatch, "videoStatus")) {
@@ -7942,6 +8006,17 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
       const sourceNode = (nodesRef.current || []).find((nodeItem) => String(nodeItem?.id || "") === nodeId) || null;
       const activeScenes = Array.isArray(sourceNode?.data?.scenes) ? sourceNode.data.scenes : scenarioScenes;
       return (Array.isArray(activeScenes) ? activeScenes : []).find((scene) => String(scene?.sceneId || "").trim() === lookupSceneId) || null;
+    };
+    const logPollingTerminalPanelState = (status, nextVideoPanelActivated) => {
+      const beforeScene = getScenarioSceneState(sceneId) || {};
+      const previousVideoPanelActivated = Boolean(beforeScene?.videoPanelActivated);
+      console.info("[SCENARIO POLLING TERMINAL PANEL]", {
+        sceneId,
+        status: String(status || "").trim().toLowerCase(),
+        previousVideoPanelActivated,
+        nextVideoPanelActivated: Boolean(nextVideoPanelActivated),
+        stayedOnCurrentScene: true,
+      });
     };
     const applyScenarioVideoPatch = (patch = {}, context = {}) => {
       const normalizedPatch = patch && typeof patch === "object" ? patch : {};
@@ -8211,10 +8286,10 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoStatus: "not_found",
             videoError: String(out?.hint || out?.code || "video_job_not_found"),
             videoJobId: toleratedMeta.jobId,
-            videoPanelActivated: false,
+            videoPanelActivated: true,
             ...workflowInspectionPatch,
           }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: String(out?.code || ""), hint: String(out?.hint || ""), message: String(out?.error || out?.message || "video_job_not_found") });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
+          logPollingTerminalPanelState("not_found", true);
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -8243,10 +8318,10 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoStatus: "not_found",
             videoJobId: toleratedMeta.jobId,
             videoError: String(out?.error || out?.hint || "video_job_not_found"),
-            videoPanelActivated: false,
+            videoPanelActivated: true,
             ...workflowInspectionPatch,
           }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: String(out?.code || ""), hint: String(out?.hint || ""), message: String(out?.error || out?.message || "video_job_not_found") });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
+          logPollingTerminalPanelState("not_found", true);
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -8300,10 +8375,11 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoPromptPatchedNodeIds: Array.isArray(out?.promptPatchedNodeIds)
               ? out.promptPatchedNodeIds
               : (Array.isArray(out?.debug?.promptPatchedNodeIds) ? out.debug.promptPatchedNodeIds : []),
-            videoPanelActivated: false,
+            videoPanelActivated: true,
             ...workflowInspectionPatch,
           }, { jobId: String(settledMeta?.jobId || ""), status: "done", message: "video_ready" });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: false });
+          logPollingTerminalPanelState("done", true);
+          console.info("[SCENARIO VIDEO SUCCESS FLOW]", { sceneId, openNextSceneWithoutVideoSkipped: true });
           clearActiveVideoJob(sceneId, { status: "done", jobId: settledMeta.jobId });
           return;
         }
@@ -8320,7 +8396,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             message: extractScenarioVideoError(out),
           });
           applyScenarioVideoPatch({
-            videoPanelActivated: false,
+            videoPanelActivated: true,
             videoStatus: "error",
             videoError: extractScenarioVideoError(out),
             videoJobId: settledMeta.jobId,
@@ -8333,7 +8409,7 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
           });
           const sceneAfterError = getScenarioSceneState(sceneId);
           const generatingFlagAfter = isVideoJobInProgress(sceneAfterError?.videoStatus);
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status, videoPanelActivatedAfterApply: false });
+          logPollingTerminalPanelState(status, true);
           console.info("[SCENARIO VIDEO ERROR TERMINAL]", {
             sceneId,
             jobId: String(settledMeta?.jobId || ""),
@@ -8377,9 +8453,9 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
             videoStatus: "not_found",
             videoError: String(e?.message || e),
             videoJobId: String(toleratedMeta?.jobId || ""),
-            videoPanelActivated: false,
+            videoPanelActivated: true,
           }, { jobId: String(toleratedMeta?.jobId || ""), status: "not_found", code: "video_job_not_found", message: String(e?.message || e) });
-          console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "not_found", videoPanelActivatedAfterApply: false });
+          logPollingTerminalPanelState("not_found", true);
           clearActiveVideoJob(sceneId, { status: "not_found", jobId: toleratedMeta.jobId });
           return;
         }
@@ -8393,8 +8469,9 @@ const scenarioCreateButtonBusy = scenarioVideoLoading;
         applyScenarioVideoPatch({
           videoStatus: "error",
           videoError: propagatedError,
-          videoPanelActivated: false,
+          videoPanelActivated: true,
         }, { jobId: String((scenarioVideoJobsBySceneRef.current.get(sceneId) || {})?.jobId || ""), status: "error", message: propagatedError });
+        logPollingTerminalPanelState("error", true);
         clearActiveVideoJob(sceneId, { status: "error", jobId: String((scenarioVideoJobsBySceneRef.current.get(sceneId) || {})?.jobId || "") });
       }
     };
@@ -11113,24 +11190,6 @@ Aspect ratio: ${imageFormat}`,
     setScenarioVideoError(msg);
   }, [scenarioEditor.selected, scenarioSelected, updateScenarioScene]);
 
-  const openNextSceneWithoutVideo = useCallback((currentIdx) => {
-    const safeIdx = Number(currentIdx);
-    if (!Number.isFinite(safeIdx) || safeIdx < 0) return;
-    const startFrom = safeIdx + 1;
-    if (!Array.isArray(scenarioScenes) || startFrom >= scenarioScenes.length) {
-      setAssemblyInfo("Все сцены готовы. Можно собирать клип.");
-      return;
-    }
-
-    const nextIdx = scenarioScenes.findIndex((scene, idx) => idx >= startFrom && !String(scene?.videoUrl || "").trim());
-    if (nextIdx >= 0) {
-      setScenarioEditor((prev) => ({ ...prev, selected: nextIdx, selectedSceneId: String((scenarioScenes[nextIdx] || {}).sceneId || "").trim() }));
-      return;
-    }
-
-    setAssemblyInfo("Все сцены готовы. Можно собирать клип.");
-  }, [scenarioScenes]);
-
   const handleScenarioGenerateVideo = useCallback(async (options = {}) => {
     const traceScenarioVideo = (label, payload = {}) => {
       console.info(label, {
@@ -12057,7 +12116,7 @@ Aspect ratio: ${imageFormat}`,
             }, { actionName: "generate_video", preserveSourceFieldsInVideoActions: true });
             clearActiveVideoJob(sceneId, { status: "done", jobId: startedMeta.jobId });
             console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "done", videoPanelActivatedAfterApply: true });
-            openNextSceneWithoutVideo(targetSceneIndex);
+            console.info("[SCENARIO VIDEO SUCCESS FLOW]", { sceneId, openNextSceneWithoutVideoSkipped: true });
             shouldStartPolling = false;
           } else if (immediateStatus === "error" || immediateStatus === "stopped" || immediateStatus === "not_found") {
             updateScenarioScene(targetSceneIndex, {
@@ -12115,7 +12174,7 @@ Aspect ratio: ${imageFormat}`,
       console.info("[SCENARIO VIDEO UI RESET]", { sceneId, status: "error", videoPanelActivatedAfterApply: true });
       clearActiveVideoJob(sceneId, { status: "error" });
     }
-  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, openNextSceneWithoutVideo, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene]);
+  }, [clearActiveVideoJob, handleScenarioEditorExtractSceneAudio, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioScenes, scenarioSelected?.sceneId, startScenarioVideoPolling, updateScenarioScene]);
 
   const handleScenarioClearVideo = useCallback(() => {
     setScenarioVideoError("");
@@ -13762,7 +13821,9 @@ onClipSec: (nodeId, value) => {
                 return { ...cleanedScene, ...persistedAssets };
               })()
               : cleanedScene;
-            const hydratedScene = preserveScenarioCanonicalResult(persistedScene || {}, rebuiltScene || {});
+            const preservedScene = preserveScenarioCanonicalResult(persistedScene || {}, rebuiltScene || {});
+            const canonicalAudioResult = enforceCanonicalAudioSliceState(preservedScene || {});
+            const hydratedScene = canonicalAudioResult.scene;
             console.info("[SCENARIO HYDRATE/REBUILD CANONICAL CHECK]", {
               sceneId,
               videoUrlBefore: String(persistedScene?.videoUrl || "").trim(),
@@ -13776,6 +13837,16 @@ onClipSec: (nodeId, value) => {
                 const after = String(hydratedScene?.[field] || "").trim();
                 return !before || Boolean(after);
               }),
+              topLevel: {
+                audioSliceKind: String(hydratedScene?.audioSliceKind || "").trim().toLowerCase(),
+                musicVocalLipSyncAllowed: Boolean(hydratedScene?.musicVocalLipSyncAllowed),
+              },
+              sceneContract: {
+                audioSliceKind: String(hydratedScene?.sceneContract?.audioSliceKind || "").trim().toLowerCase(),
+                musicVocalLipSyncAllowed: Boolean(hydratedScene?.sceneContract?.musicVocalLipSyncAllowed),
+              },
+              canonicalAudioReady: Boolean(canonicalAudioResult.canonicalAudioReady),
+              staleAudioMetadataOverwroteCanonical: Boolean(canonicalAudioResult.staleAudioMetadataOverwroteCanonical),
             });
             return hydratedScene;
           });
@@ -16461,7 +16532,26 @@ const hydrate = useCallback((source = "unknown") => {
           }
 
           if (n.type === "scenarioStoryboard") {
-            data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene");
+            data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene").map((sceneItem) => {
+              const canonicalAudioResult = enforceCanonicalAudioSliceState(sceneItem || {});
+              const normalizedScene = canonicalAudioResult.scene;
+              if (canonicalAudioResult.canonicalAudioReady) {
+                console.info("[SCENARIO HYDRATE AUDIO CANONICAL CHECK]", {
+                  sceneId: String(normalizedScene?.sceneId || "").trim(),
+                  topLevel: {
+                    audioSliceKind: String(normalizedScene?.audioSliceKind || "").trim().toLowerCase(),
+                    musicVocalLipSyncAllowed: Boolean(normalizedScene?.musicVocalLipSyncAllowed),
+                  },
+                  sceneContract: {
+                    audioSliceKind: String(normalizedScene?.sceneContract?.audioSliceKind || "").trim().toLowerCase(),
+                    musicVocalLipSyncAllowed: Boolean(normalizedScene?.sceneContract?.musicVocalLipSyncAllowed),
+                  },
+                  canonicalAudioReady: true,
+                  staleAudioMetadataOverwroteCanonical: Boolean(canonicalAudioResult.staleAudioMetadataOverwroteCanonical),
+                });
+              }
+              return normalizedScene;
+            });
             data.sceneGeneration = data.sceneGeneration && typeof data.sceneGeneration === "object" ? data.sceneGeneration : {};
           }
 
