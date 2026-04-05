@@ -8,11 +8,22 @@
       "title": "Load Image"
     }
   },
+  "276": {
+    "inputs": {
+      "audio": "5666.mp3",
+      "audioUI": "/api/view?filename=5666.mp3&type=input&subfolder=&rand=0.3432663467822794"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Load Audio"
+    }
+  },
   "341": {
     "inputs": {
       "filename_prefix": "video/LTX_2.3_ia2v",
       "format": "auto",
       "codec": "auto",
+      "video-preview": "",
       "video": [
         "340:312",
         0
@@ -34,7 +45,7 @@
   },
   "340:286": {
     "inputs": {
-      "noise_seed": 754450827445023
+      "noise_seed": 803273866902483
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -781,15 +792,6 @@
     "class_type": "CLIPTextEncode",
     "_meta": {
       "title": "CLIP Text Encode (Prompt)"
-    }
-  },
-  "276": {
-    "inputs": {
-      "audio": "audio.mp3"
-    },
-    "class_type": "LoadAudio",
-    "_meta": {
-      "title": "Load Audio"
     }
   }
 }
