@@ -358,17 +358,25 @@ def _collect_progress_bar_io_failure_markers(failed_trace: dict) -> tuple[bool, 
         if isinstance(failed_trace.get("execution_error_payload"), dict)
         else {}
     )
+    traceback_value = execution_error_payload.get("traceback")
+    if traceback_value is None:
+        traceback_value = execution_error_payload.get("tb")
+    if isinstance(traceback_value, list):
+        full_traceback_text = "\n".join(str(item) for item in traceback_value)
+    elif traceback_value is None:
+        full_traceback_text = ""
+    else:
+        full_traceback_text = str(traceback_value)
+
     merged_parts = [
-        failed_trace.get("traceback_preview"),
+        full_traceback_text,
         failed_trace.get("error_message"),
         failed_trace.get("exception_type"),
-        execution_error_payload.get("traceback"),
-        execution_error_payload.get("tb"),
         execution_error_payload.get("exception_message"),
         execution_error_payload.get("error"),
         execution_error_payload.get("message"),
     ]
-    merged_text = " ".join(_preview_value(part, limit=2000) for part in merged_parts if part is not None).lower()
+    merged_text = " ".join(str(part) for part in merged_parts if part is not None).lower()
     marker_candidates = (
         "tqdm",
         "trange",
