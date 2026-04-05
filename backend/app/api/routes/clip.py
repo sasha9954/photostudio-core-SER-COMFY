@@ -13806,7 +13806,63 @@ def clip_video(payload: ClipVideoIn):
         audio_bytes = None
         audio_transport_mode = "none"
         if final_workflow_key == "lip_sync":
-            audio_transport_mode = "url"
+            has_audio_source_url = bool(audio_slice_url)
+            print(
+                "[LIP_SYNC AUDIO BYTES PREP] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "provider": provider,
+                        "mode": mode,
+                        "workflow": final_workflow_key,
+                        "hasAudioSourceUrl": has_audio_source_url,
+                        "audioSourceUrl": audio_slice_url if has_audio_source_url else "",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            audio_bytes, audio_ext, _audio_mime, audio_err = _read_audio_bytes_from_source(audio_slice_url)
+            if audio_err or not audio_bytes:
+                print(
+                    "[LIP_SYNC AUDIO BYTES PREP] "
+                    + json.dumps(
+                        {
+                            "sceneId": scene_id,
+                            "provider": provider,
+                            "mode": mode,
+                            "workflow": final_workflow_key,
+                            "status": "failed",
+                            "error": audio_err or "audio_read_failed",
+                            "hasAudioSourceUrl": has_audio_source_url,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "ok": False,
+                        "code": "LTX_AUDIO_SOURCE_READ_FAILED",
+                        "hint": (audio_err or "failed_to_read_audio_bytes_from_source")[:300],
+                    },
+                )
+            audio_transport_mode = "upload"
+            print(
+                "[LIP_SYNC AUDIO BYTES READY] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "provider": provider,
+                        "mode": mode,
+                        "workflow": final_workflow_key,
+                        "audioBytesReady": True,
+                        "audioBytesSize": len(audio_bytes or b""),
+                        "audioExt": audio_ext or "unknown",
+                        "audioTransportMode": audio_transport_mode,
+                    },
+                    ensure_ascii=False,
+                )
+            )
 
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
         print(
@@ -13840,6 +13896,9 @@ def clip_video(payload: ClipVideoIn):
                     "hasPrimaryImage": bool(image_bytes),
                     "hasStartImage": bool(start_image_bytes),
                     "hasEndImage": bool(end_image_bytes),
+                    "hasAudioBytes": bool(audio_bytes),
+                    "audioBytesSize": len(audio_bytes or b""),
+                    "audioTransportMode": audio_transport_mode,
                 },
                 ensure_ascii=False,
             )
@@ -13869,6 +13928,8 @@ def clip_video(payload: ClipVideoIn):
                         "audioSliceStartSec": audio_slice_start_sec,
                         "audioSliceEndSec": audio_slice_end_sec,
                         "audioTransportMode": audio_transport_mode,
+                        "hasAudioBytes": bool(audio_bytes),
+                        "audioBytesSize": len(audio_bytes or b""),
                     },
                     ensure_ascii=False,
                 )
