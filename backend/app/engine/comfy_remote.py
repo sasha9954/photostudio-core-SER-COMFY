@@ -464,7 +464,7 @@ def upload_audio_to_comfy(
     }
     data = {"type": "input", "overwrite": "true"}
 
-    last_error = "audio_upload_unknown_error"
+    last_error = "upload_unknown_error"
     for attempt in range(1, max_attempts + 1):
         try:
             resp = requests.post(url, files=files, data=data, timeout=(connect_timeout, read_timeout))
@@ -491,22 +491,22 @@ def upload_audio_to_comfy(
             if resp.status_code >= 400:
                 if resp.status_code == 405:
                     _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED = False
-                return None, f"audio_upload_non_200:status={resp.status_code}:body={body_snippet}"
-            payload, parse_err = _parse_json_response(resp, stage="audio_upload_response")
+                return None, f"upload_non_200:status={resp.status_code}:body={body_snippet}"
+            payload, parse_err = _parse_json_response(resp, stage="upload_response")
             if parse_err or not payload:
-                return None, parse_err or "audio_upload_response_invalid_json"
+                return None, parse_err or "upload_response_invalid_json"
 
             name = str(payload.get("name") or payload.get("filename") or "").strip()
             if name:
                 return name, None
 
-            return None, f"audio_upload_name_missing:{str(payload)[:300]}"
+            return None, f"upload_name_missing:{str(payload)[:300]}"
         except ConnectTimeout as exc:
-            last_error = f"audio_upload_connect_timeout:{str(exc)[:300]}"
+            last_error = f"upload_connect_timeout:{str(exc)[:300]}"
         except ReadTimeout as exc:
-            last_error = f"audio_upload_read_timeout:{str(exc)[:300]}"
+            last_error = f"upload_read_timeout:{str(exc)[:300]}"
         except RequestException as exc:
-            return None, f"audio_upload_request_error:{str(exc)[:300]}"
+            return None, f"upload_request_error:{str(exc)[:300]}"
 
         if attempt < max_attempts:
             time.sleep(min(8.0, 2.0 * attempt))
@@ -2411,7 +2411,7 @@ def run_comfy_image_to_video(
                         transport_mode=audio_transport_mode,
                     )
                     if upload_audio_err or not uploaded_audio_name:
-                        return None, f"upload_failed:{upload_audio_err or 'audio_upload_name_missing'}"
+                        return None, f"upload_failed:{upload_audio_err or 'upload_name_missing'}"
                 audio_patch_node_ids = []
                 lip_sync_proof_reason = "audio_patch_applied"
                 audio_patch_types = []
