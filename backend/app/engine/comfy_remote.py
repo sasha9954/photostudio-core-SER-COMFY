@@ -545,14 +545,19 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
     connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
     read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
+    disable_pbar = bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True))
+    request_payload: dict = {"prompt": workflow}
+    if disable_pbar:
+        request_payload["extra_data"] = {"disable_pbar": True}
     logger.info(
-        "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s",
+        "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s disable_pbar=%s",
         url,
         connect_timeout,
         read_timeout,
+        disable_pbar,
     )
     try:
-        resp = requests.post(url, json={"prompt": workflow}, timeout=(connect_timeout, read_timeout))
+        resp = requests.post(url, json=request_payload, timeout=(connect_timeout, read_timeout))
         body_snippet = _response_body_snippet(resp)
         logger.info("[COMFY REMOTE] prompt response status=%s body=%r", resp.status_code, body_snippet)
         if resp.status_code >= 400:
@@ -2882,6 +2887,12 @@ def run_comfy_image_to_video(
     )
     if submit_err or not prompt_id:
         return None, f"prompt_submit_failed:{submit_err or 'unknown_submit_error'}"
+    logger.info(
+        "[COMFY REMOTE EXECUTION STAGE] prompt submit succeeded, waiting execution history prompt_id=%s workflow_key=%s workflow_file=%s",
+        prompt_id,
+        normalized_workflow_key,
+        workflow_source,
+    )
 
     poll_timeout_sec = max(10, int(settings.COMFY_POLL_TIMEOUT_SEC or 600))
     history, wait_err = wait_for_comfy_result(
@@ -2893,12 +2904,13 @@ def run_comfy_image_to_video(
     )
     if wait_err or not history:
         logger.warning(
-            "[COMFY REMOTE] history wait failed prompt_id=%s timeout_sec=%s jobId=%s err=%s history_present=%s",
+            "[COMFY REMOTE] history wait failed prompt_id=%s timeout_sec=%s jobId=%s err=%s history_present=%s execution_stage_failure=%s",
             prompt_id,
             poll_timeout_sec,
             prompt_id,
             wait_err or 'unknown_wait_error',
             bool(history),
+            bool(prompt_id),
         )
         return None, f"history_wait_failed:{wait_err or 'unknown_wait_error'}"
 
