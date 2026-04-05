@@ -1773,7 +1773,6 @@ def _resolve_audio_transport_mode_for_targets(
     normalized_audio_url_safe: bool,
     path_audio_value: str,
     has_audio_bytes: bool,
-    audio_upload_supported: bool,
 ) -> tuple[str, str]:
     has_url_target = any(
         str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_URL_COMPATIBLE_CLASS_NAMES for target in audio_targets
@@ -1792,12 +1791,10 @@ def _resolve_audio_transport_mode_for_targets(
 
     if has_path_target and bool(path_audio_value):
         return "path", "path_target_with_filesystem_path"
-    if has_upload_filename_target and has_audio_bytes and audio_upload_supported:
+    if has_upload_filename_target and has_audio_bytes:
         return "upload", "source_file_node_with_audio_upload"
     if has_upload_filename_target and not has_audio_bytes:
         return "none", "source_file_node_requires_upload_but_audio_bytes_missing"
-    if has_upload_filename_target and not audio_upload_supported:
-        return "none", "source_file_node_requires_upload_but_endpoint_unavailable"
     if has_path_target and not bool(path_audio_value):
         return "none", "path_target_but_filesystem_path_missing"
     return "none", "no_compatible_audio_transport_for_discovered_targets"
@@ -2297,8 +2294,8 @@ def run_comfy_image_to_video(
             str((target or {}).get("class_type") or "").strip().lower() in COMFY_AUDIO_UPLOAD_FILENAME_CLASS_NAMES
             for target in audio_targets
         )
-        audio_upload_supported = _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED is not False
-        if has_upload_filename_target and has_audio_bytes and audio_upload_supported:
+        upload_audio_endpoint_supported_hint = _COMFY_AUDIO_UPLOAD_ENDPOINT_SUPPORTED
+        if has_upload_filename_target and has_audio_bytes:
             selected_transport_mode = "upload"
             selected_transport_reason = "lipsync_source_file_node_with_audio_upload"
             selected_by = "lip_sync_upload_primary_mode"
@@ -2309,7 +2306,6 @@ def run_comfy_image_to_video(
                 normalized_audio_url_safe=is_normalized_audio_url_safe,
                 path_audio_value=path_audio_value,
                 has_audio_bytes=has_audio_bytes,
-                audio_upload_supported=audio_upload_supported,
             )
             selected_by = "lip_sync_compat_fallback_mode"
         source_audio_target_classes = [
@@ -2361,6 +2357,7 @@ def run_comfy_image_to_video(
                 "normalizedAudioUrlSafetyReason": normalized_audio_url_safety_reason,
                 "supportsUrlTransport": supports_url_transport,
                 "pathAudioValue": path_audio_value,
+                "uploadAudioEndpointSupportedHint": upload_audio_endpoint_supported_hint,
                 "uploadFallbackAllowed": upload_fallback_allowed,
                 "selectedTransportMode": selected_transport_mode,
                 "selectedBy": selected_by,
