@@ -1088,6 +1088,73 @@ LIPSYNC_PRIMARY_NODE_IDS = {
     "duration": "340:331",
     "fps": "340:323",
 }
+FIXED_NEGATIVE_PROMPT_PATCH_NODE_IDS = ["267:247", "340:314"]
+
+
+def _collect_node_output_consumers(workflow: dict) -> dict[str, list[tuple[str, str]]]:
+    consumers: dict[str, list[tuple[str, str]]] = {}
+    if not isinstance(workflow, dict):
+        return consumers
+    for target_node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_key, input_value in inputs.items():
+            if (
+                isinstance(input_value, list)
+                and len(input_value) >= 1
+                and input_value[0] is not None
+            ):
+                source_node_id = str(input_value[0]).strip()
+                if not source_node_id:
+                    continue
+                consumers.setdefault(source_node_id, []).append((str(target_node_id), str(input_key)))
+    return consumers
+
+
+def _discover_negative_prompt_node(workflow: dict) -> str:
+    if not isinstance(workflow, dict):
+        return ""
+    for candidate_id in FIXED_NEGATIVE_PROMPT_PATCH_NODE_IDS:
+        candidate_node = workflow.get(str(candidate_id))
+        if not isinstance(candidate_node, dict):
+            continue
+        candidate_inputs = candidate_node.get("inputs")
+        if isinstance(candidate_inputs, dict) and ("text" in candidate_inputs or "value" in candidate_inputs):
+            return str(candidate_id)
+    node_consumers = _collect_node_output_consumers(workflow)
+    fallback_cliptext_nodes: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        if class_type != "cliptextencode":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "text" not in inputs:
+            continue
+        fallback_cliptext_nodes.append(str(node_id))
+        for consumer_node_id, consumer_input_key in node_consumers.get(str(node_id), []):
+            if consumer_input_key.strip().lower() != "negative":
+                continue
+            return str(node_id)
+    return fallback_cliptext_nodes[0] if fallback_cliptext_nodes else ""
+
+
+def _dedupe_prompt_tokens_csv(*texts: str) -> str:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        for part in str(text or "").split(","):
+            token = str(part or "").strip()
+            normalized = token.lower()
+            if not token or normalized in seen:
+                continue
+            seen.add(normalized)
+            tokens.append(token)
+    return ", ".join(tokens)
 
 
 def _node_title_lower(node: dict) -> str:
@@ -1917,6 +1984,7 @@ def _patch_workflow_inputs(
     *,
     image_name: str,
     prompt: str,
+    negative_prompt: str = "",
     width: int,
     height: int,
     requested_duration_sec: float,
@@ -2019,6 +2087,42 @@ def _patch_workflow_inputs(
         if str(key) not in patched_node_by_key:
             patched_node_by_key[str(key)] = str(node_id)
 
+    resolved_negative_prompt_node_id = _discover_negative_prompt_node(wf)
+    workflow_static_negative_prompt = ""
+    negative_prompt_node_patched = False
+    negative_prompt_source = "missing"
+    effective_negative_prompt = ""
+    if resolved_negative_prompt_node_id:
+        negative_node = wf.get(str(resolved_negative_prompt_node_id))
+        if isinstance(negative_node, dict):
+            negative_inputs = negative_node.get("inputs")
+            if isinstance(negative_inputs, dict):
+                workflow_static_negative_prompt = str(negative_inputs.get("text") or negative_inputs.get("value") or "").strip()
+                scene_negative_prompt = str(negative_prompt or "").strip()
+                if scene_negative_prompt:
+                    effective_negative_prompt = _dedupe_prompt_tokens_csv(workflow_static_negative_prompt, scene_negative_prompt)
+                    input_key = "text" if "text" in negative_inputs else ("value" if "value" in negative_inputs else "")
+                    if input_key:
+                        ok, err = _set_node_input(wf, resolved_negative_prompt_node_id, input_key, effective_negative_prompt)
+                        if not ok:
+                            return None, err, None, None, {}
+                        negative_prompt_node_patched = True
+                        negative_prompt_source = "scene"
+                    else:
+                        negative_prompt_source = "missing"
+                else:
+                    effective_negative_prompt = workflow_static_negative_prompt
+                    negative_prompt_source = "workflow_static" if workflow_static_negative_prompt else "missing"
+    else:
+        logger.warning(
+            "[COMFY NEGATIVE PROMPT] %s",
+            {
+                "workflow_key": normalized_workflow_key,
+                "workflow_path": workflow_path,
+                "warning": "negative_prompt_node_not_found",
+            },
+        )
+
     _patch_audio_frames(wf, frames)
 
     if seed is not None:
@@ -2052,6 +2156,11 @@ def _patch_workflow_inputs(
         "patchedWidthNodeId": str((discovery.get("width_node_id") or FIXED_IMAGE_VIDEO_NODES["width"][0])),
         "patchedHeightNodeId": str((discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0])),
         "patchedLengthNodeId": str((discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
+        "resolvedNegativePromptNodeId": str(resolved_negative_prompt_node_id or ""),
+        "negativePromptNodePatched": bool(negative_prompt_node_patched),
+        "negativePromptSource": negative_prompt_source,
+        "negativePromptPreview": _preview_value(effective_negative_prompt, limit=320),
+        "negativePromptStaticPreview": _preview_value(workflow_static_negative_prompt, limit=220),
     }
     logger.info("[COMFY WORKFLOW DISCOVERY] %s", discovery_debug)
     logger.info(
@@ -2096,6 +2205,7 @@ def run_comfy_image_to_video(
     image_bytes: bytes,
     image_filename: str,
     prompt: str,
+    negative_prompt: str | None = None,
     width: int,
     height: int,
     requested_duration_sec: float,
@@ -2256,6 +2366,7 @@ def run_comfy_image_to_video(
         return None, f"upload_failed:{upload_err or 'unknown_upload_error'}"
 
     effective_prompt = str(prompt or "").strip()
+    scene_negative_prompt = str(negative_prompt or "").strip()
     uploaded_start_name = uploaded_name
     uploaded_end_name = ""
     if start_image_bytes and normalized_workflow_key in {"f_l"}:
@@ -2271,6 +2382,7 @@ def run_comfy_image_to_video(
         workflow,
         image_name=uploaded_name,
         prompt=effective_prompt,
+        negative_prompt=scene_negative_prompt,
         width=int(width),
         height=int(height),
         requested_duration_sec=float(requested_duration_sec),
@@ -2925,6 +3037,16 @@ def run_comfy_image_to_video(
         effective_prompt[:500],
     )
     logger.info(
+        "[COMFY REMOTE NEGATIVE PROMPT TRANSPORT] scene_id=%s workflow_key=%s model_key=%s negative_prompt_node_patched=%s negative_prompt_source=%s negative_prompt_preview=%r resolved_negative_prompt_node_id=%s",
+        str(scene_id or "").strip(),
+        normalized_workflow_key,
+        normalized_model_key,
+        bool((workflow_discovery_debug or {}).get("negativePromptNodePatched")),
+        str((workflow_discovery_debug or {}).get("negativePromptSource") or "missing"),
+        str((workflow_discovery_debug or {}).get("negativePromptPreview") or ""),
+        str((workflow_discovery_debug or {}).get("resolvedNegativePromptNodeId") or ""),
+    )
+    logger.info(
         "[COMFY REMOTE SUBMIT FLOW] %s",
         {
             "sceneId": str(scene_id or "").strip(),
@@ -3062,6 +3184,13 @@ def run_comfy_image_to_video(
                     or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
                 )
             ],
+            "positive_prompt_node_patched": bool(
+                (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
+            ),
+            "negative_prompt_node_patched": bool((workflow_discovery_debug or {}).get("negativePromptNodePatched")),
+            "negative_prompt_preview": str((workflow_discovery_debug or {}).get("negativePromptPreview") or ""),
+            "resolved_negative_prompt_node_id": str((workflow_discovery_debug or {}).get("resolvedNegativePromptNodeId") or ""),
+            "negative_prompt_source": str((workflow_discovery_debug or {}).get("negativePromptSource") or "missing"),
             "workflow_discovery": workflow_discovery_debug if isinstance(workflow_discovery_debug, dict) else {},
             "first_last_start_node_ids": first_last_start_node_ids,
             "first_last_end_node_ids": first_last_end_node_ids,

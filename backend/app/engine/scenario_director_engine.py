@@ -3252,6 +3252,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
             "cameraIdea": scene.camera,
             "imagePrompt": scene.image_prompt,
             "videoPrompt": scene.video_prompt,
+            "video_negative_prompt": scene.video_negative_prompt,
             "videoNegativePrompt": scene.video_negative_prompt,
             "startFramePrompt": start_frame_prompt,
             "endFramePrompt": end_frame_prompt,
@@ -3429,6 +3430,7 @@ def _build_director_output(storyboard_out: ScenarioDirectorStoryboardOut, payloa
                 "cameraIdea": scene.camera,
                 "imagePrompt": scene.image_prompt,
                 "videoPrompt": scene.video_prompt,
+                "video_negative_prompt": scene.video_negative_prompt,
                 "videoNegativePrompt": scene.video_negative_prompt,
                 "startFramePrompt": start_frame_prompt,
                 "endFramePrompt": end_frame_prompt,
@@ -5983,31 +5985,82 @@ def _enforce_lip_sync_music_visual_canon(scene: ScenarioDirectorScene) -> None:
 
 
 def build_ltx_video_negative_prompt(scene: ScenarioDirectorScene | None = None) -> str:
-    negatives = [
-        "morphing artifacts",
-        "slideshow motion",
-        "crossfade transitions",
-        "broken anatomy",
-        "deformed hands",
-        "extra limbs",
-        "jitter",
-        "flicker",
-        "frozen fabric",
-        "static background",
-        "blurry face",
-        "low resolution",
-        "teleporting limbs",
-        "floating objects",
-        "upside-down framing",
-        "full frame inversion",
-        "vertical roll",
-        "barrel roll",
-        "camera tumbling",
-        "uncontrolled axial rotation",
+    shared_safety_floor = [
+        "no extreme motion blur",
+        "no broken anatomy",
+        "no extra limbs",
+        "no limb duplication",
+        "no body deformation",
     ]
-    if scene and (bool(scene.lip_sync) or str(scene.resolved_workflow_key or "").strip().lower() == "lip_sync_music"):
-        negatives.extend(["closed mouth", "static face", "bad lip-sync", "no expression"])
-    return ", ".join(negatives)
+    lip_sync_route_negative = [
+        "no overhead orbit",
+        "no top-down rotation",
+        "no camera roll",
+        "no spinning around head",
+        "no aggressive zoom out",
+        "no fast retreating camera",
+        "no whip-pan",
+        "no chaotic background dance",
+        "no crowd stealing focus",
+        "no unreadable mouth",
+        "no dead mannequin blocking",
+        "no broken mouth articulation",
+        "no face distortion",
+        "no duplicated microphone",
+        "no ghost hand on microphone",
+    ]
+    i2v_route_negative = [
+        "no jerky dance",
+        "no fast flailing arms",
+        "no abrupt spins",
+        "no violent head whipping",
+        "no high-frequency body shaking",
+        "no aggressive torso snapping",
+        "no frantic crowd turbulence",
+        "no overhead orbit",
+        "no top orbit",
+        "no head-top camera circle",
+        "no drone-like loop",
+        "no roll-tilt orbit",
+        "no identity drift",
+    ]
+    ending_afterglow_negative = [
+        "no abrupt cut feeling",
+        "no chaotic outro movement",
+        "no fast camera retreat",
+        "no frantic background extras",
+        "no random dance explosion in final hold",
+        "no unreadable final pose",
+    ]
+
+    if not scene:
+        return ", ".join(shared_safety_floor)
+
+    resolved_route = str(scene.resolved_workflow_key or scene.ltx_mode or "").strip().lower()
+    transition_type = str(scene.transition_type or "").strip().lower()
+    purpose = str(scene.scene_purpose or "").strip().lower()
+    clip_arc_stage = str(scene.clip_arc_stage or "").strip().lower()
+    is_lip_sync_route = bool(scene.lip_sync) or resolved_route in {"lip_sync_music", "lip_sync"}
+    is_ending_afterglow_scene = (
+        purpose in {"outro", "ending", "afterglow", "payoff"}
+        or clip_arc_stage in {"outro", "ending", "afterglow", "payoff"}
+        or transition_type in {"ending_hold", "afterglow", "outro"}
+    )
+
+    route_block = lip_sync_route_negative if is_lip_sync_route else i2v_route_negative
+    merged: list[str] = [*route_block, *shared_safety_floor]
+    if is_ending_afterglow_scene:
+        merged.extend(ending_afterglow_negative)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in merged:
+        normalized = str(token or "").strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return ", ".join(deduped)
 
 
 def _scene_requires_explicit_first_last_prompts(scene: ScenarioDirectorScene) -> bool:
