@@ -4231,7 +4231,7 @@ def _split_clause_units(text: str) -> list[str]:
         return []
     return [
         part.strip(" -–—,")
-        for part in re.split(r"(?:\s*[;:]\s+|\s+\b(?:then|and then|and|as|as music fades|ends with)\b\s+)", cleaned, flags=re.IGNORECASE)
+        for part in re.split(r"(?:\s*[;:]\s+|\s+\b(?:then|and then|as music fades|ends with)\b\s+)", cleaned, flags=re.IGNORECASE)
         if part.strip(" -–—,")
     ]
 
@@ -4528,6 +4528,11 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
         "final_lipsync_plus_afterimage" if should_upgrade_first_half_to_lipsync else "ending_progression_plus_afterglow"
     )
     diagnostics.segmentationRepairSource = "final_scene_repair"
+    diagnostics.clip_formula_rebalance_applied = True
+    diagnostics.rebalance_reason = "final_scene_repair_split_applied"
+    diagnostics.rebalance_actions = [
+        f"split_final_scene:{diagnostics.final_scene_split_source_scene_id or base_id}->{lip_scene_id},{hold_scene_id}",
+    ]
     diagnostics.oversizedScenesSplitCount = 1
     return storyboard_out
 
@@ -11104,6 +11109,7 @@ def _run_audio_first_single_call(payload: dict[str, Any], audio_context: dict[st
     legacy_payload = _map_single_call_to_storyboard_out(parsed_single, payload=payload)
     logger.info("[SCENARIO DIRECTOR] mapped single-call result to legacy storyboardOut")
     storyboard_out = ScenarioDirectorStoryboardOut.model_validate(legacy_payload)
+    storyboard_out = _maybe_split_final_hybrid_outro_scene(storyboard_out)
     hardening_payload = {**payload, "_single_call_payload": parsed_single}
     storyboard_out = _harden_storyboard_out(storyboard_out, hardening_payload)
     generation_scenes = [
