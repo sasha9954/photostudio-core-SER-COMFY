@@ -53,7 +53,6 @@ function resolveApiBase(){
 
   const protocol = String(window.location.protocol || "http:");
   const hostname = String(window.location.hostname || "").trim();
-  const port = String(window.location.port || "").trim();
   const origin = String(window.location.origin || "").trim();
 
   if (!hostname) {
@@ -61,10 +60,8 @@ function resolveApiBase(){
   }
 
   // Frontend must always call backend API, never Vite/static host.
-  if (port === "5173" || port === "4173" || port === "3000") {
-    const backendBase = `${protocol}//${hostname}:8000`;
-    console.warn("[API_BASE] VITE_API_BASE_URL is empty; using dev-port fallback:", backendBase);
-    return backendBase;
+  if (import.meta.env.DEV) {
+    return `${protocol}//${hostname}:8000`;
   }
 
   // Same-origin deployment (including reverse proxy to backend API).
