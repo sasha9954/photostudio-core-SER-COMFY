@@ -1196,6 +1196,13 @@ class ScenarioDirectorDiagnostics(BaseModel):
     final_scene_split_source_scene_id: str = ""
     final_scene_split_created_ids: list[str] = Field(default_factory=list)
     final_scene_split_strategy: str = ""
+    sentenceBoundaryCandidates: list[str] = Field(default_factory=list)
+    clauseBoundaryCandidates: list[str] = Field(default_factory=list)
+    finalSceneOversizeDetected: bool = False
+    finalSceneSplitConsidered: bool = False
+    segmentationRepairSource: str = ""
+    oversizedScenesDetected: list[str] = Field(default_factory=list)
+    oversizedScenesSplitCount: int = 0
 
     @model_validator(mode="after")
     def _normalize(self) -> "ScenarioDirectorDiagnostics":
@@ -1240,6 +1247,13 @@ class ScenarioDirectorDiagnostics(BaseModel):
         self.final_scene_split_source_scene_id = str(self.final_scene_split_source_scene_id or "").strip()
         self.final_scene_split_created_ids = [str(item).strip() for item in (self.final_scene_split_created_ids or []) if str(item).strip()]
         self.final_scene_split_strategy = str(self.final_scene_split_strategy or "").strip()
+        self.sentenceBoundaryCandidates = [str(item).strip() for item in (self.sentenceBoundaryCandidates or []) if str(item).strip()]
+        self.clauseBoundaryCandidates = [str(item).strip() for item in (self.clauseBoundaryCandidates or []) if str(item).strip()]
+        self.finalSceneOversizeDetected = _coerce_bool(self.finalSceneOversizeDetected, False)
+        self.finalSceneSplitConsidered = _coerce_bool(self.finalSceneSplitConsidered, False)
+        self.segmentationRepairSource = str(self.segmentationRepairSource or "").strip().lower()
+        self.oversizedScenesDetected = [str(item).strip() for item in (self.oversizedScenesDetected or []) if str(item).strip()]
+        self.oversizedScenesSplitCount = max(0, int(_safe_float(self.oversizedScenesSplitCount, 0.0)))
         return self
 
 
@@ -4204,14 +4218,86 @@ def _build_afterimage_text(scene: ScenarioDirectorScene) -> tuple[str, str, str,
     return scene_goal, frame_description, action_in_frame, camera
 
 
+def _split_sentence_units(text: str) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", str(text or "").strip())
+    if not cleaned:
+        return []
+    return [part.strip(" -–—") for part in re.split(r"(?:[\n\r]+|(?<=[\.\!\?])\s+)", cleaned) if part.strip(" -–—")]
+
+
+def _split_clause_units(text: str) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", str(text or "").strip())
+    if not cleaned:
+        return []
+    return [
+        part.strip(" -–—,")
+        for part in re.split(r"(?:\s*[;:]\s+|\s+\b(?:then|and then|and|as|as music fades|ends with)\b\s+)", cleaned, flags=re.IGNORECASE)
+        if part.strip(" -–—,")
+    ]
+
+
+def _collect_scene_boundary_candidates(scene: ScenarioDirectorScene) -> tuple[list[str], list[str]]:
+    sentence_candidates: list[str] = []
+    clause_candidates: list[str] = []
+    for raw in (
+        scene.scene_goal,
+        scene.frame_description,
+        scene.action_in_frame,
+        scene.local_phrase or "",
+        scene.what_from_audio_this_scene_uses,
+    ):
+        for sentence in _split_sentence_units(raw):
+            if sentence not in sentence_candidates:
+                sentence_candidates.append(sentence)
+        for clause in _split_clause_units(raw):
+            if clause not in clause_candidates:
+                clause_candidates.append(clause)
+    return sentence_candidates, clause_candidates
+
+
+def _scene_has_multi_phase_action(scene: ScenarioDirectorScene, sentence_candidates: list[str], clause_candidates: list[str]) -> bool:
+    if len(sentence_candidates) >= 2 or len(clause_candidates) >= 3:
+        return True
+    text = _scene_text_blob(scene)
+    phase_markers = (" then ", " and then ", " as music fades", " ends with ", " finally ", " reveal ", " pull back ")
+    return sum(1 for marker in phase_markers if marker in text) >= 2
+
+
+def _pick_text_aware_split_point(start: float, end: float, sentence_candidates: list[str], clause_candidates: list[str]) -> float:
+    duration = max(0.0, end - start)
+    if duration <= 0.0:
+        return start
+    units = clause_candidates if len(clause_candidates) >= 2 else sentence_candidates
+    if len(units) < 2:
+        return round(start + duration * 0.58, 3)
+    first = units[0]
+    total_chars = sum(max(1, len(item)) for item in units)
+    first_ratio = max(0.35, min(0.7, max(1, len(first)) / max(1, total_chars)))
+    return round(start + duration * first_ratio, 3)
+
+
 def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryboardOut) -> ScenarioDirectorStoryboardOut:
     scenes = storyboard_out.scenes or []
     diagnostics = storyboard_out.diagnostics
+    clip_duration = max([_safe_float(scene.time_end, 0.0) for scene in scenes], default=0.0)
+    short_clip = 20.0 <= clip_duration <= 40.0
+    oversized_threshold = 5.5 if short_clip else 6.0
+    diagnostics.oversizedScenesDetected = [
+        str(scene.scene_id or "").strip()
+        for scene in scenes
+        if max(0.0, _safe_float(scene.duration, _safe_float(scene.time_end, 0.0) - _safe_float(scene.time_start, 0.0))) > oversized_threshold
+    ]
+    diagnostics.oversizedScenesSplitCount = 0
     diagnostics.final_scene_split_applied = False
     diagnostics.final_scene_split_reason = "not_evaluated"
     diagnostics.final_scene_split_source_scene_id = ""
     diagnostics.final_scene_split_created_ids = []
     diagnostics.final_scene_split_strategy = ""
+    diagnostics.finalSceneOversizeDetected = False
+    diagnostics.finalSceneSplitConsidered = False
+    diagnostics.sentenceBoundaryCandidates = []
+    diagnostics.clauseBoundaryCandidates = []
+    diagnostics.segmentationRepairSource = ""
     if not scenes:
         diagnostics.final_scene_split_reason = "no_scenes"
         return storyboard_out
@@ -4222,18 +4308,36 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     is_non_lip_route = route in {"i2v", "f_l", "image_video", "first_last", "downgraded_to_i2v", "blocked"}
     has_final_performance = _scene_has_final_line_performance_intent(last_scene)
     has_ending_intent = _scene_has_ending_intent(last_scene)
-    long_duration = duration >= 5.6
+    ending_purpose = str(last_scene.scene_purpose or "").strip().lower()
+    ending_purpose_hint = ending_purpose in {"ending", "ending_hold", "outro_resolution"}
+    sentence_candidates, clause_candidates = _collect_scene_boundary_candidates(last_scene)
+    multi_phase_action = _scene_has_multi_phase_action(last_scene, sentence_candidates, clause_candidates)
+    long_duration = duration > oversized_threshold
+    diagnostics.finalSceneOversizeDetected = bool(long_duration)
+    diagnostics.sentenceBoundaryCandidates = sentence_candidates
+    diagnostics.clauseBoundaryCandidates = clause_candidates
+    diagnostics.finalSceneSplitConsidered = bool(
+        is_non_lip_route and (
+            long_duration
+            or ending_purpose_hint
+            or len(sentence_candidates) >= 2
+            or len(clause_candidates) >= 2
+        )
+    )
+    if not diagnostics.finalSceneSplitConsidered:
+        diagnostics.final_scene_split_reason = "split_not_considered_scene_not_suspicious"
+        return storyboard_out
     if not is_non_lip_route:
         diagnostics.final_scene_split_reason = "route_not_non_lip"
         return storyboard_out
-    if not has_final_performance:
-        diagnostics.final_scene_split_reason = "missing_final_performance_intent"
-        return storyboard_out
-    if not has_ending_intent:
+    if not (has_ending_intent or ending_purpose_hint):
         diagnostics.final_scene_split_reason = "missing_ending_intent"
         return storyboard_out
-    if not long_duration:
+    if not long_duration and not multi_phase_action:
         diagnostics.final_scene_split_reason = "duration_not_long_enough"
+        return storyboard_out
+    if long_duration and not multi_phase_action and len(sentence_candidates) < 2 and len(clause_candidates) < 2:
+        diagnostics.final_scene_split_reason = "scene_unsplittable_single_phase"
         return storyboard_out
 
     existing_ids = {str(scene.scene_id or "").strip() for scene in scenes}
@@ -4255,11 +4359,10 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     hold_scene_id = _unique_split_id("B")
     start = _safe_float(last_scene.time_start, 0.0)
     end = max(start, _safe_float(last_scene.time_end, start))
-    target_hold = min(2.4, max(1.25, duration * 0.34))
-    lip_end = round(max(start + 2.4, end - target_hold), 3)
-    if lip_end >= end - 1.0:
-        lip_end = round(max(start + 2.2, end - 1.0), 3)
-    if lip_end <= start + 1.8:
+    split_time = _pick_text_aware_split_point(start, end, sentence_candidates, clause_candidates)
+    min_part = 1.7 if short_clip else 1.5
+    lip_end = round(min(max(split_time, start + min_part), end - min_part), 3)
+    if lip_end <= start + min_part or lip_end >= end - min_part:
         diagnostics.final_scene_split_reason = "split_window_too_narrow"
         return storyboard_out
 
@@ -4281,28 +4384,29 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     hold_data["duration"] = round(max(0.0, end - lip_end), 3)
     hold_data["requested_duration_sec"] = hold_data["duration"]
 
+    should_upgrade_first_half_to_lipsync = bool(has_final_performance and has_ending_intent)
     lip_data["scene_purpose"] = "payoff"
-    lip_data["story_function"] = "final_lipsync_payoff"
+    lip_data["story_function"] = "ending_progression_beat"
     lip_data["clip_arc_stage"] = "power_return"
-    lip_data["performance_phase"] = "final_lipsync_payoff"
-    lip_data["video_generation_route"] = "lip_sync_music"
-    lip_data["planned_video_generation_route"] = "lip_sync_music"
-    lip_data["resolved_workflow_key"] = "lip_sync_music"
-    lip_data["resolved_workflow_file"] = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["lip_sync_music"]
-    lip_data["render_mode"] = "lip_sync_music"
-    lip_data["ltx_mode"] = "lip_sync_music"
-    lip_data["lip_sync"] = True
-    lip_data["send_audio_to_generator"] = True
-    lip_data["music_vocal_lipsync_allowed"] = True
-    lip_data["audio_slice_kind"] = "music_vocal"
+    lip_data["performance_phase"] = "ending_progression"
+    lip_data["video_generation_route"] = "lip_sync_music" if should_upgrade_first_half_to_lipsync else "i2v"
+    lip_data["planned_video_generation_route"] = "lip_sync_music" if should_upgrade_first_half_to_lipsync else "i2v"
+    lip_data["resolved_workflow_key"] = "lip_sync_music" if should_upgrade_first_half_to_lipsync else "i2v"
+    lip_data["resolved_workflow_file"] = CLIP_CANONICAL_WORKFLOW_FILE_BY_KEY["lip_sync_music" if should_upgrade_first_half_to_lipsync else "i2v"]
+    lip_data["render_mode"] = "lip_sync_music" if should_upgrade_first_half_to_lipsync else "image_video"
+    lip_data["ltx_mode"] = "lip_sync_music" if should_upgrade_first_half_to_lipsync else "i2v"
+    lip_data["lip_sync"] = should_upgrade_first_half_to_lipsync
+    lip_data["send_audio_to_generator"] = should_upgrade_first_half_to_lipsync
+    lip_data["music_vocal_lipsync_allowed"] = should_upgrade_first_half_to_lipsync
+    lip_data["audio_slice_kind"] = "music_vocal" if should_upgrade_first_half_to_lipsync else "none"
     lip_data["audio_slice_start_sec"] = lip_data["time_start"]
     lip_data["audio_slice_end_sec"] = lip_data["time_end"]
     lip_data["audio_slice_expected_duration_sec"] = lip_data["duration"]
-    lip_data["audio_slice_bounds_filled_from_scene"] = True
-    lip_data["lip_sync_route_state_consistent"] = True
-    if str(lip_data.get("performance_framing") or "").strip().lower() not in LIP_SYNC_PERFORMANCE_FRAMINGS:
+    lip_data["audio_slice_bounds_filled_from_scene"] = should_upgrade_first_half_to_lipsync
+    lip_data["lip_sync_route_state_consistent"] = should_upgrade_first_half_to_lipsync
+    if should_upgrade_first_half_to_lipsync and str(lip_data.get("performance_framing") or "").strip().lower() not in LIP_SYNC_PERFORMANCE_FRAMINGS:
         lip_data["performance_framing"] = "tight_medium"
-    lip_data["camera"] = _lip_sync_safe_camera_line()
+    lip_data["camera"] = _lip_sync_safe_camera_line() if should_upgrade_first_half_to_lipsync else str(lip_data.get("camera") or "").strip()
     source_phrase = str(last_scene.local_phrase or "").strip()
     lip_local_phrase = ""
     if source_phrase:
@@ -4324,18 +4428,34 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
                 pre_hold_candidates.append(normalized_part)
         lip_local_phrase = (pre_hold_candidates[-1] if pre_hold_candidates else (fallback_candidates[-1] if fallback_candidates else "")).strip()
     if not lip_local_phrase:
-        lip_local_phrase = "Final direct-to-camera vocal payoff with last strong lyrical emphasis."
+        lip_local_phrase = "Ending progression beat completed before the final release hold."
     lip_data["local_phrase"] = lip_local_phrase
-    lip_data["what_from_audio_this_scene_uses"] = (
-        "Final vocal punch / final direct-to-camera payoff / last strong vocal emphasis before release."
+    lip_data["what_from_audio_this_scene_uses"] = "Completed ending progression beat before final release/afterglow."
+    lip_summary = (
+        "Final vocal payoff lands in-camera with emotionally precise lyric articulation and performance intensity."
+        if should_upgrade_first_half_to_lipsync
+        else "Ending progression beat completes as a coherent visual clause before final release."
     )
-    lip_summary = "Final vocal payoff lands in-camera with emotionally precise lyric articulation and performance intensity."
-    lip_motion = "Controlled singer-forward movement, expressive phrase-timed hands, subtle body pulse, and readable mouth articulation."
+    lip_motion = (
+        "Controlled singer-forward movement, expressive phrase-timed hands, subtle body pulse, and readable mouth articulation."
+        if should_upgrade_first_half_to_lipsync
+        else "Confident movement progression resolves as a complete action beat before the hold."
+    )
     lip_visual_prompt = (
         "Final lip-sync payoff, tight-medium singer framing, eyes/mouth/neck/shoulders readable, direct emotional delivery, no outro hold."
+        if should_upgrade_first_half_to_lipsync
+        else "Ending progression beat, meaningful motion completion, no abrupt cut mid-gesture, preserve narrative continuity."
     )
-    lip_video_prompt = "Performer delivers the true final vocal line to camera with clear articulation and controlled emotional push."
-    lip_data["scene_goal"] = "Deliver the final vocal payoff directly to camera before release."
+    lip_video_prompt = (
+        "Performer delivers the true final vocal line to camera with clear articulation and controlled emotional push."
+        if should_upgrade_first_half_to_lipsync
+        else "Scene completes the ending progression beat in full before transitioning to the final afterglow hold."
+    )
+    lip_data["scene_goal"] = (
+        "Deliver the final vocal payoff directly to camera before release."
+        if should_upgrade_first_half_to_lipsync
+        else "Complete the ending progression beat before the final release hold."
+    )
     lip_data["frame_description"] = lip_summary
     lip_data["action_in_frame"] = lip_video_prompt
     lip_data["summary"] = lip_summary
@@ -4344,9 +4464,11 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     lip_data["image_prompt"] = lip_visual_prompt
     lip_data["video_prompt"] = lip_video_prompt
     lip_data["workflow_decision_reason"] = (
-        f"{str(last_scene.workflow_decision_reason or '').strip()} Final hybrid outro split: isolated final lip-sync payoff before ending hold."
+        f"{str(last_scene.workflow_decision_reason or '').strip()} Final-scene repair split: sentence/clause complete progression isolated before ending release."
     ).strip()
-    lip_data["lip_sync_decision_reason"] = "forced_final_payoff_lipsync_split_applied"
+    lip_data["lip_sync_decision_reason"] = (
+        "forced_final_payoff_lipsync_split_applied" if should_upgrade_first_half_to_lipsync else "not_lip_sync_route_but_meaning_split_applied"
+    )
 
     hold_goal, hold_frame, hold_action, hold_camera = _build_afterimage_text(last_scene)
     hold_data["scene_purpose"] = "ending_hold"
@@ -4385,9 +4507,9 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     hold_data["image_prompt"] = hold_visual_prompt
     hold_data["video_prompt"] = hold_video_prompt
     hold_data["local_phrase"] = None
-    hold_data["what_from_audio_this_scene_uses"] = "Post-phrase resonance and release after vocals, without active singing articulation."
+    hold_data["what_from_audio_this_scene_uses"] = "Final release/pose/afterglow beat after ending progression, without cutting mid-thought."
     hold_data["workflow_decision_reason"] = (
-        f"{str(last_scene.workflow_decision_reason or '').strip()} Final hybrid outro split: ending hold kept as emotional afterimage."
+        f"{str(last_scene.workflow_decision_reason or '').strip()} Final-scene repair split: ending hold isolated as complete release/afterglow beat."
     ).strip()
     hold_data["lip_sync_decision_reason"] = "non_lip_afterimage_hold"
 
@@ -4396,9 +4518,17 @@ def _maybe_split_final_hybrid_outro_scene(storyboard_out: ScenarioDirectorStoryb
     updated_scenes.append(ScenarioDirectorScene.model_validate(hold_data))
     storyboard_out.scenes = updated_scenes
     diagnostics.final_scene_split_applied = True
-    diagnostics.final_scene_split_reason = "final_non_lip_hybrid_outro_scene_split"
+    diagnostics.final_scene_split_reason = (
+        "final_non_lip_hybrid_outro_scene_split_with_lipsync_upgrade"
+        if should_upgrade_first_half_to_lipsync
+        else "final_non_lip_outro_scene_split_sentence_clause_repair"
+    )
     diagnostics.final_scene_split_created_ids = [lip_scene_id, hold_scene_id]
-    diagnostics.final_scene_split_strategy = "final_lipsync_plus_afterimage"
+    diagnostics.final_scene_split_strategy = (
+        "final_lipsync_plus_afterimage" if should_upgrade_first_half_to_lipsync else "ending_progression_plus_afterglow"
+    )
+    diagnostics.segmentationRepairSource = "final_scene_repair"
+    diagnostics.oversizedScenesSplitCount = 1
     return storyboard_out
 
 
@@ -10790,6 +10920,12 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
     duration_span = (max(durations) - min(durations)) if durations else 0.0
     clip_formula_rebalance_applied = False
     clip_formula_rebalance_detected_need = bool(len(durations) >= 4 and duration_span > 2.0)
+    oversized_threshold = 5.5 if 20.0 <= duration <= 40.0 else 6.0
+    oversized_scene_ids = [
+        str(scene.get("scene_id") or "").strip()
+        for scene in legacy_scenes
+        if isinstance(scene, dict) and _safe_float(scene.get("duration"), 0.0) > oversized_threshold
+    ]
     director_summary = (
         str(debug.get("alignment") or "").strip()
         or str(global_story.get("overallNarrative") or "").strip()
@@ -10876,6 +11012,18 @@ def _map_single_call_to_storyboard_out(result: dict[str, Any], payload: dict[str
             "duration_span_debug": round(duration_span, 3),
             "rebalance_reason": "duration_span_heuristic_only_no_rebalance_action",
             "rebalance_actions": [],
+            "sentenceBoundaryCandidates": [],
+            "clauseBoundaryCandidates": [],
+            "finalSceneOversizeDetected": bool(
+                legacy_scenes
+                and _safe_float((legacy_scenes[-1] or {}).get("duration"), 0.0) > oversized_threshold
+            ),
+            "finalSceneSplitConsidered": False,
+            "finalSceneSplitApplied": False,
+            "finalSceneSplitReason": "not_evaluated_in_initial_single_call_parse",
+            "segmentationRepairSource": "",
+            "oversizedScenesDetected": oversized_scene_ids,
+            "oversizedScenesSplitCount": 0,
         },
         "scenes": legacy_scenes,
     }
