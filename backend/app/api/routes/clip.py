@@ -187,6 +187,8 @@ class ClipVideoIn(BaseModel):
     sceneId: str
     imageUrl: str | None = None
     videoPrompt: str | None = None
+    videoNegativePrompt: str | None = None
+    video_negative_prompt: str | None = None
     requestedDurationSec: int | float | None = 5
     transitionType: str | None = "single"
     startImageUrl: str | None = None
@@ -13615,13 +13617,22 @@ def clip_video(payload: ClipVideoIn):
             duet_identity_contract=payload.duetIdentityContract,
             director_genre_intent=payload.directorGenreIntent,
         )
+        scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+        scene_video_negative_prompt = str(
+            payload.videoNegativePrompt
+            or payload.video_negative_prompt
+            or scene_contract_for_prompt.get("videoNegativePrompt")
+            or scene_contract_for_prompt.get("video_negative_prompt")
+            or ""
+        ).strip()
         print(
             "[CLIP VIDEO PROMPT TRANSPORT] "
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} source_image_url={source_image_url} "
             f"videoPromptLength={prompt_debug.get('videoPromptLength')} transitionActionPromptLength={prompt_debug.get('transitionActionPromptLength')} "
             f"effectivePromptLength={prompt_debug.get('effectivePromptLength')} "
             f"requestedPromptPreview={_prompt_preview(str(payload.videoPrompt or ''), 320)} "
-            f"effectivePromptPreview={str(prompt_debug.get('effectivePromptPreview') or '')}"
+            f"effectivePromptPreview={str(prompt_debug.get('effectivePromptPreview') or '')} "
+            f"videoNegativePromptPreview={_prompt_preview(scene_video_negative_prompt, 220)}"
         )
 
         try:
@@ -13939,6 +13950,7 @@ def clip_video(payload: ClipVideoIn):
             image_bytes=image_bytes,
             image_filename=image_filename,
             prompt=effective_prompt,
+            negative_prompt=scene_video_negative_prompt,
             width=width,
             height=height,
             requested_duration_sec=requested_duration,
@@ -14110,6 +14122,9 @@ def clip_video(payload: ClipVideoIn):
             "[CLIP VIDEO PROMPT PATCHED NODES] "
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} "
             f"promptPatchedNodeIds={comfy_debug.get('prompt_patched_node_ids') or []} "
+            f"negativePromptNodePatched={bool(comfy_debug.get('negative_prompt_node_patched'))} "
+            f"negativePromptSource={str(comfy_debug.get('negative_prompt_source') or 'missing')} "
+            f"negativePromptPreview={str(comfy_debug.get('negative_prompt_preview') or '')} "
             f"finalPromptPreview={str(comfy_debug.get('final_prompt_preview') or '')}"
         )
         print(f"[COMFY REMOTE] prompt_id={prompt_id}")
@@ -14140,6 +14155,10 @@ def clip_video(payload: ClipVideoIn):
                 "duetContractDetected": prompt_debug.get("duetContractDetected"),
                 "duetContractPreview": prompt_debug.get("duetContractPreview"),
                 "promptPatchedNodeIds": comfy_debug.get("prompt_patched_node_ids") or [],
+                "negativePromptNodePatched": bool(comfy_debug.get("negative_prompt_node_patched")),
+                "negativePromptPreview": str(comfy_debug.get("negative_prompt_preview") or ""),
+                "resolvedNegativePromptNodeId": str(comfy_debug.get("resolved_negative_prompt_node_id") or ""),
+                "negativePromptSource": str(comfy_debug.get("negative_prompt_source") or "missing"),
             },
         }
 

@@ -1029,6 +1029,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ru: source.videoPromptRu ?? source.video_prompt_ru ?? source.videoPrompt ?? source.video_prompt,
     en: source.videoPromptEn ?? source.video_prompt_en ?? source.videoPrompt ?? source.video_prompt,
   });
+  const videoNegativePrompt = normalizeText(source.videoNegativePrompt ?? source.video_negative_prompt);
   const cameraDual = normalizeDualField({
     ru: source.cameraRu ?? source.camera_ru ?? source.cameraIdea ?? source.camera,
     en: source.cameraEn ?? source.camera_en ?? source.cameraIdea ?? source.camera,
@@ -1113,6 +1114,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     imagePromptEn: imageDual.en,
     videoPromptRu: videoDual.ru,
     videoPromptEn: videoDual.en,
+    videoNegativePrompt: videoNegativePrompt || undefined,
+    video_negative_prompt: videoNegativePrompt || undefined,
     cameraRu: cameraDual.ru,
     cameraEn: cameraDual.en,
     emotionRu: emotionDual.ru,
