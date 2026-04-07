@@ -97,25 +97,71 @@ function isLikelyAssetUrl(value) {
   return false;
 }
 
-function toFirstRefValue(refs) {
-  if (Array.isArray(refs) && refs.length) {
-    const first = refs[0];
-    return typeof first === "string" ? first : (first?.url || first?.value || "");
-  }
-  return "";
+function normalizeRefCandidate(rawValue) {
+  const clean = String(rawValue || "").trim();
+  if (!clean) return "";
+  if (!isLikelyAssetUrl(clean)) return "";
+  if (!/^(https?:\/\/|data:|blob:|\/|static\/|assets\/)/i.test(clean)) return "";
+  return String(resolveAssetUrl(clean) || "").trim();
+}
+
+function flattenRefCandidates(refs = []) {
+  if (!Array.isArray(refs)) return [];
+  const out = [];
+  refs.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      out.push(entry);
+      return;
+    }
+    if (typeof entry === "object") {
+      out.push(entry?.url, entry?.imageUrl, entry?.value, entry?.preview);
+    }
+  });
+  return out;
+}
+
+export function buildRefImageCandidates(refData = {}) {
+  const item = refData && typeof refData === "object" ? refData : {};
+  const orderedRawCandidates = [
+    ...flattenRefCandidates(item?.refs),
+    item?.imageUrl,
+    item?.value,
+    item?.preview,
+    item?.url,
+  ];
+  const unique = [];
+  const seen = new Set();
+  orderedRawCandidates.forEach((raw) => {
+    const normalized = normalizeRefCandidate(raw);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    unique.push(normalized);
+  });
+  return unique;
+}
+
+export function resolveBestRefThumbnailUrl(refData = {}) {
+  const candidates = buildRefImageCandidates(refData);
+  return candidates[0] || "";
 }
 
 export function resolveRefThumbnailUrl(refData = {}) {
+  return resolveBestRefThumbnailUrl(refData);
+}
+
+export function hasAnyRefImageCandidate(refData = {}) {
   const item = refData && typeof refData === "object" ? refData : {};
-  const refsFirst = toFirstRefValue(item?.refs);
-  const directCandidates = [item?.url, item?.value, refsFirst, item?.imageUrl];
-  for (const candidateRaw of directCandidates) {
-    const candidate = String(candidateRaw || "").trim();
-    if (!candidate || !isLikelyAssetUrl(candidate)) continue;
-    const resolved = String(resolveAssetUrl(candidate) || "").trim();
-    if (resolved) return resolved;
+  const raw = [
+    ...flattenRefCandidates(item?.refs),
+    item?.imageUrl,
+    item?.value,
+    item?.preview,
+    item?.url,
+  ];
+  for (const candidateRaw of raw) {
+    const resolved = normalizeRefCandidate(candidateRaw);
+    if (resolved) return true;
   }
-  const previewCandidate = String(item?.preview || "").trim();
-  if (!previewCandidate || !isLikelyAssetUrl(previewCandidate)) return "";
-  return String(resolveAssetUrl(previewCandidate) || "").trim();
+  return false;
 }

@@ -1,5 +1,5 @@
-import React from "react";
-import { Handle, Position, NodeShell, handleStyle, resolveRefThumbnailUrl, useRef } from "./comfyNodeShared";
+import React, { useEffect, useMemo, useState } from "react";
+import { Handle, Position, NodeShell, buildRefImageCandidates, handleStyle, useRef } from "./comfyNodeShared";
 import { formatRefProfileDetails } from "./refProfileDetails";
 
 const REF_STATUS_LABELS = {
@@ -23,19 +23,13 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const refs = Array.isArray(data?.refs)
     ? data.refs
       .map((item) => {
-        const thumbnailUrl = resolveRefThumbnailUrl(item);
         return {
-          url: thumbnailUrl || String(item?.url || "").trim(),
-          thumbnailUrl,
+          ...(item && typeof item === "object" ? item : { value: String(item || "") }),
           name: String(item?.name || "").trim(),
           type: String(item?.type || "").trim(),
-          preview: String(item?.preview || "").trim(),
-          value: String(item?.value || "").trim(),
-          refs: Array.isArray(item?.refs) ? item.refs : [],
-          imageUrl: String(item?.imageUrl || "").trim(),
         };
       })
-      .filter((item) => !!item.url || !!item.value || item.refs.length > 0 || !!item.preview || !!item.imageUrl)
+      .filter((item) => buildRefImageCandidates(item).length > 0)
       .slice(0, maxFiles)
     : [];
   const canAddMore = refs.length < maxFiles;
@@ -50,6 +44,41 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
   const onInputChange = async (e) => { const files = Array.from(e.target.files || []); if (files.length) await data?.onPickImage?.(id, files); e.target.value = ""; };
+
+  const RefThumbImage = ({ item, idx }) => {
+    const candidates = useMemo(() => buildRefImageCandidates(item), [item]);
+    const [candidateIndex, setCandidateIndex] = useState(0);
+    const activeSrc = candidates[candidateIndex] || "";
+    const candidateSignature = candidates.join("|");
+    useEffect(() => { setCandidateIndex(0); }, [candidateSignature]);
+
+    useEffect(() => {
+      console.debug("[REF THUMB FIX] candidates", { handleId, idx, candidates });
+    }, [handleId, idx, candidates]);
+
+    if (!activeSrc) {
+      return <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен"><span>thumbnail недоступен</span></div>;
+    }
+
+    return (
+      <button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(activeSrc)} title="Открыть фото">
+        <img
+          src={activeSrc}
+          alt={`${title} ${idx + 1}`}
+          className="clipSB_refThumbImg"
+          onError={() => {
+            const nextIndex = candidateIndex + 1;
+            if (nextIndex < candidates.length) {
+              console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: candidates[nextIndex] });
+              setCandidateIndex(nextIndex);
+            } else {
+              console.debug("[REF THUMB FIX] onError fallback", { handleId, idx, failed: activeSrc, next: null });
+            }
+          }}
+        />
+      </button>
+    );
+  };
 
   return (<>
     <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
@@ -82,24 +111,9 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
         </div>
       ) : null}
       <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
-        console.debug("[REF NODE THUMBNAIL]", {
-          nodeType: data?.kind || handleId || "ref_lite",
-          preview: item.preview,
-          value: item.value,
-          refs: item.refs,
-          resolvedThumbnailUrl: item.thumbnailUrl,
-        });
         return (
-          <div className="clipSB_refThumb" key={`${item.url || "ref"}-${idx}`}>
-            {item.thumbnailUrl ? (
-              <button className="clipSB_refLiteOpen" onClick={() => data?.onOpenLightbox?.(item.thumbnailUrl)} title="Открыть фото">
-                <img src={item.thumbnailUrl} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
-              </button>
-            ) : (
-              <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен">
-                <span>thumbnail недоступен</span>
-              </div>
-            )}
+          <div className="clipSB_refThumb" key={`${item.url || item.value || item.name || "ref"}-${idx}`}>
+            <RefThumbImage item={item} idx={idx} />
             <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button>
           </div>
         );
