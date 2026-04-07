@@ -13246,17 +13246,37 @@ onClipSec: (nodeId, value) => {
                       plannerMode: mode,
                     },
                   };
+                  const clipPipelinePayload = {
+                    ...payload,
+                    mode: "clip_pipeline",
+                    director_controls: {
+                      ...(payload?.director_controls && typeof payload.director_controls === "object" ? payload.director_controls : {}),
+                      contentType: "music_video",
+                    },
+                    metadata: {
+                      ...(payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
+                      pipelineMode: "clip_pipeline_v1",
+                      useClipStoryboardPipeline: true,
+                    },
+                  };
+                  console.debug("[CLIP PIPELINE REQUEST PAYLOAD]", {
+                    mode: clipPipelinePayload.mode,
+                    pipelineMode: clipPipelinePayload.metadata?.pipelineMode,
+                    useClipStoryboardPipeline: clipPipelinePayload.metadata?.useClipStoryboardPipeline,
+                    contentType: clipPipelinePayload.director_controls?.contentType,
+                    requestSource: clipPipelinePayload.metadata?.requestSource,
+                  });
                   console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
                     phase: "before_fetch",
                     source: "comfyBrain:onParse",
                     scenarioDirectorRequestId,
                     scenarioDirectorClickCount,
-                    modeFlags: payload?.metadata?.modeFlags || {},
+                    modeFlags: clipPipelinePayload?.metadata?.modeFlags || {},
                   });
 
                   const out = await fetchJson("/api/clip/comfy/scenario-director/generate", {
                     method: "POST",
-                    body: payload,
+                    body: clipPipelinePayload,
                     headers: { "x-scenario-director-request-id": scenarioDirectorRequestId },
                     signal: controller.signal,
                   });
@@ -15110,13 +15130,36 @@ onClipSec: (nodeId, value) => {
                     },
                   },
                 };
+                const clipPipelineContentType = String(requestPayloadWithDebug?.director_controls?.contentType || "").trim().toLowerCase();
+                const normalizedRequestPayload = clipPipelineContentType === "music_video"
+                  ? {
+                    ...requestPayloadWithDebug,
+                    mode: "clip_pipeline",
+                    director_controls: {
+                      ...(requestPayloadWithDebug?.director_controls && typeof requestPayloadWithDebug.director_controls === "object" ? requestPayloadWithDebug.director_controls : {}),
+                      contentType: "music_video",
+                    },
+                    metadata: {
+                      ...(requestPayloadWithDebug?.metadata && typeof requestPayloadWithDebug.metadata === "object" ? requestPayloadWithDebug.metadata : {}),
+                      pipelineMode: "clip_pipeline_v1",
+                      useClipStoryboardPipeline: true,
+                    },
+                  }
+                  : requestPayloadWithDebug;
+                console.debug("[CLIP PIPELINE REQUEST PAYLOAD]", {
+                  mode: normalizedRequestPayload?.mode,
+                  pipelineMode: normalizedRequestPayload?.metadata?.pipelineMode,
+                  useClipStoryboardPipeline: normalizedRequestPayload?.metadata?.useClipStoryboardPipeline,
+                  contentType: normalizedRequestPayload?.director_controls?.contentType,
+                  requestSource: normalizedRequestPayload?.metadata?.requestSource,
+                });
                 console.debug("[SCENARIO DIRECTOR UI REQUEST]", {
                   phase: "before_fetch",
                   source: "narrative:onGenerateScenario",
                   scenarioDirectorRequestId,
                   scenarioDirectorClickCount,
                   requestKey,
-                  modeFlags: requestPayloadWithDebug?.metadata?.modeFlags || {},
+                  modeFlags: normalizedRequestPayload?.metadata?.modeFlags || {},
                 });
 
                 try {
@@ -15131,7 +15174,7 @@ onClipSec: (nodeId, value) => {
 
                     Promise.resolve(fetchJson('/api/clip/comfy/scenario-director/generate', {
                       method: 'POST',
-                      body: requestPayloadWithDebug,
+                      body: normalizedRequestPayload,
                       headers: { "x-scenario-director-request-id": scenarioDirectorRequestId },
                       signal: controller.signal,
                     }))
