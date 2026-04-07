@@ -9964,7 +9964,7 @@ def _parse_storyboard_payload(
             "Gemini returned invalid JSON for Scenario Director: could not extract JSON object.",
             status_code=502,
             details={
-                "rawPreview": str(raw_text or "")[:4000],
+                "rawPreview": str(raw_text or "")[:1200],
                 "rawLength": len(str(raw_text or "")),
                 "finishReason": finish_reason or "",
                 "parseStage": parse_stage,
@@ -10114,6 +10114,8 @@ def _build_audio_first_single_call_prompt(payload: dict[str, Any]) -> str:
         "GOOD:\n"
         "- t0: 0.0 → t1: 4.2 → t1: 9.8 → ... → ~60.0\n"
         "Return ONLY valid JSON. No markdown. No comments. No prose outside JSON.\n"
+        "STRICT OUTPUT CONTRACT: top-level JSON MUST include transcript (array), audioStructure (object), semanticTimeline (array), scenes (array).\n"
+        "If you also return input_understanding/storyboard, keep them as optional extras and still keep required top-level contract fields.\n"
         f"Director note: {director_note if director_note else 'empty'}\n"
         f"{references_block}"
         "Output JSON contract (strict, only this shape):\n"
@@ -10312,6 +10314,139 @@ def _adapt_audio_first_compact_to_legacy_contract(compact_payload: dict[str, Any
     }
 
 
+def _adapt_audio_first_rich_payload_to_legacy_contract(rich_payload: dict[str, Any], *, parse_stage: str = "audio_first_initial") -> dict[str, Any] | None:
+    if not isinstance(rich_payload, dict):
+        return None
+    input_understanding = (
+        rich_payload.get("input_understanding")
+        if isinstance(rich_payload.get("input_understanding"), dict)
+        else (
+            rich_payload.get("inputUnderstanding")
+            if isinstance(rich_payload.get("inputUnderstanding"), dict)
+            else {}
+        )
+    )
+    storyboard_candidates: list[dict[str, Any]] = []
+    for key in ("storyboard", "storyBoard", "director_output", "directorOutput", "output", "plan", "scenario_plan"):
+        candidate = rich_payload.get(key)
+        if isinstance(candidate, dict):
+            storyboard_candidates.append(candidate)
+    storyboard_candidates.append(rich_payload)
+
+    storyboard = next(
+        (
+            candidate
+            for candidate in storyboard_candidates
+            if isinstance(candidate.get("scenes"), list) and len(candidate.get("scenes") or []) > 0
+        ),
+        {},
+    )
+    compact_scenes = storyboard.get("scenes") if isinstance(storyboard.get("scenes"), list) else []
+    if not compact_scenes and isinstance(rich_payload.get("scenes"), list):
+        compact_scenes = rich_payload.get("scenes") or []
+    normalized_compact_scenes: list[dict[str, Any]] = []
+    for idx, raw_scene in enumerate(compact_scenes, start=1):
+        if not isinstance(raw_scene, dict):
+            continue
+        scene_id = raw_scene.get("scene_id") or raw_scene.get("sceneId") or raw_scene.get("id") or idx
+        start = _safe_float(
+            raw_scene.get("start_time_sec")
+            if raw_scene.get("start_time_sec") is not None
+            else raw_scene.get("startSec")
+            if raw_scene.get("startSec") is not None
+            else raw_scene.get("t0")
+            if raw_scene.get("t0") is not None
+            else raw_scene.get("start")
+            if raw_scene.get("start") is not None
+            else raw_scene.get("time_start"),
+            0.0,
+        )
+        end = _safe_float(
+            raw_scene.get("end_time_sec")
+            if raw_scene.get("end_time_sec") is not None
+            else raw_scene.get("endSec")
+            if raw_scene.get("endSec") is not None
+            else raw_scene.get("t1")
+            if raw_scene.get("t1") is not None
+            else raw_scene.get("end")
+            if raw_scene.get("end") is not None
+            else raw_scene.get("time_end"),
+            start,
+        )
+        if end < start:
+            end = start
+        route_hint = str(
+            raw_scene.get("route")
+            or raw_scene.get("planned_video_generation_route")
+            or raw_scene.get("plannedVideoGenerationRoute")
+            or raw_scene.get("video_generation_route")
+            or raw_scene.get("videoGenerationRoute")
+            or raw_scene.get("ltx_mode")
+            or raw_scene.get("ltxMode")
+            or ""
+        ).strip().lower()
+        if route_hint in {"f_l", "first_last_frame", "first-last"}:
+            route_hint = "first_last"
+        elif route_hint in {"lip_sync", "lip-sync", "lipsync"}:
+            route_hint = "lip_sync_music"
+        elif route_hint in {"image_video", "image-to-video"}:
+            route_hint = "i2v"
+        description = str(
+            raw_scene.get("description")
+            or raw_scene.get("summary")
+            or raw_scene.get("scene_goal")
+            or raw_scene.get("frame_description")
+            or raw_scene.get("visualPrompt")
+            or raw_scene.get("what_from_audio_this_scene_uses")
+            or ""
+        ).strip()
+        content_tags_raw = (
+            raw_scene.get("content_tags")
+            if isinstance(raw_scene.get("content_tags"), list)
+            else raw_scene.get("contentTags")
+            if isinstance(raw_scene.get("contentTags"), list)
+            else raw_scene.get("tags")
+            if isinstance(raw_scene.get("tags"), list)
+            else []
+        )
+        content_tags = [str(tag).strip() for tag in content_tags_raw if str(tag).strip()]
+        normalized_compact_scenes.append(
+            {
+                "scene_id": scene_id,
+                "start_time_sec": start,
+                "end_time_sec": end,
+                "route": route_hint or "i2v",
+                "performance_framing": str(
+                    raw_scene.get("performance_framing")
+                    or raw_scene.get("performanceFraming")
+                    or raw_scene.get("camera")
+                    or ""
+                ).strip(),
+                "story_function": str(raw_scene.get("story_function") or raw_scene.get("storyFunction") or "").strip(),
+                "description": description,
+                "content_tags": content_tags,
+                "environment": str(raw_scene.get("environment") or raw_scene.get("location") or "").strip(),
+            }
+        )
+
+    if not normalized_compact_scenes:
+        return None
+    compact_payload = {
+        "input_understanding": input_understanding,
+        "storyboard": {
+            "story_summary": str(storyboard.get("story_summary") or storyboard.get("storySummary") or "").strip(),
+            "full_scenario": str(storyboard.get("full_scenario") or storyboard.get("fullScenario") or "").strip(),
+            "voice_script": str(storyboard.get("voice_script") or storyboard.get("voiceScript") or "").strip(),
+            "director_summary": str(storyboard.get("director_summary") or storyboard.get("directorSummary") or "").strip(),
+            "audio_understanding": storyboard.get("audio_understanding") if isinstance(storyboard.get("audio_understanding"), dict) else {},
+            "narrative_strategy": storyboard.get("narrative_strategy") if isinstance(storyboard.get("narrative_strategy"), dict) else {},
+            "diagnostics": storyboard.get("diagnostics") if isinstance(storyboard.get("diagnostics"), dict) else {},
+            "scenes": normalized_compact_scenes,
+        },
+    }
+    return _adapt_audio_first_compact_to_legacy_contract(compact_payload, parse_stage=f"{parse_stage}:rich_to_legacy_adapter")
+
+
 def _build_inline_audio_part(audio_context: dict[str, Any]) -> dict[str, Any]:
     audio_url = str(audio_context.get("audioUrl") or "").strip()
     resolution = _resolve_audio_source_for_analysis(audio_url)
@@ -10381,26 +10516,43 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             "Gemini returned invalid JSON for audio-first single-call mode.",
             status_code=502,
             details={
-                "rawPreview": str(raw_text or "")[:4000],
+                "rawPreview": str(raw_text or "")[:1200],
                 "rawLength": len(str(raw_text or "")),
                 "finishReason": finish_reason or "",
                 "parseStage": parse_stage,
             },
         )
+    top_level_keys = list(extracted.keys()) if isinstance(extracted, dict) else []
+    logger.info("[SCENARIO DIRECTOR] audio-first parse_stage=%s top_level_keys=%s", parse_stage, top_level_keys)
+    parse_branch = "legacy_parse"
     if (
         isinstance(extracted.get("input_understanding"), dict)
         and isinstance(extracted.get("storyboard"), dict)
         and not any(key in extracted for key in ("transcript", "audioStructure", "semanticTimeline", "scenes"))
     ):
+        parse_branch = "rich_parse"
         extracted = _adapt_audio_first_compact_to_legacy_contract(extracted, parse_stage=parse_stage)
+        parse_branch = "rich_to_legacy_adapter"
+    elif not all(key in extracted for key in ("transcript", "audioStructure", "semanticTimeline", "scenes")):
+        rich_adapted = _adapt_audio_first_rich_payload_to_legacy_contract(extracted, parse_stage=parse_stage)
+        if isinstance(rich_adapted, dict):
+            extracted = rich_adapted
+            parse_branch = "rich_to_legacy_adapter"
     required = ("transcript", "audioStructure", "semanticTimeline", "scenes")
     missing = [key for key in required if key not in extracted]
     if missing:
+        logger.warning(
+            "[SCENARIO DIRECTOR] audio-first parser branch=%s parse_stage=%s top_level_keys=%s missing=%s",
+            "fatal_invalid",
+            parse_stage,
+            top_level_keys,
+            missing,
+        )
         raise ScenarioDirectorError(
             "gemini_contract_invalid",
             "Gemini audio-first payload missed required fields.",
             status_code=502,
-            details={"missingFields": missing, "rawPreview": str(raw_text or "")[:1000]},
+            details={"missingFields": missing, "rawPreview": str(raw_text or "")[:800], "parseBranch": "fatal_invalid"},
         )
     if not isinstance(extracted.get("transcript"), list):
         raise ScenarioDirectorError(
@@ -10442,6 +10594,13 @@ def _parse_audio_first_single_call_payload(raw_text: str, *, parse_stage: str = 
             status_code=502,
             details={"field": "scenes", "reason": "empty_list"},
         )
+    logger.info(
+        "[SCENARIO DIRECTOR] audio-first parser branch=%s parse_stage=%s top_level_keys=%s scenes=%s",
+        parse_branch,
+        parse_stage,
+        top_level_keys,
+        len(scenes),
+    )
     return extracted
 
 
