@@ -63,7 +63,11 @@ import {
   resolveScenarioWorkflowKey,
 } from "./clip_nodes/comfy/scenarioStoryboardDomain";
 import ScenarioStoryboardEditor from "./clip_nodes/comfy/ScenarioStoryboardEditor";
-import { resolveRefThumbnailUrl as resolveComfyRefThumbnailUrl } from "./clip_nodes/comfy/comfyNodeShared";
+import {
+  buildRefImageCandidates,
+  hasAnyRefImageCandidate,
+  resolveRefThumbnailUrl as resolveComfyRefThumbnailUrl,
+} from "./clip_nodes/comfy/comfyNodeShared";
 
 
 // -------------------------
@@ -4788,7 +4792,7 @@ function resolveRefRoleForNode(node = {}) {
 }
 
 function deriveRefNodeStatus(data = {}) {
-  const refsCount = Array.isArray(data?.refs) ? data.refs.filter((item) => !!String(item?.url || "").trim()).length : 0;
+  const refsCount = Array.isArray(data?.refs) ? data.refs.filter((item) => hasAnyRefImageCandidate(item)).length : 0;
   const rawStatus = String(data?.refStatus || "").trim().toLowerCase();
   const refShortLabel = String(data?.refShortLabel || "").trim();
   const refAnalyzedAt = String(data?.refAnalyzedAt || "").trim();
@@ -4832,12 +4836,16 @@ function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
   }
   const refs = Array.isArray(data?.refs)
     ? data.refs
-      .map((item) => ({
-        url: String(item?.url || "").trim(),
-        name: String(item?.name || "").trim(),
-        type: String(item?.type || "").trim(),
-      }))
-      .filter((item) => !!item.url)
+      .map((item) => {
+        const safeItem = item && typeof item === "object" ? item : { value: String(item || "") };
+        return {
+          ...safeItem,
+          url: String(resolveComfyRefThumbnailUrl(safeItem) || safeItem?.url || "").trim(),
+          name: String(safeItem?.name || "").trim(),
+          type: String(safeItem?.type || "").trim(),
+        };
+      })
+      .filter((item) => hasAnyRefImageCandidate(item))
       .slice(0, 5)
     : [];
   const normalized = {
@@ -4869,7 +4877,7 @@ function normalizeRefData(data, kindHint = "") {
         name: String(safeItem?.name || "").trim(),
       };
     })
-    .filter((item) => !!item.url)
+    .filter((item) => hasAnyRefImageCandidate(item))
     .slice(0, maxFiles);
 
   return {
@@ -6095,6 +6103,44 @@ function BrainNode({ id, data }) {
   );
 }
 
+function RefThumbnailTile({ item, idx, title, kind, onRemoveImage, onOpenLightbox }) {
+  const thumbnailCandidates = useMemo(() => buildRefImageCandidates(item), [item]);
+  const [thumbIndex, setThumbIndex] = useState(0);
+  const resolvedThumbnailUrl = thumbnailCandidates[thumbIndex] || "";
+  const candidateSignature = thumbnailCandidates.join("|");
+
+  useEffect(() => {
+    setThumbIndex(0);
+    console.debug("[REF THUMB FIX] candidates", { nodeType: kind, idx, candidates: thumbnailCandidates });
+  }, [kind, idx, candidateSignature]);
+
+  return (
+    <div className="clipSB_refThumb" key={`${item.url || item.value || item.name || "ref"}-${idx}`}>
+      {resolvedThumbnailUrl ? (
+        <button className="clipSB_refLiteOpen" onClick={() => onOpenLightbox?.(resolvedThumbnailUrl)} title="Открыть фото">
+          <img
+            src={resolvedThumbnailUrl}
+            alt={`${title} ${idx + 1}`}
+            className="clipSB_refThumbImg"
+            onError={() => {
+              const nextIndex = thumbIndex + 1;
+              if (nextIndex < thumbnailCandidates.length) {
+                console.debug("[REF THUMB FIX] onError fallback", { nodeType: kind, idx, failed: resolvedThumbnailUrl, next: thumbnailCandidates[nextIndex] });
+                setThumbIndex(nextIndex);
+              }
+            }}
+          />
+        </button>
+      ) : (
+        <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен">
+          <span>thumbnail недоступен</span>
+        </div>
+      )}
+      <button className="clipSB_refThumbRemove" title="Удалить изображение" onClick={() => onRemoveImage?.(idx)}>×</button>
+    </div>
+  );
+}
+
 function RefNode({ id, data }) {
   const inputRef = useRef(null);
   const title = data?.title || "REFERENCE";
@@ -6115,8 +6161,12 @@ function RefNode({ id, data }) {
   const maxFiles = kind === "ref_style" ? 1 : 5;
   const refsRaw = Array.isArray(data?.refs) ? data.refs : (data?.url ? [{ url: data.url, name: data?.name || "" }] : []);
   const refs = refsRaw
-    .map((item) => ({ url: String(item?.url || "").trim(), name: String(item?.name || "").trim() }))
-    .filter((item) => !!item.url);
+    .map((item) => ({
+      ...(item && typeof item === "object" ? item : { value: String(item || "") }),
+      name: String(item?.name || "").trim(),
+      type: String(item?.type || "").trim(),
+    }))
+    .filter((item) => hasAnyRefImageCandidate(item));
   const canAddMore = refs.length < maxFiles;
   const refStatus = deriveRefNodeStatus(data);
   const isError = refStatus === "error";
@@ -6154,32 +6204,18 @@ function RefNode({ id, data }) {
         <div className="clipSB_refGrid" style={{ marginBottom: 10 }}>
           {uploadSoftError ? <div className="clipSB_refWarningBadge">⚠ {uploadSoftError}</div> : null}
           {refs.map((item, idx) => {
-            const resolvedThumbnailUrl = resolveComfyRefThumbnailUrl(item);
-            console.debug("[REF NODE THUMBNAIL]", {
-              nodeType: kind,
-              preview: item?.preview,
-              value: item?.value,
-              refs: item?.refs,
-              resolvedThumbnailUrl,
-            });
             return (
-            <div className="clipSB_refThumb" key={`${item.url}-${idx}`}>
-              {resolvedThumbnailUrl ? (
-                <img src={resolvedThumbnailUrl} alt={`${title} ${idx + 1}`} className="clipSB_refThumbImg" />
-              ) : (
-                <div className="clipSB_refLiteEmpty" title="Thumbnail недоступен">
-                  <span>thumbnail недоступен</span>
-                </div>
-              )}
-              <button
-                className="clipSB_refThumbRemove"
-                title="Удалить изображение"
-                onClick={() => data?.onRemoveImage?.(id, idx)}
-              >
-                ×
-              </button>
-            </div>
-          );})}
+              <RefThumbnailTile
+                key={`${item.url || item.value || item.name || "ref"}-${idx}`}
+                item={item}
+                idx={idx}
+                title={title}
+                kind={kind}
+                onOpenLightbox={(url) => data?.onOpenLightbox?.(url)}
+                onRemoveImage={(imageIndex) => data?.onRemoveImage?.(id, imageIndex)}
+              />
+            );
+          })}
           {canAddMore ? (
             <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">
               +
@@ -16439,11 +16475,12 @@ onClipSec: (nodeId, value) => {
                   const prevRefs = Array.isArray(targetNode?.data?.refs)
                     ? targetNode.data.refs
                       .map((item) => ({
-                        url: String(item?.url || "").trim(),
+                        ...(item && typeof item === "object" ? item : { value: String(item || "") }),
+                        url: String(resolveComfyRefThumbnailUrl(item) || item?.url || "").trim(),
                         name: String(item?.name || "").trim(),
                         type: String(item?.type || "").trim(),
                       }))
-                      .filter((item) => !!item.url)
+                      .filter((item) => hasAnyRefImageCandidate(item))
                       .slice(0, 5)
                     : [];
                   const room = Math.max(0, 5 - prevRefs.length);
@@ -16470,11 +16507,12 @@ onClipSec: (nodeId, value) => {
                     const oldRefs = Array.isArray(x?.data?.refs)
                       ? x.data.refs
                         .map((item) => ({
-                          url: String(item?.url || "").trim(),
+                          ...(item && typeof item === "object" ? item : { value: String(item || "") }),
+                          url: String(resolveComfyRefThumbnailUrl(item) || item?.url || "").trim(),
                           name: String(item?.name || "").trim(),
                           type: String(item?.type || "").trim(),
                         }))
-                        .filter((item) => !!item.url)
+                        .filter((item) => hasAnyRefImageCandidate(item))
                         .slice(0, 5)
                       : [];
                     const refs = oldRefs.concat(uploadedRefs).slice(0, 5);
@@ -16486,7 +16524,7 @@ onClipSec: (nodeId, value) => {
               },
               onConfirmAdd: async (nodeId) => {
                 const node = (nodesRef.current || []).find((x) => x.id === nodeId);
-                const refs = Array.isArray(node?.data?.refs) ? node.data.refs.filter((item) => !!String(item?.url || "").trim()).slice(0, 5) : [];
+                const refs = normalizeRefData(node?.data || {}, node?.data?.kind || "").refs;
                 const role = resolveRefRoleForNode(node);
                 if (!refs.length || !role) return;
                 setNodes((prev) => {
@@ -16933,6 +16971,11 @@ const hydrate = useCallback((source = "unknown") => {
             normalized.uploading = false;
             delete normalized.url;
             delete normalized.name;
+            console.debug("[REF THUMB FIX] hydrate normalized", {
+              nodeId: n.id,
+              nodeType: n.type,
+              refsCount: Array.isArray(normalized?.refs) ? normalized.refs.length : 0,
+            });
             return {
               id: n.id,
               type: n.type,
@@ -16943,6 +16986,11 @@ const hydrate = useCallback((source = "unknown") => {
 
           if (["refCharacter2", "refCharacter3", "refAnimal", "refGroup"].includes(n.type)) {
             const normalized = normalizeComfyRefNodeData(n.type, data, data?.kind || "");
+            console.debug("[REF THUMB FIX] hydrate normalized", {
+              nodeId: n.id,
+              nodeType: n.type,
+              refsCount: Array.isArray(normalized?.refs) ? normalized.refs.length : 0,
+            });
             return {
               id: n.id,
               type: n.type,
