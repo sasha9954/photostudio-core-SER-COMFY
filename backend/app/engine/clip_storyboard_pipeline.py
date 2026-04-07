@@ -253,7 +253,7 @@ def _try_read_local_static_asset(url: str) -> bytes | None:
     filename = path.split("static/assets/", 1)[1]
     if not filename:
         return None
-    assets_dir = Path(__file__).resolve().parents[1] / "static" / "assets"
+    assets_dir = Path(__file__).resolve().parents[2] / "static" / "assets"
     candidate = (assets_dir / filename).resolve()
     assets_root = assets_dir.resolve()
     if assets_root not in candidate.parents and candidate != assets_root:
@@ -264,10 +264,46 @@ def _try_read_local_static_asset(url: str) -> bytes | None:
 
 
 def _fetch_media_bytes(url: str) -> bytes:
-    local_bytes = _try_read_local_static_asset(url)
+    media_url = str(url or "").strip()
+    parsed = urlparse(media_url)
+    normalized_path = str(parsed.path or "").lstrip("/")
+    is_static_asset_path = normalized_path.startswith("static/assets/")
+    is_local_or_private = _is_local_or_private_url(media_url)
+    assets_dir = Path(__file__).resolve().parents[2] / "static" / "assets"
+    local_path = str((assets_dir / normalized_path.split("static/assets/", 1)[1]).resolve()) if is_static_asset_path else None
+
+    local_bytes = _try_read_local_static_asset(media_url)
     if local_bytes is not None:
+        logger.warning(
+            "[CLIP PIPELINE MEDIA READ] url=%s local_path=%s used_local=%s fallback_http=%s reason=%s",
+            media_url,
+            local_path,
+            True,
+            False,
+            "local_static_asset_read_success",
+        )
         return local_bytes
-    resp = requests.get(url, timeout=30)
+
+    if is_static_asset_path and is_local_or_private:
+        logger.warning(
+            "[CLIP PIPELINE MEDIA READ] url=%s local_path=%s used_local=%s fallback_http=%s reason=%s",
+            media_url,
+            local_path,
+            False,
+            False,
+            "local_static_asset_not_found",
+        )
+        raise FileNotFoundError(f"local static asset not found: {media_url}")
+
+    logger.warning(
+        "[CLIP PIPELINE MEDIA READ] url=%s local_path=%s used_local=%s fallback_http=%s reason=%s",
+        media_url,
+        local_path,
+        False,
+        True,
+        "fallback_http_fetch",
+    )
+    resp = requests.get(media_url, timeout=30)
     resp.raise_for_status()
     return resp.content
 
