@@ -713,7 +713,22 @@ async def clip_comfy_scenario_director_generate(request: Request, payload: Scena
         return _build_scenario_director_fixture(req, fixture_reason="manual_override")
     try:
         mode = str(req.get("mode") or "oneshot").strip().lower()
+        controls = req.get("director_controls") if isinstance(req.get("director_controls"), dict) else {}
+        content_type = str(controls.get("contentType") or "").strip().lower()
+        metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}
+        logger.warning(
+            "[CLIP PIPELINE ROUTE DEBUG] mode=%s contentType=%s pipelineMode=%s useClipStoryboardPipeline=%s requestSource=%s",
+            mode,
+            content_type,
+            metadata.get("pipelineMode"),
+            metadata.get("useClipStoryboardPipeline"),
+            metadata.get("requestSource"),
+        )
         clip_pipeline_requested = _is_clip_music_video_pipeline(req)
+        logger.warning(
+            "[CLIP PIPELINE ROUTE DEBUG] clip_pipeline_requested=%s",
+            clip_pipeline_requested,
+        )
         if mode == "master":
             if clip_pipeline_requested:
                 raise ClipPipelineError(
