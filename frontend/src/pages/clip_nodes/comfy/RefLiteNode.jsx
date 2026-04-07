@@ -54,7 +54,7 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
     useEffect(() => {
       setCandidateIndex(0);
       setThumbExhausted(candidates.length === 0);
-    }, [item, candidateSignature]);
+    }, [candidateSignature]);
 
     useEffect(() => {
       console.debug("[REF THUMB FIX] candidates", { handleId, idx, candidates });
