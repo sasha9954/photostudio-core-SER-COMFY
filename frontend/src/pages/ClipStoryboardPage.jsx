@@ -13247,8 +13247,8 @@ onClipSec: (nodeId, value) => {
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
                     ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: null, lastParseError: null } }
                     : x)));
-                  notify({ type: "warning", message: "Разбор занял слишком много времени" });
-                }, 95000);
+                  notify({ type: "warning", message: "Разбор занял слишком много времени (stage: whole_map/chunk/merge)" });
+                }, 280000);
                 parseTimeoutRef.current = timeoutId;
 
                 console.info("[CLIP STORAGE] scenario parse start", { nodeId, parseToken, accountKey, STORE_KEY });
@@ -13654,7 +13654,14 @@ onClipSec: (nodeId, value) => {
                     clipPipelineRequested: parseClipPipelineRequested,
                   });
                   console.error(err);
-                  notify({ type: "error", message: "Ошибка разбора сцены" });
+                  const backendStage = String(
+                    err?.payload?.details?.last_seen_stage
+                    || err?.response?.details?.last_seen_stage
+                    || err?.payload?.last_seen_stage
+                    || ""
+                  ).trim();
+                  const stageSuffix = backendStage ? ` (stage: ${backendStage})` : "";
+                  notify({ type: "error", message: `Ошибка разбора сцены${stageSuffix}` });
                   setNodes((prev) => prev.map((x) => (x.id === nodeId
                     ? { ...x, data: { ...x.data, isParsing: false, activeParseToken: parseToken, lastParseError: String(err?.message || err) } }
                     : x)));
