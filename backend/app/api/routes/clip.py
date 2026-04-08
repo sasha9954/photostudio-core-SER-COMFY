@@ -9060,6 +9060,36 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
     return out
 
 
+def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str]]:
+    role_aliases = {
+        "ref_props": "props",
+        "ref_items": "props",
+        "items": "props",
+        "item": "props",
+        "objects": "props",
+        "object": "props",
+        "character": "character_1",
+        "world": "location",
+    }
+    out: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
+    if not isinstance(source, dict):
+        return out
+    for raw_role, raw_value in source.items():
+        role = str(raw_role or "").strip()
+        role = role_aliases.get(role, role)
+        if role not in COMFY_REF_ROLES:
+            continue
+        values = raw_value if isinstance(raw_value, list) else (
+            raw_value.get("refs")
+            if isinstance(raw_value, dict) and isinstance(raw_value.get("refs"), list)
+            else [raw_value]
+        )
+        urls = _normalize_ref_list(values)
+        if urls:
+            out[role] = list(dict.fromkeys([*out.get(role, []), *urls]))
+    return out
+
+
 def _resolve_scene_active_roles_for_image(
     refs_used: list[str] | dict | None,
     ref_directives: dict | None,
@@ -10845,6 +10875,21 @@ def clip_image(payload: ClipImageIn):
     for role, fallback_urls in refs_fallback_by_role.items():
         if fallback_urls and not (comfy_refs_by_role.get(role) or []):
             comfy_refs_by_role[role] = list(dict.fromkeys([str(url or "").strip() for url in fallback_urls if str(url or "").strip()]))
+    contract_ref_sources = [
+        raw_scene_contract.get("refsByRole") if isinstance(raw_scene_contract, dict) else {},
+        raw_scene_contract.get("context_refs") if isinstance(raw_scene_contract, dict) else {},
+        raw_scene_contract.get("contextRefs") if isinstance(raw_scene_contract, dict) else {},
+        (raw_scene_contract.get("connected_context_summary") or {}).get("context_refs") if isinstance(raw_scene_contract.get("connected_context_summary"), dict) else {},
+        (raw_scene_contract.get("connectedContextSummary") or {}).get("context_refs") if isinstance(raw_scene_contract.get("connectedContextSummary"), dict) else {},
+    ]
+    for contract_source in contract_ref_sources:
+        contract_refs_by_role = _extract_refs_by_role_from_generic_source(contract_source)
+        for role in COMFY_REF_ROLES:
+            merged_role_urls = list(dict.fromkeys([
+                *(comfy_refs_by_role.get(role) or []),
+                *(contract_refs_by_role.get(role) or []),
+            ]))
+            comfy_refs_by_role[role] = merged_role_urls
     print("[COMFY IMAGE DEBUG] cleaned refsByRole=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
