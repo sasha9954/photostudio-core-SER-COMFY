@@ -4923,6 +4923,10 @@ function normalizeClipImageRefsPayload(refs = {}) {
 
   const previousSceneImageUrl = String(refs?.previousSceneImageUrl || "").trim();
   if (previousSceneImageUrl) normalized.previousSceneImageUrl = previousSceneImageUrl;
+  const firstFrameReferenceUrl = String(refs?.firstFrameReferenceUrl || "").trim();
+  if (firstFrameReferenceUrl) normalized.firstFrameReferenceUrl = firstFrameReferenceUrl;
+  const currentSceneStartImageUrl = String(refs?.currentSceneStartImageUrl || "").trim();
+  if (currentSceneStartImageUrl) normalized.currentSceneStartImageUrl = currentSceneStartImageUrl;
 
   if (refs?.refsByRole && typeof refs.refsByRole === "object") {
     normalized.refsByRole = refs.refsByRole;
@@ -10452,6 +10456,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         previousSceneImageUrl,
         firstFrameReferenceUrl: firstFrameReferenceUrlForEnd,
         currentSceneStartImageUrl,
+        heroEntityId: targetScene?.heroEntityId || derivedRoleContract?.primaryRole || "",
       });
       if (applyFirstLastContinuityContract) {
         console.info("[FIRST_LAST END REQUEST SOURCE]", {
@@ -10697,7 +10702,12 @@ Aspect ratio: ${imageFormat}`,
           storyboardSignature: requestStoryboardSignature,
           sceneSignature: requestSceneSignature,
           slot: normalizedSlot,
-          sceneContract: scenarioContractPayloadSanitized,
+          sceneContract: {
+            ...scenarioContractPayloadSanitized,
+            refsByRole: refsByRoleForImage,
+            context_refs: targetScene?.context_refs || targetScene?.contextRefs || {},
+            connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || {},
+          },
           ...scenarioContractPayload,
           primaryRole: scenarioContractPayload?.primaryRole || refsForImageRequest?.primaryRole || "",
           secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
