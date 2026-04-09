@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import mimetypes
 import os
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from app.core.config import settings
+from app.core.static_paths import ASSETS_DIR
 from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
+
+MAX_STORY_CORE_IMAGE_BYTES = 8 * 1024 * 1024
 
 STAGE_IDS = (
     "input_package",
@@ -80,6 +91,150 @@ def _normalize_input_audio_source(input_payload: dict[str, Any], refs_inventory:
         source["source_value"] = source_value
     normalized["source"] = source
     return normalized
+
+
+def _extract_mime_type(url: str, headers: dict[str, str], data: bytes) -> str:
+    header_mime = str(headers.get("content-type") or "").split(";")[0].strip().lower()
+    if header_mime.startswith("image/"):
+        return header_mime
+    guessed_from_url, _ = mimetypes.guess_type(url)
+    if guessed_from_url and guessed_from_url.startswith("image/"):
+        return guessed_from_url
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def _resolve_reference_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme in {"http", "https"}:
+        return raw
+    if raw.startswith("//"):
+        return f"http:{raw}"
+    base = str(settings.PUBLIC_BASE_URL).rstrip("/")
+    if raw.startswith("/"):
+        return f"{base}{raw}"
+    return f"{base}/{raw}"
+
+
+def _extract_local_static_asset_relative_path(url: str) -> str | None:
+    raw = (url or "").strip()
+    if not raw:
+        return None
+
+    parsed = urllib.parse.urlparse(raw)
+    path = raw
+    if parsed.scheme in {"http", "https"}:
+        host = (parsed.hostname or "").lower()
+        local_hosts = {"127.0.0.1", "localhost"}
+        public_base = (settings.PUBLIC_BASE_URL or "").strip()
+        if public_base:
+            try:
+                public_host = (urllib.parse.urlparse(public_base).hostname or "").lower()
+                if public_host:
+                    local_hosts.add(public_host)
+            except Exception:
+                pass
+        if host not in local_hosts:
+            return None
+        path = parsed.path or ""
+    elif raw.startswith("//"):
+        return None
+
+    normalized = path.lstrip("/")
+    prefix = "static/assets/"
+    if not normalized.startswith(prefix):
+        return None
+    rel_path = normalized[len(prefix) :]
+    return rel_path or None
+
+
+def _read_local_static_asset(url: str) -> tuple[bytes | None, str, str | None]:
+    rel_path = _extract_local_static_asset_relative_path(url)
+    if not rel_path:
+        return None, "", None
+    try:
+        decoded_rel_path = urllib.parse.unquote(rel_path)
+        assets_root = Path(ASSETS_DIR).resolve()
+        file_path = (assets_root / decoded_rel_path).resolve()
+        if assets_root not in file_path.parents:
+            return None, "", "local_asset_not_found"
+        if not file_path.exists() or not file_path.is_file():
+            return None, "", "local_asset_not_found"
+        return file_path.read_bytes(), file_path.as_uri(), None
+    except OSError:
+        return None, "", "local_asset_read_failed"
+    except Exception:
+        return None, "", "local_asset_read_failed"
+
+
+def _load_image_inline_part(url: str) -> tuple[dict[str, Any] | None, str | None]:
+    resolved = _resolve_reference_url(url)
+    if not resolved:
+        return None, "image_download_failed"
+    headers: dict[str, str] = {}
+    data_source_for_mime = resolved
+    local_data, local_source, local_error = _read_local_static_asset(resolved)
+    if local_error:
+        return None, local_error
+    if local_data is not None:
+        data = local_data
+        data_source_for_mime = local_source
+    else:
+        req = urllib.request.Request(resolved, headers={"User-Agent": "photostudio-story-core/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+                headers = {str(k).lower(): str(v) for k, v in resp.headers.items()}
+        except urllib.error.HTTPError:
+            return None, "image_http_error"
+        except (socket.timeout, TimeoutError):
+            return None, "image_timeout"
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.timeout):
+                return None, "image_timeout"
+            return None, "image_download_failed"
+        except ValueError:
+            return None, "image_download_failed"
+        except Exception:
+            return None, "image_download_failed"
+
+    if not data:
+        return None, "image_download_failed"
+    if len(data) > MAX_STORY_CORE_IMAGE_BYTES:
+        return None, "image_too_large"
+    mime_type = _extract_mime_type(data_source_for_mime, headers, data)
+    if not mime_type:
+        return None, "image_invalid_mime"
+
+    return {
+        "inlineData": {
+            "mimeType": mime_type,
+            "data": base64.b64encode(data).decode("ascii"),
+        }
+    }, None
+
+
+def _pick_story_core_character_ref(refs_inventory: dict[str, Any]) -> tuple[str, str]:
+    primary = _safe_dict(refs_inventory.get("ref_character_1"))
+    from_value = str(primary.get("value") or "").strip()
+    if from_value:
+        return from_value, "refs_inventory.ref_character_1.value"
+    refs = _safe_list(primary.get("refs"))
+    for idx, ref in enumerate(refs):
+        value = str(ref or "").strip()
+        if value:
+            return value, f"refs_inventory.ref_character_1.refs[{idx}]"
+    return "", ""
 
 
 def _extract_gemini_text(resp: dict[str, Any]) -> str:
@@ -155,6 +310,10 @@ def _build_story_core_prompt(
         "story_core is source of truth for arc/identity/world/style, not a storyboard.\n"
         "Do NOT output scenes, prompts, shot list, or giant plan.\n"
         "Use roles/refs/content type to infer protagonist and supporting cast.\n"
+        "If a character image reference is attached, treat it as the source of truth for hero appearance and gender presentation.\n"
+        "Do not invent a contradictory hero identity against the attached character image reference.\n"
+        "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
+        "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
         "Keep each field compact and actionable.\n"
         "Required keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
@@ -227,6 +386,9 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "stale_reason": "",
             "last_action": "",
             "story_core_used_fallback": False,
+            "story_core_character_ref_attached": False,
+            "story_core_character_ref_source": "",
+            "story_core_character_ref_error": "",
         },
         "stage_statuses": stages,
         "contracts": {
@@ -300,10 +462,29 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     assigned_roles = _safe_dict(package.get("assigned_roles"))
     fallback = _default_story_core(input_pkg)
     prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles)
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["story_core_character_ref_attached"] = False
+    diagnostics["story_core_character_ref_source"] = ""
+    diagnostics["story_core_character_ref_error"] = ""
+    package["diagnostics"] = diagnostics
     try:
         api_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        character_ref_url, character_ref_source = _pick_story_core_character_ref(refs_inventory)
+        if character_ref_url:
+            inline_part, inline_error = _load_image_inline_part(character_ref_url)
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["story_core_character_ref_source"] = character_ref_source
+            if inline_part:
+                parts.append(inline_part)
+                diagnostics["story_core_character_ref_attached"] = True
+                diagnostics["story_core_character_ref_error"] = ""
+            else:
+                diagnostics["story_core_character_ref_attached"] = False
+                diagnostics["story_core_character_ref_error"] = str(inline_error or "image_attach_failed")
+            package["diagnostics"] = diagnostics
         body = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
         }
         response = post_generate_content(
