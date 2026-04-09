@@ -23,6 +23,7 @@ from app.engine.audio_analyzer import analyze_audio
 from app.engine.audio_transcript_aligner import resolve_transcript_alignment_with_diagnostics
 from app.engine.audio_scene_segmenter import build_gemini_audio_segmentation
 from app.engine.gemini_rest import post_generate_content
+from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ STAGE_DEPENDENCIES: dict[str, list[str]] = {
     "input_package": [],
     "story_core": ["input_package"],
     "audio_map": ["story_core"],
-    "role_plan": ["story_core"],
+    "role_plan": ["story_core", "audio_map"],
     "scene_plan": ["audio_map", "role_plan"],
     "scene_prompts": ["scene_plan"],
     "finalize": ["scene_prompts"],
@@ -1713,6 +1714,59 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     return package
 
 
+def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
+    input_pkg = _safe_dict(package.get("input"))
+    content_type = str(input_pkg.get("content_type") or "").strip().lower()
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["role_plan_backend"] = "gemini"
+    diagnostics["role_plan_prompt_version"] = ROLE_PLAN_PROMPT_VERSION
+    diagnostics["role_plan_error"] = ""
+    diagnostics["role_plan_validation_error"] = ""
+    diagnostics["validation_error"] = ""
+    diagnostics["role_plan_used_fallback"] = False
+    diagnostics["role_plan_scene_count"] = 0
+    diagnostics["role_plan_present_roles"] = []
+    diagnostics["role_plan_character_roles_count"] = 0
+    diagnostics["role_plan_world_roles_count"] = 0
+    package["diagnostics"] = diagnostics
+
+    if content_type and content_type not in {"music_video", "clip"}:
+        package["role_plan"] = {}
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["role_plan_error"] = f"unsupported_content_type:{content_type}"
+        diagnostics["role_plan_used_fallback"] = True
+        package["diagnostics"] = diagnostics
+        _append_diag_event(package, f"role_plan skipped for content_type={content_type}", stage_id="role_plan")
+        return package
+
+    result = build_gemini_role_plan(
+        api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
+        package=package,
+    )
+    role_plan = _safe_dict(result.get("role_plan"))
+    package["role_plan"] = role_plan
+
+    role_diag = _safe_dict(result.get("diagnostics"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["role_plan_backend"] = "gemini"
+    diagnostics["role_plan_prompt_version"] = str(role_diag.get("prompt_version") or ROLE_PLAN_PROMPT_VERSION)
+    diagnostics["role_plan_used_fallback"] = bool(result.get("used_fallback"))
+    diagnostics["role_plan_scene_count"] = int(role_diag.get("scene_count") or len(_safe_list(role_plan.get("scene_roles"))))
+    diagnostics["role_plan_present_roles"] = _safe_list(role_diag.get("present_roles"))
+    diagnostics["role_plan_character_roles_count"] = int(role_diag.get("character_roles_count") or 0)
+    diagnostics["role_plan_world_roles_count"] = int(role_diag.get("world_roles_count") or 0)
+    diagnostics["role_plan_error"] = str(result.get("error") or "")
+    diagnostics["role_plan_validation_error"] = str(result.get("validation_error") or "")
+    diagnostics["validation_error"] = str(result.get("validation_error") or "")
+    package["diagnostics"] = diagnostics
+
+    if role_plan and _safe_list(role_plan.get("scene_roles")):
+        _append_diag_event(package, "role_plan generated", stage_id="role_plan")
+    else:
+        _append_diag_event(package, "role_plan empty", stage_id="role_plan")
+    return package
+
+
 def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
@@ -1736,7 +1790,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         elif stage_id == "audio_map":
             pkg = _run_audio_map_stage(pkg)
         elif stage_id == "role_plan":
-            pkg["role_plan"] = pkg.get("role_plan") or {"status": "placeholder"}
+            pkg = _run_role_plan_stage(pkg)
         elif stage_id == "scene_plan":
             pkg["scene_plan"] = pkg.get("scene_plan") or {"scenes": []}
         elif stage_id == "scene_prompts":
