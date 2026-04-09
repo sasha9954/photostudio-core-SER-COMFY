@@ -37,6 +37,7 @@ const PORT_COLORS = {
   preview_out: "var(--family-narrative)",
   scenario_out: "var(--family-narrative)",
   scenario_storyboard_in: "var(--family-narrative)",
+  scenario_pipeline_debug_in: "var(--family-narrative)",
   scenario_storyboard_out: "var(--family-storyboard)",
   scenario_preview_in: "var(--family-narrative)",
   voice_script_out: "var(--family-audio)",

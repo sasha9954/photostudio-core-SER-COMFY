@@ -18883,7 +18883,10 @@ const hydrate = useCallback((source = "unknown") => {
       <ScenarioPipelineDebugEditor
         open={isScenarioPipelineDebugOpen}
         nodeId={activeScenarioPipelineDebugNode?.id || null}
-        onClose={() => setIsScenarioPipelineDebugOpen(false)}
+        onClose={() => {
+          setIsScenarioPipelineDebugOpen(false);
+          setActiveScenarioPipelineDebugId(null);
+        }}
         contextSummary={activeScenarioPipelineDebugNode?.data?.contextSummary || {}}
         storyboardPackage={activeScenarioPipelineDebugNode?.data?.storyboardPackage || {}}
         stageStatuses={activeScenarioPipelineDebugNode?.data?.stageStatuses || {}}
