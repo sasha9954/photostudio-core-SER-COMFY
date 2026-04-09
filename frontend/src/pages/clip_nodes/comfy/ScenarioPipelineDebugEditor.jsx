@@ -135,7 +135,22 @@ export default function ScenarioPipelineDebugEditor({
         <pre className="clipSB_pre">{toJson(audioMap)}</pre>
       </div>
     ),
-    role_plan: <pre className="clipSB_pre">{toJson(rolePlan)}</pre>,
+    role_plan: Object.keys(rolePlan || {}).length ? (
+      <div>
+        <div className="clipSB_storyboardKv"><span>global_roles</span><strong>{Object.keys(rolePlan?.global_roles || {}).length ? "present" : "—"}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_roles</span><strong>{Array.isArray(rolePlan?.scene_roles) ? rolePlan.scene_roles.length : 0}</strong></div>
+        <div className="clipSB_storyboardKv"><span>role_arc_summary</span><strong>{String(rolePlan?.role_arc_summary || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>continuity_notes</span><strong>{Array.isArray(rolePlan?.continuity_notes) ? rolePlan.continuity_notes.length : 0}</strong></div>
+        <pre className="clipSB_pre">{toJson({
+          global_roles: rolePlan?.global_roles || {},
+          scene_roles: rolePlan?.scene_roles || [],
+          role_arc_summary: rolePlan?.role_arc_summary || "",
+          continuity_notes: rolePlan?.continuity_notes || [],
+        })}</pre>
+      </div>
+    ) : (
+      <div className="clipSB_storyboardKv"><span>ROLE PLAN</span><strong>role_plan empty</strong></div>
+    ),
     scene_plan: <pre className="clipSB_pre">{toJson(scenePlan?.scenes || [])}</pre>,
     scene_prompts: <pre className="clipSB_pre">{toJson(prompts)}</pre>,
     final: <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>,
