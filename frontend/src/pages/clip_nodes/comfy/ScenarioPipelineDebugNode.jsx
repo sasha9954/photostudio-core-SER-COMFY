@@ -23,7 +23,7 @@ export default function ScenarioPipelineDebugNode({ id, data }) {
 
   return (
     <>
-      <Handle type="target" position={Position.Left} id="scenario_pipeline_debug_in" className="clipSB_handle" style={handleStyle("scenario_storyboard_in")} />
+      <Handle type="target" position={Position.Left} id="scenario_pipeline_debug_in" className="clipSB_handle" style={handleStyle("scenario_pipeline_debug_in")} />
       <NodeShell title="SCENARIO PIPELINE DEBUG" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🧪</span>} className="clipSB_nodeStoryboard">
         <div className="clipSB_assemblyStats" style={{ marginTop: 4 }}>
           <div className="clipSB_assemblyRow"><span>Mode</span><strong>{contentType || "—"}</strong></div>
