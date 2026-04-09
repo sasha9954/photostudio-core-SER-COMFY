@@ -333,8 +333,15 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Video prompts must be LTX-safe and anatomy-safe.\\n"
         "Route rules:\\n"
         "- i2v: one observable action, simple/smooth camera, safe body motion.\\n"
-        "- ia2v: AUDIO-SLICE-DRIVEN singing/performance for local scene audio slice; readable face and mouth; emotionally synced vocal delivery; upper-body emphasis; stable base; smooth camera; no abrupt choreography/spins/unstable legs.\\n"
-        "- first_last: one meaningful A->B progression with plausible continuity; no teleport/chaotic multi-transform.\\n"
+        "- ia2v: AUDIO-SLICE-DRIVEN singing/performance for local scene audio slice; readable face and mouth; emotionally synced vocal delivery; upper-body emphasis; stable base; smooth camera; no abrupt choreography/spins/unstable legs. ia2v is a rare accent route, not every performance beat.\\n"
+        "- first_last: controlled micro-transition only. Two near-neighbor states in same world/hero/location/outfit/lighting/framing family, with exactly one controlled action/state progression.\\n"
+        "FIRST_LAST STRICT RULES:\\n"
+        "- same hero identity, same place/location family, same world continuity.\\n"
+        "- same outfit continuity unless outfit change is the explicit controlled reveal.\\n"
+        "- same lighting family and same camera/framing family.\\n"
+        "- only one controlled action or emotional state changes.\\n"
+        "- no location jumps, no wardrobe jump (except explicit reveal), no camera grammar jump, no chaotic pose discontinuity, no identity drift, no background teleportation.\\n"
+        "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
         "Always include compact negative_prompt with safety constraints.\\n"
         "Set prompt_notes.audio_driven=true for ia2v scenes.\\n"
         "Return EXACT contract keys:\\n"
@@ -350,7 +357,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
 
 def _prompt_notes_template(route: str) -> dict[str, Any]:
     clean_route = route if route in ALLOWED_ROUTES else "i2v"
-    return {
+    notes = {
         "shot_intent": "",
         "continuity_anchor": "keep identity/world/style continuity from previous scene",
         "world_anchor": "same realistic world and cultural environment",
@@ -359,6 +366,45 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
         "motion_safety": "single clear motion line, smooth camera, anatomy-safe body dynamics",
         "audio_driven": clean_route == "ia2v",
     }
+    if clean_route == "first_last":
+        notes.update(
+            {
+                "transition_contract": "controlled_micro_transition",
+                "first_state": "",
+                "last_state": "",
+                "same_world_required": True,
+                "same_outfit_required": True,
+                "same_lighting_required": True,
+                "same_camera_family_required": True,
+            }
+        )
+    return notes
+
+
+def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
+    route = str(scene_row.get("route") or "").strip()
+    photo = str(scene_row.get("photo_prompt") or "").lower()
+    video = str(scene_row.get("video_prompt") or "").lower()
+    notes = _safe_dict(scene_row.get("prompt_notes"))
+    combined = f"{photo} {video}"
+    if route == "ia2v":
+        has_audio_lang = any(token in combined for token in ("audio", "sing", "vocal", "performance"))
+        return not (bool(notes.get("audio_driven")) and has_audio_lang)
+    if route == "first_last":
+        continuity_flags_ok = all(
+            bool(notes.get(key))
+            for key in (
+                "same_world_required",
+                "same_outfit_required",
+                "same_lighting_required",
+                "same_camera_family_required",
+            )
+        )
+        has_transition_lang = any(token in combined for token in ("a->b", "transition", "start state", "end state", "near-neighbor"))
+        return not (continuity_flags_ok and has_transition_lang and str(notes.get("transition_contract") or "") == "controlled_micro_transition")
+    if route == "i2v":
+        return any(token in combined for token in ("audio-slice-driven", "sings", "vocal phrase")) or "controlled micro-transition" in combined
+    return False
 
 
 def _build_fallback_scene_prompts(
@@ -390,14 +436,16 @@ def _build_fallback_scene_prompts(
             "stable legs and body base, smooth gentle camera move, no abrupt turns or choreography."
         )
     elif route == "first_last":
+        first_state = str(scene_plan_row.get("motion_intent") or "").strip() or f"{primary_role} initiates the key hinge action"
+        last_state = str(scene_plan_row.get("emotional_intent") or "").strip() or f"{primary_role} completes the same hinge action"
         photo_prompt = (
-            f"Key transition frame of {primary_role} in {world_anchor}, showing the hinge between start and end state for {scene_function}, "
-            "realistic composition, continuity-safe wardrobe and lighting progression."
+            f"One transition keyframe of {primary_role} in the same {world_anchor} scene space, hinge moment for {scene_function}, "
+            "subject and environment remain stable, same outfit/light/framing family."
         )
         video_prompt = (
-            "Show one clear A->B progression with plausible body and world continuity. "
-            "Main action follows a single transition line with smooth camera support, emotional release stays readable, "
-            "no teleporting, no chaotic multi-change in pose/wardrobe/world/lighting."
+            "Controlled micro-transition in the same exact scene space. Same subject, same outfit continuity, same lighting family, "
+            "same framing family. Start state and end state are near-neighbor moments of one action. "
+            "Only one meaningful progression occurs. No background jump, no wardrobe jump, no identity drift, no pose discontinuity, no multi-change."
         )
     else:
         photo_prompt = (
@@ -414,6 +462,9 @@ def _build_fallback_scene_prompts(
     fallback_notes["continuity_anchor"] = (
         f"{opening_anchor[:120]}" if opening_anchor else fallback_notes["continuity_anchor"]
     )
+    if route == "first_last":
+        fallback_notes["first_state"] = first_state
+        fallback_notes["last_state"] = last_state
 
     return {
         "scene_id": scene_id,
@@ -432,7 +483,7 @@ def _normalize_scene_prompts(
     role_lookup: dict[str, dict[str, Any]],
     story_core: dict[str, Any],
     world_continuity: dict[str, Any],
-) -> tuple[dict[str, Any], bool, str, int, int, int]:
+) -> tuple[dict[str, Any], bool, str, int, int, int, int]:
     by_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(raw.get("scenes")):
         row = _safe_dict(row_raw)
@@ -445,6 +496,7 @@ def _normalize_scene_prompts(
     validation_errors: list[str] = []
     missing_photo_count = 0
     missing_video_count = 0
+    route_semantics_mismatch_count = 0
 
     for scene_raw in scene_rows:
         scene = _safe_dict(scene_raw)
@@ -498,17 +550,38 @@ def _normalize_scene_prompts(
         )
         if actual_route == "ia2v":
             normalized_notes["audio_driven"] = True
+        if actual_route == "first_last":
+            normalized_notes["transition_contract"] = "controlled_micro_transition"
+            normalized_notes["first_state"] = str(
+                prompt_notes.get("first_state") or fallback_row["prompt_notes"].get("first_state") or "start of one controlled action"
+            )
+            normalized_notes["last_state"] = str(
+                prompt_notes.get("last_state") or fallback_row["prompt_notes"].get("last_state") or "completion of the same controlled action"
+            )
+            normalized_notes["same_world_required"] = bool(
+                prompt_notes.get("same_world_required") if "same_world_required" in prompt_notes else True
+            )
+            normalized_notes["same_outfit_required"] = bool(
+                prompt_notes.get("same_outfit_required") if "same_outfit_required" in prompt_notes else True
+            )
+            normalized_notes["same_lighting_required"] = bool(
+                prompt_notes.get("same_lighting_required") if "same_lighting_required" in prompt_notes else True
+            )
+            normalized_notes["same_camera_family_required"] = bool(
+                prompt_notes.get("same_camera_family_required") if "same_camera_family_required" in prompt_notes else True
+            )
 
-        scenes.append(
-            {
-                "scene_id": scene_id,
-                "route": actual_route,
-                "photo_prompt": photo_prompt,
-                "video_prompt": video_prompt,
-                "negative_prompt": negative_prompt,
-                "prompt_notes": normalized_notes,
-            }
-        )
+        scene_out = {
+            "scene_id": scene_id,
+            "route": actual_route,
+            "photo_prompt": photo_prompt,
+            "video_prompt": video_prompt,
+            "negative_prompt": negative_prompt,
+            "prompt_notes": normalized_notes,
+        }
+        if _route_semantics_mismatch(scene_out):
+            route_semantics_mismatch_count += 1
+        scenes.append(scene_out)
 
     normalized = {
         "plan_version": SCENE_PROMPTS_PROMPT_VERSION,
@@ -520,7 +593,15 @@ def _normalize_scene_prompts(
     ia2v_audio_driven_count = sum(
         1 for row in scenes if str(row.get("route") or "") == "ia2v" and bool(_safe_dict(row.get("prompt_notes")).get("audio_driven"))
     )
-    return normalized, used_fallback, validation_error, missing_photo_count, missing_video_count, ia2v_audio_driven_count
+    return (
+        normalized,
+        used_fallback,
+        validation_error,
+        missing_photo_count,
+        missing_video_count,
+        ia2v_audio_driven_count,
+        route_semantics_mismatch_count,
+    )
 
 
 def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
@@ -534,6 +615,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "missing_photo_count": 0,
         "missing_video_count": 0,
         "ia2v_audio_driven_count": 0,
+        "scene_prompts_route_semantics_mismatch_count": 0,
     }
 
     if not scene_rows:
@@ -567,7 +649,15 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 
         parsed = _extract_json_obj(_extract_gemini_text(response))
-        scene_prompts, used_fallback, validation_error, missing_photo, missing_video, ia2v_audio_driven = _normalize_scene_prompts(
+        (
+            scene_prompts,
+            used_fallback,
+            validation_error,
+            missing_photo,
+            missing_video,
+            ia2v_audio_driven,
+            route_semantics_mismatch_count,
+        ) = _normalize_scene_prompts(
             parsed,
             scene_rows=scene_rows,
             role_lookup=role_lookup,
@@ -579,6 +669,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "missing_photo_count": int(missing_photo),
                 "missing_video_count": int(missing_video),
                 "ia2v_audio_driven_count": int(ia2v_audio_driven),
+                "scene_prompts_route_semantics_mismatch_count": int(route_semantics_mismatch_count),
             }
         )
         return {
@@ -590,7 +681,15 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             "diagnostics": diagnostics,
         }
     except Exception as exc:  # noqa: BLE001
-        scene_prompts, used_fallback, validation_error, missing_photo, missing_video, ia2v_audio_driven = _normalize_scene_prompts(
+        (
+            scene_prompts,
+            used_fallback,
+            validation_error,
+            missing_photo,
+            missing_video,
+            ia2v_audio_driven,
+            route_semantics_mismatch_count,
+        ) = _normalize_scene_prompts(
             {},
             scene_rows=scene_rows,
             role_lookup=role_lookup,
@@ -602,6 +701,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "missing_photo_count": int(missing_photo),
                 "missing_video_count": int(missing_video),
                 "ia2v_audio_driven_count": int(ia2v_audio_driven),
+                "scene_prompts_route_semantics_mismatch_count": int(route_semantics_mismatch_count),
             }
         )
         return {
