@@ -19,6 +19,9 @@ TURN_FUNCTION_HINTS = {
     "resolution",
     "drop",
 }
+FIRST_LAST_EXCLUSION_HINTS = {"transit", "environment_anchor", "location_change", "world_jump", "montage"}
+IA2V_ADJACENCY_PENALTY = 9
+FIRST_LAST_ADJACENCY_PENALTY = 2
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -201,6 +204,8 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Keep route mix intelligent (not random), preserve role/world continuity, and keep rhythm/emotional variation.\\n"
         "For 8 scenes target route mix 4 i2v / 2 ia2v / 2 first_last unless there is a strong reason.\\n"
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
+        "Route spacing policy: ia2v scenes must not be adjacent; spread ia2v as rare emotional accents with at least one non-ia2v between them whenever possible.\\n"
+        "first_last scenes should not be adjacent to another first_last unless unavoidable. Keep route rhythm staggered, not paired.\\n"
         "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n\\n"
         "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
         "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
@@ -208,7 +213,8 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "ROUTE SEMANTICS (MANDATORY):\\n"
         "- i2v: baseline clip scene for observation/transit/environment/connective motion.\\n"
         "- ia2v: emotional performance shot, readable face, smooth motion, minimal abrupt full-body action.\\n"
-        "- first_last: explicit visual transition/progression for reveal/turn/payoff/release/callback.\\n\\n"
+        "- first_last: controlled micro-transition only (near-neighbor A->B states in same world, same location family, same hero, same lighting family, same outfit continuity, same framing family; only one controlled action/state changes).\\n"
+        "Choose first_last only for reveal/turn/payoff threshold moments where continuity can hold; avoid first_last for implied location/world/style jumps.\\n\\n"
         "Return EXACT contract keys:\\n"
         "{\\n"
         '  \"plan_version\": \"scene_plan_v1\",\\n'
@@ -258,7 +264,38 @@ def _target_route_budget(total_scenes: int) -> dict[str, int]:
     return {"i2v": i2v, "ia2v": ia2v, "first_last": first_last}
 
 
-def _route_scores(scene: dict[str, Any], idx: int, total: int) -> dict[str, int]:
+def _is_first_last_candidate(scene: dict[str, Any], idx: int, total: int) -> bool:
+    scene_function = str(scene.get("scene_function") or "").strip().lower()
+    presence_mode = str(scene.get("scene_presence_mode") or "").strip().lower()
+    has_turn = any(hint in scene_function for hint in TURN_FUNCTION_HINTS)
+    has_exclusion = any(hint in presence_mode or hint in scene_function for hint in FIRST_LAST_EXCLUSION_HINTS)
+    return bool(has_turn and not has_exclusion) or (idx == total - 1 and "release" in scene_function)
+
+
+def _route_adjacency_penalty(scenes: list[dict[str, Any]], idx: int, route: str) -> int:
+    if route not in ALLOWED_ROUTES:
+        return 0
+    penalty = 0
+    for near_idx in (idx - 1, idx + 1):
+        if near_idx < 0 or near_idx >= len(scenes):
+            continue
+        near_route = str(_safe_dict(scenes[near_idx]).get("route") or "")
+        if route == "ia2v" and near_route == "ia2v":
+            penalty += IA2V_ADJACENCY_PENALTY
+        if route == "first_last" and near_route == "first_last":
+            penalty += FIRST_LAST_ADJACENCY_PENALTY
+    return penalty
+
+
+def _has_adjacent_route(scenes: list[dict[str, Any]], route_name: str) -> bool:
+    route = str(route_name or "")
+    for idx in range(1, len(scenes)):
+        if str(_safe_dict(scenes[idx - 1]).get("route") or "") == route and str(_safe_dict(scenes[idx]).get("route") or "") == route:
+            return True
+    return False
+
+
+def _route_scores(scene: dict[str, Any], idx: int, total: int, *, scenes: list[dict[str, Any]] | None = None) -> dict[str, int]:
     presence_mode = str(scene.get("scene_presence_mode") or "").strip().lower()
     scene_function = str(scene.get("scene_function") or "").strip().lower()
     performance_focus = bool(scene.get("performance_focus"))
@@ -272,8 +309,10 @@ def _route_scores(scene: dict[str, Any], idx: int, total: int) -> dict[str, int]
     if performance_focus:
         scores["ia2v"] += 4
 
-    if any(hint in scene_function for hint in TURN_FUNCTION_HINTS):
+    if _is_first_last_candidate(scene, idx, total):
         scores["first_last"] += 4
+    elif any(hint in scene_function for hint in TURN_FUNCTION_HINTS):
+        scores["first_last"] += 1
     if idx == total - 1:
         scores["first_last"] += 2
     if idx == 0:
@@ -281,12 +320,15 @@ def _route_scores(scene: dict[str, Any], idx: int, total: int) -> dict[str, int]
 
     if "release" in scene_function and performance_focus:
         scores["first_last"] += 2
+    if scenes:
+        for route in ("i2v", "ia2v", "first_last"):
+            scores[route] -= _route_adjacency_penalty(scenes, idx, route)
 
     return scores
 
 
-def _default_route(scene: dict[str, Any], idx: int, total: int) -> str:
-    scores = _route_scores(scene, idx, total)
+def _default_route(scene: dict[str, Any], idx: int, total: int, *, scenes: list[dict[str, Any]] | None = None) -> str:
+    scores = _route_scores(scene, idx, total, scenes=scenes)
     return max(("i2v", "ia2v", "first_last"), key=lambda route: (scores[route], route == "i2v"))
 
 
@@ -360,14 +402,14 @@ def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> b
         if not deficits or not surpluses:
             break
 
-        desired = deficits[0]
+        desired = sorted(deficits, key=lambda route: (target.get(route, 0) - cur[route]), reverse=True)[0]
         best_idx = -1
         best_gain = -999
         for idx, row in enumerate(scenes):
             current_route = str(row.get("route") or "")
             if current_route not in surpluses:
                 continue
-            score = _route_scores(row, idx, total)
+            score = _route_scores(row, idx, total, scenes=scenes)
             gain = score.get(desired, 0) - score.get(current_route, 0)
             if gain > best_gain:
                 best_gain = gain
@@ -382,6 +424,41 @@ def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> b
         row["route_reason"] = (str(row.get("route_reason") or "").strip() + f" [route_rebalanced:{prev}->{desired}]").strip()
         changed = True
         cur = counts()
+
+    for _ in range(total * 3):
+        if not _has_adjacent_route(scenes, "ia2v"):
+            break
+        improved = False
+        for idx in range(1, total):
+            if str(scenes[idx - 1].get("route") or "") != "ia2v" or str(scenes[idx].get("route") or "") != "ia2v":
+                continue
+            candidate_indices = [idx - 1, idx]
+            for target_idx in candidate_indices:
+                row = scenes[target_idx]
+                current_route = str(row.get("route") or "")
+                alternatives = [r for r in ("i2v", "first_last") if cur[r] < target.get(r, 0) or current_route == "ia2v"]
+                best_route = ""
+                best_gain = -999
+                for alt in alternatives:
+                    score = _route_scores(row, target_idx, total, scenes=scenes)
+                    gain = score.get(alt, 0) - score.get(current_route, 0)
+                    gain += _route_adjacency_penalty(scenes, target_idx, current_route) - _route_adjacency_penalty(scenes, target_idx, alt)
+                    if gain > best_gain:
+                        best_gain = gain
+                        best_route = alt
+                if best_route:
+                    row["route"] = best_route
+                    row["route_reason"] = (
+                        str(row.get("route_reason") or "").strip() + f" [route_spacing:ia2v_adjacent->{best_route}]"
+                    ).strip()
+                    changed = True
+                    cur = counts()
+                    improved = True
+                    break
+            if improved:
+                break
+        if not improved:
+            break
 
     return changed
 
@@ -406,7 +483,7 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
         route_raw = str(raw_row.get("route") or "").strip().lower()
         route = route_raw if route_raw in ALLOWED_ROUTES else ""
         if not route:
-            route = _default_route({**window, **role_row, **raw_row}, idx, len(scene_windows))
+            route = _default_route({**window, **role_row, **raw_row}, idx, len(scene_windows), scenes=normalized_scenes)
             used_fallback = True
 
         primary_role = str(raw_row.get("primary_role") or role_row.get("primary_role") or "").strip() or None
@@ -447,6 +524,9 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
         used_fallback = True
 
     route_counts = {route: sum(1 for row in normalized_scenes if row.get("route") == route) for route in ("i2v", "ia2v", "first_last")}
+    has_adjacent_ia2v = _has_adjacent_route(normalized_scenes, "ia2v")
+    has_adjacent_first_last = _has_adjacent_route(normalized_scenes, "first_last")
+    route_spacing_warning = "adjacent_ia2v_detected" if has_adjacent_ia2v else ("adjacent_first_last_detected" if has_adjacent_first_last else "")
 
     plan = {
         "plan_version": SCENE_PLAN_PROMPT_VERSION,
@@ -486,6 +566,11 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
             "ia2v reserved for emotionally readable performance beats.",
             "first_last reserved for explicit progression or payoff turns.",
         ],
+        "route_spacing": {
+            "has_adjacent_ia2v": has_adjacent_ia2v,
+            "has_adjacent_first_last": has_adjacent_first_last,
+            "warning": route_spacing_warning,
+        },
     }
 
     validation_error = "" if normalized_scenes else "scene_plan_empty_after_normalization"
@@ -561,12 +646,16 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             "ia2v": int(route_summary.get("ia2v") or 0),
             "first_last": int(route_summary.get("first_last") or 0),
         }
+        spacing = _safe_dict(scene_plan.get("route_spacing"))
         diagnostics.update(
             {
                 "route_counts": route_counts,
                 "presence_modes": presence_modes,
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
                 "watchability_fallback_count": int(watchability_fallback_count),
+                "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
+                "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
+                "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
             }
         )
         return {
@@ -589,6 +678,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             "ia2v": int(route_summary.get("ia2v") or 0),
             "first_last": int(route_summary.get("first_last") or 0),
         }
+        spacing = _safe_dict(scene_plan.get("route_spacing"))
         diagnostics.update(
             {
                 "route_counts": route_counts,
@@ -601,6 +691,9 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 ),
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
                 "watchability_fallback_count": int(watchability_fallback_count),
+                "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
+                "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
+                "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
             }
         )
         return {
