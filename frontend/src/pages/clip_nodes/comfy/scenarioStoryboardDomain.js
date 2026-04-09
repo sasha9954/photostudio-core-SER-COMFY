@@ -994,7 +994,7 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const ltxModeFromSource = normalizeText(source.ltxMode ?? source.ltx_mode);
   const ltxMode = normalizeScenarioWorkflowKeyCandidate(ltxModeFromSource) || (ltxModeFromSource.toLowerCase() || (continuationRequested ? "continuation" : "i2v"));
   const ltxModeNormalized = ltxMode.toLowerCase();
-  const renderMode = normalizeText(source.renderMode)
+  const renderMode = normalizeText(source.renderMode ?? source.render_mode)
     || (["f_l"].includes(ltxMode) ? "first_last" : "image_to_video");
   const requiresTwoFrames = Boolean(source.needsTwoFrames ?? source.needs_two_frames) || ["f_l"].includes(ltxModeNormalized);
   const requiresContinuationRaw = continuationRequested || ltxModeNormalized === "continuation" || explicitWorkflowKey === "continuation";
@@ -1018,8 +1018,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const requestedDurationSec = normalizeDurationFromScene(source, durationSec);
 
   const summaryDual = normalizeDualField({
-    ru: source.summaryRu ?? source.summary_ru ?? source.sceneGoalRu ?? source.scene_goal_ru ?? source.sceneGoal ?? source.scene_goal ?? source.action,
-    en: source.summaryEn ?? source.summary_en ?? source.sceneGoalEn ?? source.scene_goal_en ?? source.scene_goal ?? source.sceneGoal ?? source.action,
+    ru: source.summaryRu ?? source.summary_ru ?? source.summary ?? source.sceneGoalRu ?? source.scene_goal_ru ?? source.sceneGoal ?? source.scene_goal ?? source.action,
+    en: source.summaryEn ?? source.summary_en ?? source.summary ?? source.sceneGoalEn ?? source.scene_goal_en ?? source.scene_goal ?? source.sceneGoal ?? source.action,
   });
   const imageDual = normalizeDualField({
     ru: source.imagePromptRu ?? source.image_prompt_ru ?? source.imagePrompt ?? source.image_prompt,
@@ -1155,11 +1155,17 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     speakerRole: normalizeText(source.speakerRole ?? source.speaker_role),
     audioSliceStartSec: toNumber(source.audioSliceStartSec ?? source.audio_slice_start_sec ?? source.time_start, t0),
     audioSliceEndSec: toNumber(source.audioSliceEndSec ?? source.audio_slice_end_sec ?? source.time_end, t1),
-    audioSliceExpectedDurationSec: toNumber(source.audioSliceExpectedDurationSec ?? source.audio_slice_expected_duration_sec ?? durationSec, durationSec),
-    startFramePromptRu: normalizeText(source.startFramePromptRu ?? source.start_frame_prompt_ru ?? source.startFramePrompt),
-    startFramePromptEn: normalizeText(source.startFramePromptEn ?? source.start_frame_prompt_en ?? source.startFramePrompt),
-    endFramePromptRu: normalizeText(source.endFramePromptRu ?? source.end_frame_prompt_ru ?? source.endFramePrompt),
-    endFramePromptEn: normalizeText(source.endFramePromptEn ?? source.end_frame_prompt_en ?? source.endFramePrompt),
+    audioSliceExpectedDurationSec: toNumber(
+      source.audioSliceExpectedDurationSec
+      ?? source.audio_slice_expected_duration_sec
+      ?? Math.max(0, toNumber(source.audioSliceEndSec ?? source.audio_slice_end_sec ?? source.time_end, t1) - toNumber(source.audioSliceStartSec ?? source.audio_slice_start_sec ?? source.time_start, t0))
+      ?? durationSec,
+      durationSec
+    ),
+    startFramePromptRu: normalizeText(source.startFramePromptRu ?? source.start_frame_prompt_ru ?? source.startFramePrompt ?? source.start_frame_prompt ?? source.first_frame_prompt ?? source.firstFramePrompt),
+    startFramePromptEn: normalizeText(source.startFramePromptEn ?? source.start_frame_prompt_en ?? source.startFramePrompt ?? source.start_frame_prompt ?? source.first_frame_prompt ?? source.firstFramePrompt),
+    endFramePromptRu: normalizeText(source.endFramePromptRu ?? source.end_frame_prompt_ru ?? source.endFramePrompt ?? source.end_frame_prompt ?? source.last_frame_prompt ?? source.lastFramePrompt),
+    endFramePromptEn: normalizeText(source.endFramePromptEn ?? source.end_frame_prompt_en ?? source.endFramePrompt ?? source.end_frame_prompt ?? source.last_frame_prompt ?? source.lastFramePrompt),
     imageUrl: normalizeText(source.imageUrl ?? source.image_url ?? source.previewUrl ?? source.preview_url),
     imageStatus: normalizeText(source.imageStatus ?? source.image_status),
     format: sceneFormat,

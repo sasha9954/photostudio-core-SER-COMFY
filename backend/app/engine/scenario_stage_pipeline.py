@@ -517,6 +517,14 @@ def _to_float(value: Any, fallback: float = 0.0) -> float:
     return fallback
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _normalize_route_contract(route_value: Any) -> dict[str, Any]:
     raw = str(route_value or "").strip().lower()
     if raw in {"f_l", "first-last"}:
@@ -633,15 +641,37 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         ]
         audio_slice_start_sec = t0 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_end_sec = t1 if route_contract["route"] == "ia2v" else 0.0
+        audio_slice_expected_duration_sec = max(0.0, audio_slice_end_sec - audio_slice_start_sec)
+        summary = _first_text(
+            scene_plan_row.get("scene_summary"),
+            scene_plan_row.get("scene_description"),
+            scene_plan_row.get("summary"),
+            scene_plan_row.get("scene_goal"),
+            scene_plan_row.get("narrative_function"),
+            scene_plan_row.get("scene_function"),
+            scene_plan_row.get("emotional_intent"),
+            scene_plan_row.get("watchability_role"),
+        )
+        scene_goal = _first_text(
+            scene_plan_row.get("scene_goal"),
+            scene_plan_row.get("emotional_intent"),
+            scene_plan_row.get("scene_description"),
+            scene_plan_row.get("scene_summary"),
+        )
+        narrative_function = _first_text(
+            scene_plan_row.get("narrative_function"),
+            scene_plan_row.get("scene_function"),
+            scene_plan_row.get("watchability_role"),
+        )
 
         scene_contract: dict[str, Any] = {
             "scene_id": scene_id or f"sc_{idx}",
             "t0": t0,
             "t1": t1,
             "duration_sec": duration_sec,
-            "summary": str(scene_plan_row.get("watchability_role") or "").strip(),
-            "scene_goal": str(scene_plan_row.get("emotional_intent") or "").strip(),
-            "narrative_function": str(scene_plan_row.get("scene_function") or "").strip(),
+            "summary": summary,
+            "scene_goal": scene_goal,
+            "narrative_function": narrative_function,
             "route": route_contract["route"],
             "ltx_mode": route_contract["ltx_mode"],
             "render_mode": route_contract["render_mode"],
@@ -657,6 +687,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "negative_prompt": str(prompt_row.get("negative_prompt") or "").strip(),
             "audio_slice_start_sec": audio_slice_start_sec,
             "audio_slice_end_sec": audio_slice_end_sec,
+            "audio_slice_expected_duration_sec": audio_slice_expected_duration_sec,
             "prompt_notes": prompt_notes,
             "scene_presence_mode": str(role_row.get("scene_presence_mode") or scene_plan_row.get("scene_presence_mode") or "").strip(),
             "route_reason": str(scene_plan_row.get("route_reason") or "").strip(),
@@ -670,11 +701,37 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         }
 
         if route_contract["route"] == "first_last":
+            first_frame_prompt = _first_text(
+                prompt_row.get("first_frame_prompt"),
+                prompt_row.get("firstFramePrompt"),
+                prompt_row.get("start_frame_prompt"),
+                prompt_row.get("startFramePrompt"),
+                prompt_row.get("photo_prompt"),
+                prompt_row.get("image_prompt"),
+                prompt_row.get("frame_prompt"),
+                scene_plan_row.get("frame_description"),
+                scene_plan_row.get("scene_description"),
+            )
+            last_frame_prompt = _first_text(
+                prompt_row.get("last_frame_prompt"),
+                prompt_row.get("lastFramePrompt"),
+                prompt_row.get("end_frame_prompt"),
+                prompt_row.get("endFramePrompt"),
+                prompt_row.get("resolved_frame_prompt"),
+                prompt_row.get("resolvedFramePrompt"),
+                prompt_row.get("video_prompt"),
+                prompt_row.get("transition_prompt"),
+                prompt_row.get("motion_prompt"),
+                scene_plan_row.get("scene_goal"),
+                scene_plan_row.get("emotional_intent"),
+            )
             scene_contract["continuity_priority"] = route_contract.get("continuity_priority", "high")
             scene_contract["environment_lock_required"] = bool(route_contract.get("environment_lock_required"))
             scene_contract["identity_lock_required"] = bool(route_contract.get("identity_lock_required"))
             scene_contract["wardrobe_lock_required"] = bool(route_contract.get("wardrobe_lock_required"))
             scene_contract["two_frame_micro_transition"] = bool(route_contract.get("two_frame_micro_transition"))
+            scene_contract["first_frame_prompt"] = first_frame_prompt
+            scene_contract["last_frame_prompt"] = last_frame_prompt
 
         final_scenes.append(scene_contract)
 

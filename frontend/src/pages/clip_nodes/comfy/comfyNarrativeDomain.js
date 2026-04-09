@@ -300,18 +300,34 @@ function getConnectedInputSignal(input) {
 }
 
 function isFirstLastLikeScene(scene = {}) {
+  const route = normalizeSceneRoute(scene?.route || scene?.video_generation_route || scene?.planned_video_generation_route || scene?.source_route);
   const renderMode = normalizeText(scene?.renderMode || scene?.render_mode).toLowerCase();
   const ltxMode = normalizeText(scene?.ltxMode || scene?.ltx_mode).toLowerCase();
   return renderMode === "first_last"
     || renderMode === "first_last_sound"
     || Boolean(scene?.needsTwoFrames ?? scene?.needs_two_frames)
     || ltxMode === "f_l"
-    || ltxMode === "first_last";
+    || ltxMode === "first_last"
+    || route === "first_last";
 }
 
 function deriveFirstLastPrompts(scene = {}) {
-  const explicitStart = normalizeText(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || scene?.start_frame_prompt);
-  const explicitEnd = normalizeText(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || scene?.end_frame_prompt);
+  const explicitStart = normalizeText(
+    scene?.startFramePromptRu
+    || scene?.startFramePromptEn
+    || scene?.startFramePrompt
+    || scene?.start_frame_prompt
+    || scene?.first_frame_prompt
+    || scene?.firstFramePrompt
+  );
+  const explicitEnd = normalizeText(
+    scene?.endFramePromptRu
+    || scene?.endFramePromptEn
+    || scene?.endFramePrompt
+    || scene?.end_frame_prompt
+    || scene?.last_frame_prompt
+    || scene?.lastFramePrompt
+  );
   if (explicitStart && explicitEnd) {
     return { start: explicitStart, end: explicitEnd, derived: false };
   }
@@ -328,6 +344,22 @@ function deriveFirstLastPrompts(scene = {}) {
   if (end) end = `${end}. Final changed state after transition: ${transitionSemantics}`;
   if (start && end && start === end) end = `${end}. Keep the final frame visually different from the start frame.`;
   return { start, end, derived: true };
+}
+
+function normalizeSceneRoute(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return "";
+  if (["ia2v", "lip_sync_music", "lip_sync", "avatar_lipsync"].includes(normalized)) return "lip_sync_music";
+  if (["first_last", "first-last", "f_l"].includes(normalized)) return "first_last";
+  if (["i2v", "image_video", "image_to_video"].includes(normalized)) return "i2v";
+  return normalized;
+}
+
+function routeToWorkflowKey(routeValue) {
+  const route = normalizeSceneRoute(routeValue);
+  if (route === "first_last") return "f_l";
+  if (route === "lip_sync_music") return "lip_sync_music";
+  return "i2v";
 }
 
 function normalizeNarrativeSourceMode(mode) {
@@ -1125,12 +1157,7 @@ function mapCompactDirectorResponseToStoryboardOut(compactResponse = {}) {
     const startSec = Number(scene?.start_time_sec ?? 0) || 0;
     const endSecRaw = Number(scene?.end_time_sec ?? startSec) || startSec;
     const endSec = endSecRaw < startSec ? startSec : endSecRaw;
-    const routeRaw = normalizeText(scene?.route).toLowerCase();
-    const resolvedWorkflowKey = ["lip_sync_music", "lip_sync"].includes(routeRaw)
-      ? "lip_sync_music"
-      : ["f_l", "first_last", "first-last"].includes(routeRaw)
-        ? "f_l"
-        : "i2v";
+    const resolvedWorkflowKey = routeToWorkflowKey(scene?.route);
     const isLipSync = resolvedWorkflowKey === "lip_sync_music";
     const needsTwoFrames = resolvedWorkflowKey === "f_l";
     const description = normalizeText(scene?.description);
@@ -1275,7 +1302,7 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
     });
     const normalizedScenes = mergedScenesRaw.map((scene, index) => {
       const sceneId = normalizeText(scene?.scene_id) || `S${index + 1}`;
-      const route = normalizeText(scene?.route).toLowerCase();
+      const route = normalizeSceneRoute(scene?.route);
       const firstFramePrompt = normalizeText(scene?.first_frame_prompt || scene?.firstFramePrompt);
       const lastFramePrompt = normalizeText(scene?.last_frame_prompt || scene?.lastFramePrompt);
       const transitionPrompt = normalizeText(scene?.transition_prompt || scene?.transitionPrompt);
@@ -1290,8 +1317,8 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         source_route: route,
         planned_video_generation_route: route,
         video_generation_route: route,
-        resolved_workflow_key: route === "first_last" ? "f_l" : route,
-        ltx_mode: route === "first_last" ? "f_l" : route,
+        resolved_workflow_key: routeToWorkflowKey(route),
+        ltx_mode: routeToWorkflowKey(route),
         framePrompt,
         imagePrompt: framePrompt,
         frame_prompt: framePrompt,
@@ -1578,7 +1605,7 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         : sourceRoute
           ? "sourceRoute"
           : "legacy";
-    const routeNormalized = String(uiRouteValue || "").trim().toLowerCase();
+    const routeNormalized = normalizeSceneRoute(uiRouteValue);
     const lipSyncFromRoute = routeNormalized === "lip_sync_music";
     const lipSyncFromState = Boolean(
       directorScene?.lipSync

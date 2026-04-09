@@ -1194,6 +1194,18 @@ function normalizeStoryboardOutScene(scene, index) {
   const sceneId = String(source.scene_id || `S${index + 1}`);
   const displayIndexRaw = Number(source.display_index ?? source.displayIndex);
   const displayIndex = Number.isFinite(displayIndexRaw) && displayIndexRaw > 0 ? Math.floor(displayIndexRaw) : (index + 1);
+  const route = String(source.route || source.video_generation_route || source.planned_video_generation_route || "").trim().toLowerCase();
+  const firstFramePrompt = String(source.first_frame_prompt || source.firstFramePrompt || source.start_frame_prompt || source.startFramePrompt || "").trim();
+  const lastFramePrompt = String(source.last_frame_prompt || source.lastFramePrompt || source.end_frame_prompt || source.endFramePrompt || "").trim();
+  const audioSliceStartSec = toStoryboardTimeSec(source.audio_slice_start_sec ?? source.audioSliceStartSec, 0);
+  const audioSliceEndSec = toStoryboardTimeSec(source.audio_slice_end_sec ?? source.audioSliceEndSec, 0);
+  const audioSliceExpectedDurationSec = Math.max(
+    0,
+    toStoryboardTimeSec(
+      source.audio_slice_expected_duration_sec ?? source.audioSliceExpectedDurationSec,
+      Math.max(0, audioSliceEndSec - audioSliceStartSec),
+    ),
+  );
   return {
     id: `storyboard-scene-${index + 1}`,
     sceneId,
@@ -1203,7 +1215,7 @@ function normalizeStoryboardOutScene(scene, index) {
     start: t0,
     end: t1,
     durationSec: Math.max(0, Number((t1 - t0).toFixed(3))),
-    sceneText: String(source.scene_goal || source.frame_description || "").trim(),
+    sceneText: String(source.summary || source.scene_goal || source.frame_description || source.narrative_function || "").trim(),
     visualDescription: String(source.frame_description || "").trim(),
     location: String(source.location || "").trim(),
     props: Array.isArray(source.props) ? source.props : [],
@@ -1214,15 +1226,24 @@ function normalizeStoryboardOutScene(scene, index) {
     actionInFrame: String(source.action_in_frame || "").trim(),
     cameraIdea: String(source.camera || "").trim(),
     ltxMode,
+    route,
+    renderMode: String(source.render_mode || "").trim(),
+    transitionType: String(source.transition_type || "").trim(),
+    lipSync: !!source.lip_sync,
     ltxReason: String(source.ltx_reason || "").trim(),
     startFrameSource: String(source.start_frame_source || "new").trim(),
     needsTwoFrames: !!source.needs_two_frames,
+    firstFramePrompt,
+    lastFramePrompt,
     continuationFromPrevious: !!source.continuation_from_previous,
     narrationMode: String(source.narration_mode || "").trim(),
     localPhrase: source.local_phrase == null ? null : String(source.local_phrase),
     sfx: String(source.sfx || "").trim(),
     musicMixHint: String(source.music_mix_hint || "medium").trim() || "medium",
     actors: Array.isArray(source.actors) ? source.actors : [],
+    audioSliceStartSec,
+    audioSliceEndSec,
+    audioSliceExpectedDurationSec,
     executorModel: ltxMode || "i2v",
     sceneGenerationStatus: "not_generated",
     generatedAssetUrl: "",
