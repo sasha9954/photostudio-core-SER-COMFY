@@ -4230,15 +4230,26 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .clipSB_scenarioEditorStageButtonsRow {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
 
 .clipSB_scenarioEditorStageBtn {
+  width: auto;
+  flex: 0 0 auto;
+  min-width: 88px;
   min-height: 28px;
   padding: 4px 10px;
   font-size: 11px;
   letter-spacing: 0.04em;
+}
+
+.clipSB_scenarioEditorStageButtonsRow .clipSB_btn {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .clipSB_scenarioEditorStageStatusRow {
