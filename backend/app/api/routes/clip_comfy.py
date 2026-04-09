@@ -191,6 +191,17 @@ class ScenarioDirectorGenerateIn(BaseModel):
     direct_gemini_storyboard_mode: bool | None = None
 
 
+def _sanitize_context_refs(raw_context_refs: Any) -> dict[str, Any]:
+    if not isinstance(raw_context_refs, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    for key, value in raw_context_refs.items():
+        if value is None or not isinstance(value, dict):
+            continue
+        sanitized[str(key)] = value
+    return sanitized
+
+
 
 
 def _is_clip_music_video_pipeline(req: dict[str, Any]) -> bool:
@@ -694,7 +705,21 @@ async def clip_comfy_plan(request: Request) -> dict[str, Any]:
 
 
 @router.post("/clip/comfy/scenario-director/generate")
-async def clip_comfy_scenario_director_generate(request: Request, payload: ScenarioDirectorGenerateIn) -> dict[str, Any]:
+async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, Any]:
+    try:
+        raw_body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid JSON body: {exc}") from exc
+    if not isinstance(raw_body, dict):
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
+    if "context_refs" in raw_body:
+        raw_body["context_refs"] = _sanitize_context_refs(raw_body.get("context_refs"))
+    try:
+        payload = ScenarioDirectorGenerateIn.model_validate(raw_body)
+    except ValidationError as exc:
+        logger.exception("[clip_comfy_scenario_director_generate] pydantic-validation-error=%s", exc)
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
     req = payload.model_dump(mode="json")
     request_id_header = str(request.headers.get("x-scenario-director-request-id") or "").strip()
     metadata = req.get("metadata") if isinstance(req.get("metadata"), dict) else {}

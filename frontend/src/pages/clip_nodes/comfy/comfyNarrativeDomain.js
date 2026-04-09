@@ -201,6 +201,14 @@ export const NARRATIVE_CONTEXT_INPUT_HANDLES = NARRATIVE_INPUT_HANDLES.filter((i
 const lookupLabel = (options, value, fallback) => options.find((option) => option.value === value)?.labelRu || fallback;
 
 const normalizeText = (value) => String(value || "").trim();
+
+function sanitizeContextRefs(contextRefs = {}) {
+  if (!contextRefs || typeof contextRefs !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(contextRefs).filter(([, value]) => value && typeof value === "object")
+  );
+}
+
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC_SYNTH = false;
 const SCENARIO_DIRECTOR_FIXTURE_TOGGLE_KEY = "ps:scenarioDirector:forceFixture";
 
@@ -778,6 +786,11 @@ export function buildScenarioStageManualPayload({
     storyboardPackage && typeof storyboardPackage === "object" && Object.keys(storyboardPackage).length
   ) ? storyboardPackage : (target?.storyboardPackage && typeof target.storyboardPackage === "object" ? target.storyboardPackage : {});
 
+  const rawContextRefs = source?.connectedInputs && typeof source.connectedInputs === "object"
+    ? source.connectedInputs
+    : (basePayload?.context_refs || {});
+  const sanitizedContextRefs = sanitizeContextRefs(rawContextRefs);
+
   return {
     ...basePayload,
     mode: "scenario_stage",
@@ -792,7 +805,7 @@ export function buildScenarioStageManualPayload({
     audioUrl: normalizeText(source?.audioUrl || source?.masterAudioUrl || target?.audioUrl || basePayload?.audioUrl),
     audioDurationSec: Number(source?.audioDurationSec || target?.audioDurationSec || basePayload?.audioDurationSec || 0) || 0,
     source: source?.resolvedSource && typeof source.resolvedSource === "object" ? source.resolvedSource : (basePayload?.source || {}),
-    context_refs: source?.connectedInputs && typeof source.connectedInputs === "object" ? source.connectedInputs : (basePayload?.context_refs || {}),
+    context_refs: sanitizedContextRefs,
     connected_context_summary: (
       source?.connected_context_summary && typeof source.connected_context_summary === "object"
     ) ? source.connected_context_summary : (basePayload?.connected_context_summary || {}),
