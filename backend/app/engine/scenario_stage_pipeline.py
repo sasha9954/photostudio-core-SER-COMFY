@@ -1802,6 +1802,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_flat"] = False
     diagnostics["scene_plan_watchability_fallback_count"] = 0
     diagnostics["scene_plan_world_summary_used"] = False
+    diagnostics["scene_plan_has_adjacent_ia2v"] = False
+    diagnostics["scene_plan_has_adjacent_first_last"] = False
+    diagnostics["scene_plan_route_spacing_warning"] = False
     diagnostics["scene_plan_validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
     diagnostics["scene_plan_empty"] = False
@@ -1830,6 +1833,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_flat"] = bool(scene_diag.get("route_flat"))
     diagnostics["scene_plan_watchability_fallback_count"] = int(scene_diag.get("watchability_fallback_count") or 0)
     diagnostics["scene_plan_world_summary_used"] = bool(scene_diag.get("world_summary_used"))
+    diagnostics["scene_plan_has_adjacent_ia2v"] = bool(scene_diag.get("scene_plan_has_adjacent_ia2v"))
+    diagnostics["scene_plan_has_adjacent_first_last"] = bool(scene_diag.get("scene_plan_has_adjacent_first_last"))
+    diagnostics["scene_plan_route_spacing_warning"] = bool(scene_diag.get("scene_plan_route_spacing_warning"))
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("scenes")))
@@ -1839,6 +1845,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, "scene_plan generated", stage_id="scene_plan")
         if diagnostics.get("scene_plan_route_flat"):
             _append_diag_event(package, "scene_plan_route_flat warning", stage_id="scene_plan")
+        if diagnostics.get("scene_plan_route_spacing_warning"):
+            _append_diag_event(package, "scene_plan_route_spacing_warning", stage_id="scene_plan")
     else:
         _append_diag_event(package, "scene_plan empty", stage_id="scene_plan")
     return package
@@ -1855,6 +1863,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_missing_photo_count"] = 0
     diagnostics["scene_prompts_missing_video_count"] = 0
     diagnostics["scene_prompts_ia2v_audio_driven_count"] = 0
+    diagnostics["scene_prompts_route_semantics_mismatch_count"] = 0
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
@@ -1877,6 +1886,9 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_missing_photo_count"] = int(prompts_diag.get("missing_photo_count") or 0)
     diagnostics["scene_prompts_missing_video_count"] = int(prompts_diag.get("missing_video_count") or 0)
     diagnostics["scene_prompts_ia2v_audio_driven_count"] = int(prompts_diag.get("ia2v_audio_driven_count") or 0)
+    diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
+        prompts_diag.get("scene_prompts_route_semantics_mismatch_count") or 0
+    )
     diagnostics["scene_prompts_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["scene_prompts_error"] = str(result.get("error") or "")
     diagnostics["scene_prompts_empty"] = not bool(scene_prompts and _safe_list(scene_prompts.get("scenes")))
@@ -1884,6 +1896,8 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     if scene_prompts and _safe_list(scene_prompts.get("scenes")):
         _append_diag_event(package, "scene_prompts generated", stage_id="scene_prompts")
+        if int(diagnostics.get("scene_prompts_route_semantics_mismatch_count") or 0) > 0:
+            _append_diag_event(package, "scene_prompts_route_semantics_mismatch warning", stage_id="scene_prompts")
     else:
         _append_diag_event(package, "scene_prompts empty", stage_id="scene_prompts")
     return package
