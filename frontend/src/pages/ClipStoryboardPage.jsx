@@ -3162,6 +3162,23 @@ function deriveFirstLastFramePrompts(scene = {}) {
   return { start, end, derived: true };
 }
 
+function ensureFirstLastSlotPrompt(scene = {}, slot = "start", prompt = "") {
+  const basePrompt = String(prompt || "").trim();
+  const derived = deriveFirstLastFramePrompts(scene || {});
+  const startPrompt = String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || derived.start || "").trim();
+  const endPrompt = String(scene?.endFramePromptRu || scene?.endFramePromptEn || scene?.endFramePrompt || derived.end || "").trim();
+  const fallbackBase = basePrompt || (slot === "end" ? endPrompt : startPrompt);
+  if (!fallbackBase) return "";
+  if (slot !== "end") {
+    return isNearDuplicateSceneText(startPrompt, endPrompt)
+      ? `${fallbackBase}. Opening state only: neutral pose anchor, early-beat emotion, hands in resting controlled position, preserve identity/location/light/camera family.`
+      : fallbackBase;
+  }
+  const needsDeltaInjection = !endPrompt || isNearDuplicateSceneText(startPrompt, endPrompt);
+  if (!needsDeltaInjection) return fallbackBase;
+  return `${fallbackBase}. End state must be visibly progressed from the opening frame: changed pose, changed head angle, changed hand placement, evolved emotion; keep same girl, same wall/location, same lighting family, same camera family.`;
+}
+
 function getSceneFramePromptByStrategy(scene, slot = "single") {
   const strategy = String(scene?.imageStrategy || deriveScenarioImageStrategy(scene)).trim().toLowerCase();
   const derivedFirstLast = deriveFirstLastFramePrompts(scene || {});
@@ -3173,6 +3190,37 @@ function getSceneFramePromptByStrategy(scene, slot = "single") {
     return String(scene?.startFramePromptRu || scene?.startFramePromptEn || scene?.startFramePrompt || derivedFirstLast.start || scene?.imagePromptRu || scene?.imagePrompt || "").trim();
   }
   return getScenePrimaryFramePrompt(scene);
+}
+
+function buildFallbackRefsByRoleFromScenarioContext({ scene = {}, scenarioPackage = {} } = {}) {
+  return mergeScenarioRefsByRole(
+    scene?.context_refs,
+    scene?.contextRefs,
+    scene?.connected_context_summary?.context_refs,
+    scene?.connected_context_summary?.contextRefs,
+    scene?.connected_context_summary?.refsByRole,
+    scene?.connected_context_summary?.refs_by_role,
+    scene?.connectedContextSummary?.context_refs,
+    scene?.connectedContextSummary?.contextRefs,
+    scene?.connectedContextSummary?.refsByRole,
+    scene?.connectedContextSummary?.refs_by_role,
+    scenarioPackage?.context_refs,
+    scenarioPackage?.contextRefs,
+    scenarioPackage?.connected_context_summary?.context_refs,
+    scenarioPackage?.connected_context_summary?.contextRefs,
+    scenarioPackage?.connected_context_summary?.refsByRole,
+    scenarioPackage?.connected_context_summary?.refs_by_role,
+    scenarioPackage?.connectedContextSummary?.context_refs,
+    scenarioPackage?.connectedContextSummary?.contextRefs,
+    scenarioPackage?.connectedContextSummary?.refsByRole,
+    scenarioPackage?.connectedContextSummary?.refs_by_role,
+    extractRefsInventoryLikeByRole(scene?.context_refs),
+    extractRefsInventoryLikeByRole(scene?.connected_context_summary),
+    extractRefsInventoryLikeByRole(scene?.connectedContextSummary),
+    extractRefsInventoryLikeByRole(scenarioPackage?.context_refs),
+    extractRefsInventoryLikeByRole(scenarioPackage?.connected_context_summary),
+    extractRefsInventoryLikeByRole(scenarioPackage?.connectedContextSummary),
+  );
 }
 
 function getSceneTransitionPrompt(scene) {
@@ -10493,7 +10541,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     );
     const { width, height } = getSceneImageSize(imageFormat);
 
-    const sceneDelta = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
+    const sceneDeltaRaw = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
+    const sceneDelta = imageStrategy === "first_last"
+      ? ensureFirstLastSlotPrompt(targetScene, normalizedSlot, sceneDeltaRaw)
+      : sceneDeltaRaw;
     const continuityContractLines = [
       "FIRST_LAST CONTINUITY CONTRACT:",
       "- same characters and same identity",
@@ -10519,6 +10570,17 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
     const applyFirstLastContinuityContract = imageStrategy === "first_last" && normalizedSlot === "end";
     const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}`.trim();
+    if (imageStrategy === "first_last") {
+      const firstLastDerived = deriveFirstLastFramePrompts(targetScene || {});
+      const startPromptCheck = ensureFirstLastSlotPrompt(targetScene, "start", firstLastDerived.start || getSceneFramePromptByStrategy(targetScene, "start"));
+      const endPromptCheck = ensureFirstLastSlotPrompt(targetScene, "end", firstLastDerived.end || getSceneFramePromptByStrategy(targetScene, "end"));
+      console.debug("[SCENARIO FIRST_LAST PROMPT CHECK]", {
+        sceneId: String(targetScene?.sceneId || ""),
+        identical: isNearDuplicateSceneText(startPromptCheck, endPromptCheck),
+        startPreview: String(startPromptCheck || "").slice(0, 180),
+        endPreview: String(endPromptCheck || "").slice(0, 180),
+      });
+    }
 
     setScenarioImageLoading(true);
     setScenarioImageError("");
@@ -10604,7 +10666,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         effectiveCurrentSceneStartImageUrl,
         firstFrameReferenceUrl: firstFrameReferenceUrlForEnd,
       });
-      const refsForImageRequest = normalizeClipImageRefsPayload({
+      const refsForImageRequestBase = normalizeClipImageRefsPayload({
         ...scenarioBrainRefs,
         refsByRole: refsByRoleForImage,
         refsUsed: derivedRoleContract.refsUsed,
@@ -10623,6 +10685,54 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         currentSceneStartImageUrl,
         heroEntityId: targetScene?.heroEntityId || derivedRoleContract?.primaryRole || "",
       });
+      const refsFallbackFromContext = buildFallbackRefsByRoleFromScenarioContext({
+        scene: targetScene,
+        scenarioPackage: scenarioPackageForImage,
+      });
+      const refsForImageRequest = (
+        !hasNonEmptyRefsByRole(refsForImageRequestBase?.refsByRole || {}) && hasNonEmptyRefsByRole(refsFallbackFromContext)
+      )
+        ? normalizeClipImageRefsPayload({
+          ...refsForImageRequestBase,
+          refsByRole: refsFallbackFromContext,
+          primaryRole: String(
+            refsForImageRequestBase?.primaryRole
+            || targetScene?.primaryRole
+            || derivedRoleContract?.primaryRole
+            || "character_1"
+          ).trim(),
+          heroEntityId: String(
+            refsForImageRequestBase?.heroEntityId
+            || targetScene?.heroEntityId
+            || targetScene?.primaryRole
+            || derivedRoleContract?.primaryRole
+            || "character_1"
+          ).trim(),
+          mustAppear: Array.isArray(refsForImageRequestBase?.mustAppear) && refsForImageRequestBase.mustAppear.length
+            ? refsForImageRequestBase.mustAppear
+            : (Array.isArray(targetScene?.mustAppear) && targetScene.mustAppear.length
+              ? targetScene.mustAppear
+              : (Array.isArray(derivedRoleContract?.mustAppear) ? derivedRoleContract.mustAppear : [])),
+          refsUsedByRole: (
+            refsForImageRequestBase?.refsUsedByRole
+            && typeof refsForImageRequestBase.refsUsedByRole === "object"
+            && Object.keys(refsForImageRequestBase.refsUsedByRole).length
+          )
+            ? refsForImageRequestBase.refsUsedByRole
+            : Object.fromEntries(
+              Object.entries(refsFallbackFromContext)
+                .filter(([, urls]) => Array.isArray(urls) && urls.length > 0)
+                .map(([role, urls]) => [role, urls.map(() => "required")])
+            ),
+        })
+        : refsForImageRequestBase;
+      if (refsForImageRequest !== refsForImageRequestBase) {
+        console.warn("[SCENARIO IMAGE REFS RESTORED FROM CONTEXT]", {
+          sceneId,
+          restoredAt: "handleGenerateScenarioImage.refsForImageRequest",
+          fallbackCounts: summarizeRefsByRole(refsFallbackFromContext),
+        });
+      }
       const selectedSceneRefsDebug = {
         sceneId,
         refsUsedByRole: targetScene?.refsUsedByRole,
@@ -10881,7 +10991,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       ].find((candidate) => isNonEmptyRoleMap(candidate)) || {});
       const refsPayloadForRequest = {
         ...refsForImageRequest,
-        refsByRole: refsForImageRequest?.refsByRole || refsByRoleForImage || {},
+        refsByRole: hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
+          ? refsForImageRequest.refsByRole
+          : (hasNonEmptyRefsByRole(refsByRoleForImage || {}) ? refsByRoleForImage : refsFallbackFromContext),
         refsUsedByRole: refsUsedByRoleFallback,
         primaryRole: refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "",
         mustAppear: Array.isArray(refsForImageRequest?.mustAppear)
@@ -11132,6 +11244,11 @@ Aspect ratio: ${imageFormat}`,
           imageDegraded,
         };
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
+        const existingStartAssetUrl = String(targetScene?.startImageUrl || targetScene?.startFrameImageUrl || "").trim();
+        const duplicatedFirstLastOutput = imageStrategy === "first_last" && existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl;
+        if (duplicatedFirstLastOutput) {
+          throw new Error("first_last_end_image_matches_start_asset");
+        }
         updateScenarioScene(sceneId, {
           endImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
@@ -11151,6 +11268,14 @@ Aspect ratio: ${imageFormat}`,
           endFrameError: imageDegraded ? imageDegradeReason : "",
           imageDegraded,
         };
+        if (imageStrategy === "first_last") {
+          console.debug("[SCENARIO FIRST_LAST ASSET CHECK]", {
+            sceneId,
+            startImageUrl: existingStartAssetUrl,
+            endImageUrl: generatedImageUrl,
+            identical: Boolean(existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl),
+          });
+        }
       } else {
         updateScenarioScene(sceneId, {
           imageUrl: generatedImageUrl,
