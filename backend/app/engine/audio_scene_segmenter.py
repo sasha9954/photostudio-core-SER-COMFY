@@ -13,7 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
 
-GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v2"
+GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v3_music_video_primary"
 GEMINI_SEGMENTATION_MODEL = "gemini-3.1-pro-preview"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 _SCENE_WINDOWS_MAX_START_GAP_SEC = 1.0
@@ -96,21 +96,18 @@ def _build_prompt(
         "director_note": str(director_note or "")[:1200],
     }
     return (
-        "You are a cinematic audio segmentation engine for video scene planning.\n"
+        "You are the PRIMARY music-video segmentation director for scene planning.\n"
         "Analyze the attached audio track and return STRICT JSON only (no markdown, no prose).\n"
         "Track duration is authoritative. Never exceed it.\n"
         f"duration_sec={_round3(duration_sec)}\n\n"
         "SEGMENTATION RULES:\n"
-        "1) Detect track_type: vocal or instrumental.\n"
-        "2) If vocal: segment by phrase endings, never cut in the middle of a spoken/sung word.\n"
-        "3) If instrumental: segment by musical phrases, energy shifts, and natural transitions.\n"
-        "4) Scene length target: typically 3-6 sec.\n"
-        "5) 2.3-3.0 sec is allowed for short phrase endings.\n"
-        "6) 6-8 sec is rare and only when natural.\n"
-        "7) >8 sec is forbidden.\n"
-        "8) If there is a long instrumental tail, split into 2 useful edit windows when natural.\n"
-        "9) Avoid mechanical equal-time grids. Prefer semantic/music-aware cuts.\n"
-        "10) Use exact overall_duration_sec close to the provided duration_sec.\n\n"
+        "1) This is a MUSIC VIDEO. Segment as a music editor, not as a time slicer.\n"
+        "2) Build boundaries from phrase endings, cadence, tension-release, energy change points, and montage feel.\n"
+        "3) Avoid mechanical equal-time grids and repetitive 4/4/4/4 timing.\n"
+        "4) Scene length is a soft guide: mostly 3-6 sec; occasional 2-3 sec accents and 6-8 sec holds are valid when musically justified.\n"
+        "5) Never cut in the middle of a clear sung/spoken word when track_type is vocal.\n"
+        "6) Return a complete audio map structure, not partial hints.\n"
+        "7) Use exact overall_duration_sec close to the provided duration_sec.\n\n"
         "SCENE FUNCTION LABELS (use ONLY this set):\n"
         "- setup = first establishing phrase or opening hook.\n"
         "- build = momentum grows.\n"
@@ -138,10 +135,13 @@ def _build_prompt(
         '  "track_type": "vocal",\n'
         '  "overall_duration_sec": 29.465,\n'
         '  "global_notes": {"segmentation_strategy": "", "warnings": []},\n'
-        '  "scene_windows": [{"id": "sc_1", "t0": 0.0, "t1": 0.0, "duration_sec": 0.0, "phrase_text": "", "transcript_confidence": "high", "cut_reason": "", "energy": "low", "scene_function": "setup", "no_mid_word_cut": true}],\n'
+        '  "sections": [{"id": "sec_1", "t0": 0.0, "t1": 0.0, "label": "intro", "energy": "low", "mood": "anticipation"}],\n'
+        '  "phrase_endpoints_sec": [2.4, 6.1],\n'
         '  "phrase_units": [{"id": "ph_1", "t0": 0.0, "t1": 0.0, "text": "", "semantic_weight": "low", "can_cut_after": true, "transcript_confidence": "high"}],\n'
+        '  "scene_candidate_windows": [{"id": "sc_1", "t0": 0.0, "t1": 0.0, "duration_sec": 0.0, "phrase_text": "", "transcript_confidence": "high", "cut_reason": "", "energy": "low", "scene_function": "setup", "no_mid_word_cut": true}],\n'
         '  "candidate_cut_points_sec": [],\n'
-        '  "no_split_ranges": [{"t0": 0.0, "t1": 0.0, "reason": ""}]\n'
+        '  "no_split_ranges": [{"t0": 0.0, "t1": 0.0, "reason": ""}],\n'
+        '  "lip_sync_candidate_ranges": [{"t0": 0.0, "t1": 0.0}]\n'
         "}\n\n"
         f"CONTEXT:\n{json.dumps(compact_context, ensure_ascii=False)}"
     )
@@ -157,10 +157,13 @@ def _normalize_gemini_payload(payload: dict[str, Any], duration_sec: float) -> d
             "segmentation_strategy": str(_safe_dict(payload.get("global_notes")).get("segmentation_strategy") or "").strip(),
             "warnings": [str(item) for item in _safe_list(_safe_dict(payload.get("global_notes")).get("warnings")) if str(item).strip()],
         },
-        "scene_windows": [],
+        "sections": [],
+        "phrase_endpoints_sec": [],
+        "scene_candidate_windows": [],
         "phrase_units": [],
         "candidate_cut_points_sec": [],
         "no_split_ranges": [],
+        "lip_sync_candidate_ranges": [],
     }
 
     phrase_units: list[dict[str, Any]] = []
@@ -183,8 +186,27 @@ def _normalize_gemini_payload(payload: dict[str, Any], duration_sec: float) -> d
         )
     phrase_units.sort(key=lambda x: (float(x.get("t0") or 0.0), float(x.get("t1") or 0.0)))
 
+    sections: list[dict[str, Any]] = []
+    for idx, item in enumerate(_safe_list(payload.get("sections")), start=1):
+        row = _safe_dict(item)
+        t0 = _round3(_clamp(_coerce_float(row.get("t0"), 0.0), 0.0, duration))
+        t1 = _round3(_clamp(_coerce_float(row.get("t1"), t0), 0.0, duration))
+        if t1 <= t0:
+            continue
+        sections.append(
+            {
+                "id": str(row.get("id") or f"sec_{idx}"),
+                "t0": t0,
+                "t1": t1,
+                "label": str(row.get("label") or f"part_{idx}").strip(),
+                "energy": str(row.get("energy") or "medium").strip().lower() or "medium",
+                "mood": str(row.get("mood") or "neutral").strip().lower() or "neutral",
+            }
+        )
+
     scene_windows: list[dict[str, Any]] = []
-    for idx, item in enumerate(_safe_list(payload.get("scene_windows")), start=1):
+    scene_rows = _safe_list(payload.get("scene_candidate_windows")) or _safe_list(payload.get("scene_windows"))
+    for idx, item in enumerate(scene_rows, start=1):
         row = _safe_dict(item)
         t0 = _round3(_clamp(_coerce_float(row.get("t0"), 0.0), 0.0, duration))
         t1 = _round3(_clamp(_coerce_float(row.get("t1"), t0), 0.0, duration))
@@ -222,8 +244,16 @@ def _normalize_gemini_payload(payload: dict[str, Any], duration_sec: float) -> d
             continue
         no_split_ranges.append({"t0": t0, "t1": t1, "reason": str(item.get("reason") or "").strip()})
 
+    normalized["sections"] = sections
+    normalized["phrase_endpoints_sec"] = sorted(
+        {
+            _round3(_coerce_float(v, -1.0))
+            for v in _safe_list(payload.get("phrase_endpoints_sec"))
+            if 0.0 < _coerce_float(v, -1.0) < duration
+        }
+    )
     normalized["phrase_units"] = phrase_units
-    normalized["scene_windows"] = scene_windows
+    normalized["scene_candidate_windows"] = scene_windows
     normalized["no_split_ranges"] = no_split_ranges
 
     if normalized["overall_duration_sec"] <= 0 and duration > 0:
@@ -280,6 +310,16 @@ def _normalize_gemini_payload(payload: dict[str, Any], duration_sec: float) -> d
     for idx, row in enumerate(scene_windows, start=1):
         row["id"] = f"sc_{idx}"
         row["duration_sec"] = _round3(max(0.0, float(row.get("t1") or 0.0) - float(row.get("t0") or 0.0)))
+    for idx, row in enumerate(sections, start=1):
+        row["id"] = f"sec_{idx}"
+    if not normalized["phrase_endpoints_sec"]:
+        normalized["phrase_endpoints_sec"] = sorted(
+            {
+                _round3(float(item.get("t1") or 0.0))
+                for item in phrase_units
+                if 0.0 < float(item.get("t1") or 0.0) < duration
+            }
+        )
     for idx, row in enumerate(phrase_units, start=1):
         row["id"] = f"ph_{idx}"
 
@@ -295,7 +335,7 @@ def _validate_gemini_payload(payload: dict[str, Any], duration_sec: float) -> st
     if duration > 0 and abs(overall_duration - duration) > 1.2:
         return "overall_duration_mismatch"
 
-    scene_windows = _safe_list(payload.get("scene_windows"))
+    scene_windows = _safe_list(payload.get("scene_candidate_windows")) or _safe_list(payload.get("scene_windows"))
     if not scene_windows:
         return "scene_windows_missing"
 
