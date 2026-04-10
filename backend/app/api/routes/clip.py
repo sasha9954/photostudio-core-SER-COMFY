@@ -5089,13 +5089,34 @@ def _guess_image_mime(url: str, headers: dict, raw: bytes) -> str:
 
 
 def _load_reference_image_inline(url: str) -> dict | None:
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        return None
+    local_candidate = _resolve_audio_asset_path(clean_url)
+    if not local_candidate and clean_url.startswith("static/assets/"):
+        local_candidate = _resolve_audio_asset_path("/" + clean_url)
+    if local_candidate and os.path.isfile(local_candidate):
+        try:
+            with open(local_candidate, "rb") as f:
+                raw = f.read()
+            if not raw:
+                return None
+            mime = _guess_image_mime(local_candidate, {}, raw)
+            return {
+                "inlineData": {
+                    "mimeType": mime,
+                    "data": base64.b64encode(raw).decode("ascii"),
+                }
+            }
+        except Exception:
+            return None
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(clean_url, timeout=10)
         r.raise_for_status()
         raw = r.content
         if not raw:
             return None
-        mime = _guess_image_mime(url, dict(r.headers), raw)
+        mime = _guess_image_mime(clean_url, dict(r.headers), raw)
         return {
             "inlineData": {
                 "mimeType": mime,
@@ -5110,6 +5131,21 @@ def _probe_reference_image_inline_failure(url: str) -> str:
     clean_url = str(url or "").strip()
     if not clean_url:
         return "empty_url"
+    local_candidate = _resolve_audio_asset_path(clean_url)
+    if not local_candidate and clean_url.startswith("static/assets/"):
+        local_candidate = _resolve_audio_asset_path("/" + clean_url)
+    if local_candidate:
+        if not os.path.isfile(local_candidate):
+            return "local_asset_missing"
+        try:
+            with open(local_candidate, "rb") as f:
+                raw = f.read()
+            if not raw:
+                return "local_asset_empty_body"
+            _guess_image_mime(local_candidate, {}, raw)
+            return "local_asset_unknown_inline_load_failure"
+        except Exception as exc:
+            return f"local_asset_read_error:{exc.__class__.__name__}"
     try:
         r = requests.get(clean_url, timeout=10)
     except Exception as exc:
@@ -9085,6 +9121,20 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
     out: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
     if not isinstance(source, dict):
         return out
+    nested_ref_containers = [
+        source.get("refsByRole"),
+        source.get("refs_by_role"),
+        source.get("refsUsedByRole"),
+        source.get("refs_used_by_role"),
+        source.get("context_refs"),
+        source.get("contextRefs"),
+    ]
+    for container in nested_ref_containers:
+        if not isinstance(container, dict):
+            continue
+        nested = _extract_refs_by_role_from_generic_source(container)
+        for role in COMFY_REF_ROLES:
+            out[role] = list(dict.fromkeys([*(out.get(role) or []), *(nested.get(role) or [])]))
     for raw_role, raw_value in source.items():
         role = str(raw_role or "").strip()
         role = role_aliases.get(role, role)
@@ -11325,6 +11375,18 @@ def clip_image(payload: ClipImageIn):
         "hasFirstFrameReference": bool(first_frame_reference_inline),
         "autoEnvironmentEstablishing": auto_environment_establishing,
     }, ensure_ascii=False))
+    print("[CLIP IMAGE REFS INPUT] " + json.dumps({
+        "sceneId": scene_id,
+        "primaryRole": scene_primary_role or None,
+        "heroEntityId": hero_entity_id or None,
+        "mustAppear": must_appear_roles,
+        "sceneActiveRoles": scene_active_roles,
+        "refsByRoleCounts": refs_by_role_counts_incoming,
+        "refsUsedByRoleKeys": sorted(list((scene_refs_used_by_role or {}).keys())) if isinstance(scene_refs_used_by_role, dict) else [],
+        "firstFrameReferenceUrl": "present" if bool(first_frame_reference_url) else "absent",
+        "currentSceneStartImageUrl": "present" if bool(str(getattr(refs_obj, 'currentSceneStartImageUrl', '') or '').strip()) else "absent",
+        "previousSceneImageUrl": "present" if bool(previous_scene_image_url) else "absent",
+    }, ensure_ascii=False))
 
     if (
         (len(comfy_refs_by_role.get("character_1") or []) + len(comfy_refs_by_role.get("character_2") or [])) > 0
@@ -11386,7 +11448,18 @@ def clip_image(payload: ClipImageIn):
         )
     )
 
-    allowed_roles_for_image = set(scene_cast_roles) | set(world_anchor_roles)
+    essential_roles_for_image: set[str] = set()
+    for role_candidate in [scene_primary_role, hero_entity_id]:
+        role = str(role_candidate or "").strip()
+        if role in COMFY_CAST_ROLES and (comfy_refs_by_role.get(role) or []):
+            essential_roles_for_image.add(role)
+    for role in must_appear_roles:
+        if role in COMFY_CAST_ROLES and (comfy_refs_by_role.get(role) or []):
+            essential_roles_for_image.add(role)
+    if (comfy_refs_by_role.get("location") or []) and "location" not in must_not_appear_roles:
+        essential_roles_for_image.add("location")
+
+    allowed_roles_for_image = (set(scene_cast_roles) | set(world_anchor_roles) | essential_roles_for_image)
     if allowed_props:
         allowed_roles_for_image.add("props")
 
@@ -11397,7 +11470,7 @@ def clip_image(payload: ClipImageIn):
             role_urls = comfy_refs_by_role.get(role) or []
             allowed = role in allowed_roles_for_image
             if not allowed and role_urls:
-                reason = "filtered_out_not_in_scene_cast"
+                reason = "role_not_active"
                 if role in COMFY_WORLD_ANCHOR_ROLES:
                     reason = "filtered_out_world_anchor_must_not_appear" if role in must_not_appear_roles else "filtered_out_world_anchor_disabled"
                 filtered_out_by_scene_contract.append({
@@ -11410,6 +11483,8 @@ def clip_image(payload: ClipImageIn):
                 })
             next_refs_by_role[role] = role_urls if allowed else []
         comfy_refs_by_role = next_refs_by_role
+    roles_with_urls = sorted([role for role in comfy_roles if len(comfy_refs_by_role.get(role) or []) > 0])
+    roles_without_urls = sorted([role for role in comfy_roles if len(comfy_refs_by_role.get(role) or []) == 0])
 
     (
         comfy_refs_by_role,
@@ -11472,11 +11547,17 @@ def clip_image(payload: ClipImageIn):
         print(f"[COMFY IMAGE DEBUG] role {role} hasUrls={has_urls}")
 
     comfy_inline_parts_by_role: dict[str, list[dict]] = {role: [] for role in comfy_roles}
+    inline_load_failure_details_by_role: dict[str, list[dict[str, str]]] = {role: [] for role in comfy_roles}
     for role in comfy_roles:
         for ref_url in comfy_refs_by_role.get(role) or []:
             inline_part = _load_reference_image_inline(ref_url)
             if inline_part:
                 comfy_inline_parts_by_role[role].append(inline_part)
+            else:
+                inline_load_failure_details_by_role[role].append({
+                    "url": str(ref_url or ""),
+                    "reason": _probe_reference_image_inline_failure(ref_url),
+                })
         inline_count = len(comfy_inline_parts_by_role[role])
         print(f"[COMFY IMAGE DEBUG] inline parts {role}={inline_count}")
         if (comfy_refs_by_role.get(role) or []) and inline_count == 0:
@@ -11797,6 +11878,15 @@ def clip_image(payload: ClipImageIn):
         ])
         ordered_world_roles = [role for role in ["location", "style", "props"] if role in allowed_roles_for_image]
         ordered_roles_for_attach = ordered_cast_roles + ordered_world_roles
+        print("[CLIP IMAGE REFS NORMALIZED] " + json.dumps({
+            "sceneId": scene_id,
+            "finalRefsByRoleCounts": {role: len(comfy_refs_by_role.get(role) or []) for role in comfy_roles},
+            "attachOrder": ordered_roles_for_attach,
+            "activeRoles": scene_active_roles,
+            "filteredRoles": [entry.get("role") for entry in filtered_out_by_scene_contract if isinstance(entry, dict)],
+            "rolesWithUrls": roles_with_urls,
+            "rolesWithoutUrls": roles_without_urls,
+        }, ensure_ascii=False))
 
         for role in ordered_roles_for_attach:
             role_parts = comfy_inline_parts_by_role.get(role) or []
@@ -11809,7 +11899,13 @@ def clip_image(payload: ClipImageIn):
                 attached_counts_by_role[role] = len(role_parts)
             elif role_urls:
                 inline_load_failures_by_role[role] = len(role_urls)
-                skipped_roles.append({"role": role, "reason": "inline_load_failed", "urlCount": len(role_urls), "connected": role_connected})
+                skipped_roles.append({
+                    "role": role,
+                    "reason": "load_error",
+                    "urlCount": len(role_urls),
+                    "connected": role_connected,
+                    "loadErrors": inline_load_failure_details_by_role.get(role) or [],
+                })
             else:
                 skipped_roles.append({"role": role, "reason": "no_urls", "urlCount": 0, "connected": role_connected})
 
@@ -12108,6 +12204,15 @@ def clip_image(payload: ClipImageIn):
             parts.append({
                 "text": "FIRST→LAST CONTINUITY CONTRACT:\n" + first_last_quality_contract
             })
+        print("[CLIP IMAGE REFS ATTACH RESULT] " + json.dumps({
+            "sceneId": scene_id,
+            "attachedCountsByRole": attached_counts_by_role,
+            "attachedTotal": sum(attached_counts_by_role.values()),
+            "skippedRoles": skipped_roles + filtered_out_by_scene_contract,
+            "loadFailures": {role: inline_load_failure_details_by_role.get(role) or [] for role in comfy_roles if (inline_load_failure_details_by_role.get(role) or [])},
+            "firstFrameAttached": "yes" if bool(first_frame_reference_inline) else "no",
+            "previousSceneAttached": "yes" if bool(attached_previous_scene_inline_part_count > 0 or previous_confirmed_stable_inline_attached) else "no",
+        }, ensure_ascii=False))
 
         if previous_continuity_memory:
             parts.append({
@@ -12229,6 +12334,7 @@ def clip_image(payload: ClipImageIn):
             "attachedCountsByRole": attached_counts_by_role,
             "skippedRoles": skipped_roles + filtered_out_by_scene_contract,
             "inlineLoadFailuresByRole": inline_load_failures_by_role,
+            "inlineLoadFailureDetailsByRole": {role: inline_load_failure_details_by_role.get(role) or [] for role in comfy_roles},
             "failedInlineRoleCount": len([role for role in comfy_roles if inline_load_failures_by_role.get(role, 0) > 0]),
             "failedInlineUrlCountByRole": {role: inline_load_failures_by_role.get(role, 0) for role in comfy_roles},
             "comfyRoleAwarePartsByRole": {role: len(comfy_inline_parts_by_role.get(role) or []) for role in comfy_roles},
@@ -12247,6 +12353,7 @@ def clip_image(payload: ClipImageIn):
         refs_debug["heroAttached"] = hero_attached
         refs_debug["heroEntityId"] = hero_entity_id or None
         refs_debug["inlineLoadFailuresByRole"] = inline_load_failures_by_role
+        refs_debug["inlineLoadFailureDetailsByRole"] = {role: inline_load_failure_details_by_role.get(role) or [] for role in comfy_roles}
         refs_debug["failedInlineRoleCount"] = len([role for role in comfy_roles if inline_load_failures_by_role.get(role, 0) > 0])
         refs_debug["failedInlineUrlCountByRole"] = {role: inline_load_failures_by_role.get(role, 0) for role in comfy_roles}
         refs_debug["comfyRoleAwarePartsByRole"] = {role: len(comfy_inline_parts_by_role.get(role) or []) for role in comfy_roles}
