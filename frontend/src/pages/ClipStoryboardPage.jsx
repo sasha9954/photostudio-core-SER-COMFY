@@ -579,16 +579,40 @@ const SCENARIO_IMAGE_ROLE_KEYS = ["character_1", "character_2", "character_3", "
 
 function extractScenarioRefsByRoleFromSource(source = null) {
   if (!source || typeof source !== "object") return Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
-  const toUrlList = (items) => (Array.isArray(items)
-    ? items
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (item && typeof item === "object") return item?.url || item?.src || item?.imageUrl || "";
-        return "";
-      })
-      .map((value) => String(value || "").trim())
-      .filter(Boolean)
-    : []);
+  const toUrlList = (items) => {
+    if (Array.isArray(items)) {
+      return items
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (item && typeof item === "object") {
+            return item?.url || item?.src || item?.imageUrl || item?.value || item?.preview || "";
+          }
+          return "";
+        })
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+    }
+    if (typeof items === "string") {
+      const normalized = String(items || "").trim();
+      return normalized ? [normalized] : [];
+    }
+    if (items && typeof items === "object") {
+      return toUrlList(
+        items?.refs
+        ?? items?.images
+        ?? items?.urls
+        ?? items?.items
+        ?? items?.list
+        ?? items?.value
+        ?? items?.preview
+        ?? items?.url
+        ?? items?.src
+        ?? items?.imageUrl
+        ?? []
+      );
+    }
+    return [];
+  };
   const pullRefsFromRoleValue = (roleValue) => {
     if (Array.isArray(roleValue)) return toUrlList(roleValue);
     if (roleValue && typeof roleValue === "object") {
@@ -598,10 +622,15 @@ function extractScenarioRefsByRoleFromSource(source = null) {
         ?? roleValue.urls
         ?? roleValue.items
         ?? roleValue.value
+        ?? roleValue.preview
+        ?? roleValue.url
+        ?? roleValue.src
+        ?? roleValue.imageUrl
         ?? roleValue.list
         ?? []
       );
     }
+    if (typeof roleValue === "string") return toUrlList(roleValue);
     return [];
   };
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));

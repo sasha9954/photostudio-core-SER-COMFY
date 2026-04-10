@@ -4959,9 +4959,23 @@ def _normalize_ref_list(items, max_items: int = 8) -> list[str]:
         if isinstance(it, str):
             url = str(it).strip()
         elif isinstance(it, dict):
-            url = str(it.get("url") or "").strip()
+            url = str(
+                it.get("url")
+                or it.get("src")
+                or it.get("imageUrl")
+                or it.get("value")
+                or it.get("preview")
+                or ""
+            ).strip()
         else:
-            url = str(getattr(it, "url", "") or "").strip()
+            url = str(
+                getattr(it, "url", None)
+                or getattr(it, "src", None)
+                or getattr(it, "imageUrl", None)
+                or getattr(it, "value", None)
+                or getattr(it, "preview", None)
+                or ""
+            ).strip()
         if url:
             out.append(url)
     return out[:max_items]
