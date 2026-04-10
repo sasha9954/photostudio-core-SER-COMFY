@@ -20,6 +20,15 @@ const TABS = [
   { id: "raw", label: "RAW JSON" },
 ];
 
+const TAB_STAGE_ID = {
+  story_core: "story_core",
+  audio_map: "audio_map",
+  role_plan: "role_plan",
+  scene_plan: "scene_plan",
+  scene_prompts: "scene_prompts",
+  final: "finalize",
+};
+
 function toJson(value) {
   return JSON.stringify(value || {}, null, 2);
 }
@@ -45,6 +54,7 @@ export default function ScenarioPipelineDebugEditor({
     const colorByStatus = { idle: "#94a3b8", running: "#0ea5e9", done: "#22c55e", stale: "#f59e0b", error: "#ef4444" };
     return { ...stage, status, error, statusColor: colorByStatus[status] || colorByStatus.idle };
   }), [stageStatuses]);
+  const activeStageStatus = String(stageStatuses?.[TAB_STAGE_ID[activeTab]]?.status || "").trim().toLowerCase();
 
   const runStage = async (stageId, autoRun = false) => {
     if (typeof onRunPipelineStage !== "function") return;
@@ -275,6 +285,12 @@ export default function ScenarioPipelineDebugEditor({
         </div>
 
         <div className="clipSB_scenarioEditorWork">
+          {activeStageStatus === "stale" ? (
+            <div className="clipSB_storyboardKv" style={{ marginBottom: 8 }}>
+              <span>STAGE STATUS</span>
+              <strong>stale / needs rerun</strong>
+            </div>
+          ) : null}
           {contentByTab[activeTab] || null}
         </div>
       </div>
