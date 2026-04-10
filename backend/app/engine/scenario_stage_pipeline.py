@@ -330,6 +330,68 @@ def _pick_story_core_character_ref(refs_inventory: dict[str, Any]) -> tuple[str,
     return "", ""
 
 
+def _collect_prop_hint_texts(input_pkg: dict[str, Any], refs_inventory: dict[str, Any]) -> list[str]:
+    hints: list[str] = []
+    props_node = _safe_dict(refs_inventory.get("ref_props"))
+    for candidate in (
+        props_node.get("value"),
+        props_node.get("preview"),
+        props_node.get("source_label"),
+        _safe_dict(props_node.get("meta")).get("url"),
+    ):
+        text = str(candidate or "").strip()
+        if text:
+            hints.append(text)
+    for ref in _safe_list(props_node.get("refs")):
+        text = str(ref or "").strip()
+        if text:
+            hints.append(text)
+    selected_props = _safe_list(_safe_dict(input_pkg.get("selected_refs")).get("props"))
+    for value in selected_props:
+        text = str(value or "").strip()
+        if text:
+            hints.append(text)
+    for value in _safe_list(_safe_dict(input_pkg.get("refs_by_role")).get("props")):
+        text = str(value or "").strip()
+        if text:
+            hints.append(text)
+    return hints
+
+
+def _normalize_story_core_prop_contracts(input_pkg: dict[str, Any], refs_inventory: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    hint_texts = _collect_prop_hint_texts(input_pkg, refs_inventory)
+    if not hint_texts:
+        return [], False
+    hint_blob = " ".join(hint_texts).lower()
+    has_cap_signal = bool(re.search(r"\b(baseball\s*cap|cap|hat|headwear)\b", hint_blob)) or ("бейсболк" in hint_blob)
+    contracts: list[dict[str, Any]] = []
+    confusion_guard_applied = False
+    if has_cap_signal:
+        contracts.append(
+            {
+                "object_type": "baseball cap",
+                "object_label": "baseball cap / бейсболка",
+                "usage_mode": "wearable head accessory",
+                "category": "clothing/accessory",
+                "forbidden_confusions": ["baseball bat", "helmet", "hood", "weapon"],
+                "source_hints": hint_texts[:6],
+            }
+        )
+        confusion_guard_applied = True
+    else:
+        contracts.append(
+            {
+                "object_type": "grounded prop object",
+                "object_label": str(_safe_dict(refs_inventory.get("ref_props")).get("source_label") or "connected props reference").strip(),
+                "usage_mode": "follow connected prop role",
+                "category": "props",
+                "forbidden_confusions": [],
+                "source_hints": hint_texts[:6],
+            }
+        )
+    return contracts, confusion_guard_applied
+
+
 def _extract_gemini_text(resp: dict[str, Any]) -> str:
     candidates = resp.get("candidates") if isinstance(resp.get("candidates"), list) else []
     if not candidates:
@@ -395,6 +457,9 @@ def _build_story_core_prompt(
     refs_inventory: dict[str, Any],
     assigned_roles: dict[str, Any],
     story_core_mode: str,
+    prop_contracts: list[dict[str, Any]],
+    ref_attachment_summary: dict[str, Any],
+    grounding_level: str,
 ) -> str:
     compact_input = {
         "audio_url": str(input_pkg.get("audio_url") or ""),
@@ -408,6 +473,9 @@ def _build_story_core_prompt(
         "selected_refs": _safe_dict(input_pkg.get("selected_refs")),
         "refs_by_role": _safe_dict(input_pkg.get("refs_by_role")),
         "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
+        "story_core_prop_contracts": prop_contracts,
+        "story_core_ref_attachment_summary": ref_attachment_summary,
+        "story_core_grounding_level": grounding_level,
     }
     mode = "directed" if story_core_mode == "directed" else "creative"
     mode_instructions = (
@@ -433,6 +501,13 @@ def _build_story_core_prompt(
         "Do NOT output scenes, prompts, shot list, or giant plan.\n"
         "Use roles/refs/content type to infer protagonist and supporting cast.\n"
         "If a character image reference is attached, treat it as the source of truth for hero appearance and gender presentation.\n"
+        "Connected prop refs are source-of-truth for object identity and object category.\n"
+        "Do not replace a referenced prop with a semantically related but different object.\n"
+        "Clothing/accessory props must stay clothing/accessory props.\n"
+        "Do not reinterpret wearable objects as weapons/tools unless explicitly stated in user text.\n"
+        "If prop is cap/hat/headwear, it must remain headwear. baseball cap is not baseball bat.\n"
+        "If character ref attachment failed, keep character visuals conservative: keep only reliable role/gender-energy hints and avoid specific visual identity claims.\n"
+        "At CORE stage do not inject arbitrary accent colors or symbolic props not grounded in refs/audio/text.\n"
         "Do not invent a contradictory hero identity against the attached character image reference.\n"
         "Use the character image reference to infer hero gender presentation (male/female/androgynous), approximate age, visual mood, and core appearance markers.\n"
         "Keep appearance notes compact and production-usable; do not describe every tiny detail, only stable identity-relevant ones.\n"
@@ -524,6 +599,10 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "story_core_character_ref_attached": False,
             "story_core_character_ref_source": "",
             "story_core_character_ref_error": "",
+            "story_core_prop_contracts": [],
+            "story_core_prop_confusion_guard_applied": False,
+            "story_core_ref_attachment_summary": {},
+            "story_core_grounding_level": "standard",
         },
         "stage_statuses": stages,
         "contracts": {
@@ -938,13 +1017,31 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     assigned_roles = _safe_dict(package.get("assigned_roles"))
     story_core_mode = _detect_story_core_mode(input_pkg)
     fallback = _default_story_core(input_pkg)
-    prompt = _build_story_core_prompt(input_pkg, refs_inventory, assigned_roles, story_core_mode)
+    prop_contracts, prop_guard_applied = _normalize_story_core_prop_contracts(input_pkg, refs_inventory)
+    ref_attachment_summary = {
+        "character_1": {"attached": False, "error": "", "source": ""},
+        "props": {"connected": bool(prop_contracts), "contracts_count": len(prop_contracts)},
+    }
+    grounding_level = "strict" if prop_contracts else "standard"
+    prompt = _build_story_core_prompt(
+        input_pkg,
+        refs_inventory,
+        assigned_roles,
+        story_core_mode,
+        prop_contracts,
+        ref_attachment_summary,
+        grounding_level,
+    )
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["story_core_mode"] = story_core_mode
     diagnostics["story_core_used_model"] = "gemini-3.1-pro-preview"
     diagnostics["story_core_character_ref_attached"] = False
     diagnostics["story_core_character_ref_source"] = ""
     diagnostics["story_core_character_ref_error"] = ""
+    diagnostics["story_core_prop_contracts"] = prop_contracts
+    diagnostics["story_core_prop_confusion_guard_applied"] = bool(prop_guard_applied)
+    diagnostics["story_core_ref_attachment_summary"] = ref_attachment_summary
+    diagnostics["story_core_grounding_level"] = grounding_level
     package["diagnostics"] = diagnostics
     try:
         api_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
@@ -958,9 +1055,23 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 parts.append(inline_part)
                 diagnostics["story_core_character_ref_attached"] = True
                 diagnostics["story_core_character_ref_error"] = ""
+                diagnostics["story_core_ref_attachment_summary"] = {
+                    **_safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
+                    "character_1": {"attached": True, "error": "", "source": character_ref_source},
+                }
+                diagnostics["story_core_grounding_level"] = "strict"
             else:
                 diagnostics["story_core_character_ref_attached"] = False
                 diagnostics["story_core_character_ref_error"] = str(inline_error or "image_attach_failed")
+                diagnostics["story_core_ref_attachment_summary"] = {
+                    **_safe_dict(diagnostics.get("story_core_ref_attachment_summary")),
+                    "character_1": {
+                        "attached": False,
+                        "error": str(inline_error or "image_attach_failed"),
+                        "source": character_ref_source,
+                    },
+                }
+                diagnostics["story_core_grounding_level"] = "cautious"
             package["diagnostics"] = diagnostics
         body = {
             "contents": [{"role": "user", "parts": parts}],
