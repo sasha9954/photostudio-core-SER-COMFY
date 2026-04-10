@@ -13,7 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
 
-GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v3_music_video_primary"
+GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_segmentation_v4_music_editor_primary"
 GEMINI_SEGMENTATION_MODEL = "gemini-3.1-pro-preview"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 _SCENE_WINDOWS_MAX_START_GAP_SEC = 1.0
@@ -96,18 +96,20 @@ def _build_prompt(
         "director_note": str(director_note or "")[:1200],
     }
     return (
-        "You are the PRIMARY music-video segmentation director for scene planning.\n"
+        "You are the PRIMARY source of truth for music-video audio segmentation.\n"
         "Analyze the attached audio track and return STRICT JSON only (no markdown, no prose).\n"
         "Track duration is authoritative. Never exceed it.\n"
         f"duration_sec={_round3(duration_sec)}\n\n"
-        "SEGMENTATION RULES:\n"
-        "1) This is a MUSIC VIDEO. Segment as a music editor, not as a time slicer.\n"
-        "2) Build boundaries from phrase endings, cadence, tension-release, energy change points, and montage feel.\n"
-        "3) Avoid mechanical equal-time grids and repetitive 4/4/4/4 timing.\n"
-        "4) Scene length is a soft guide: mostly 3-6 sec; occasional 2-3 sec accents and 6-8 sec holds are valid when musically justified.\n"
-        "5) Never cut in the middle of a clear sung/spoken word when track_type is vocal.\n"
-        "6) Return a complete audio map structure, not partial hints.\n"
-        "7) Use exact overall_duration_sec close to the provided duration_sec.\n\n"
+        "MUSIC-EDITOR CANON (follow this over any timer-like pattern):\n"
+        "1) Segment as a MUSIC VIDEO EDITOR, not as a fixed-step slicer.\n"
+        "2) For vocal tracks: place cuts at true phrase endings, voice tail decay, reverb/vibrato release, breaths, harmonic resolution, and natural tension-release.\n"
+        "3) Never cut the middle of a word or unfinished vocal thought.\n"
+        "4) If a strong phrase naturally lasts 5.7s (or any uneven length), keep it uneven; do NOT round for symmetry.\n"
+        "5) Avoid mechanical grids and repetitive equal-duration chunking.\n"
+        "6) Duration guidance is soft: usually 3-6s, accents 2-3s, holds 6-8s are allowed when musically justified.\n"
+        "7) Prefer live musical phrasing over mathematically pretty timing.\n"
+        "8) Return a complete audio map structure, not partial hints.\n"
+        "9) Use exact overall_duration_sec close to the provided duration_sec.\n\n"
         "SCENE FUNCTION LABELS (use ONLY this set):\n"
         "- setup = first establishing phrase or opening hook.\n"
         "- build = momentum grows.\n"
@@ -274,38 +276,6 @@ def _normalize_gemini_payload(payload: dict[str, Any], duration_sec: float) -> d
     if len(set(transcript_confidences)) == 1 and transcript_confidences:
         warnings.append(f"transcript_confidence_flat:{transcript_confidences[0]}")
     normalized["global_notes"]["warnings"] = list(dict.fromkeys(warnings))
-
-    # Optional post-split of too-long outro, if a natural cut point exists.
-    if scene_windows:
-        last = scene_windows[-1]
-        span = float(last.get("duration_sec") or 0.0)
-        if span > 6.8:
-            last_t0 = float(last.get("t0") or 0.0)
-            last_t1 = float(last.get("t1") or last_t0)
-            interior_points = [p for p in normalized["candidate_cut_points_sec"] if (last_t0 + 2.3) <= p <= (last_t1 - 2.3)]
-            if interior_points:
-                split_at = interior_points[-1]
-                scene_windows[-1] = {
-                    **last,
-                    "t1": _round3(split_at),
-                    "duration_sec": _round3(max(0.0, split_at - last_t0)),
-                    "cut_reason": (str(last.get("cut_reason") or "") + " | auto_tail_split_a").strip(" |"),
-                }
-                scene_windows.append(
-                    {
-                        "id": f"sc_{len(scene_windows) + 1}",
-                        "t0": _round3(split_at),
-                        "t1": _round3(last_t1),
-                        "duration_sec": _round3(max(0.0, last_t1 - split_at)),
-                        "phrase_text": "",
-                        "transcript_confidence": str(last.get("transcript_confidence") or "medium"),
-                        "cut_reason": "auto_tail_split_b",
-                        "energy": str(last.get("energy") or "medium"),
-                        "scene_function": "outro",
-                        "no_mid_word_cut": True,
-                    }
-                )
-                scene_windows.sort(key=lambda x: (float(x.get("t0") or 0.0), float(x.get("t1") or 0.0)))
 
     for idx, row in enumerate(scene_windows, start=1):
         row["id"] = f"sc_{idx}"
