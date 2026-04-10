@@ -1362,16 +1362,18 @@ def _build_audio_map_from_duration(
 
 
 def _resolve_audio_analysis_path(audio_url: str) -> tuple[str, str | None]:
-    local_rel_path = _extract_local_static_asset_relative_path(audio_url)
-    if local_rel_path:
+    raw = str(audio_url or "").strip()
+    if raw:
         try:
-            decoded_rel_path = urllib.parse.unquote(local_rel_path)
-            assets_root = Path(ASSETS_DIR).resolve()
-            file_path = (assets_root / decoded_rel_path).resolve()
-            if assets_root in file_path.parents and file_path.exists() and file_path.is_file():
-                return str(file_path), None
+            direct_path = Path(raw).expanduser().resolve()
+            if direct_path.exists() and direct_path.is_file():
+                return str(direct_path), None
         except Exception:
-            return "", None
+            pass
+
+    local_path, _ = _resolve_local_audio_asset_path(audio_url=audio_url)
+    if local_path:
+        return local_path, None
 
     resolved = _resolve_reference_url(audio_url)
     if not resolved:
@@ -1393,6 +1395,123 @@ def _resolve_audio_analysis_path(audio_url: str) -> tuple[str, str | None]:
             pass
         return "", None
     return tmp_path, tmp_path
+
+
+def _collect_audio_resolution_candidates(
+    audio_url: str,
+    input_payload: dict[str, Any] | None = None,
+    refs_inventory: dict[str, Any] | None = None,
+) -> list[str]:
+    input_pkg = _safe_dict(input_payload)
+    refs = _safe_dict(refs_inventory)
+    audio_in = _safe_dict(refs.get("audio_in"))
+    audio_in_meta = _safe_dict(audio_in.get("meta"))
+    source = _safe_dict(input_pkg.get("source"))
+    connected = _safe_dict(input_pkg.get("connected_context_summary"))
+    connected_audio = _safe_dict(connected.get("audio_in"))
+
+    raw_candidates = [
+        audio_url,
+        source.get("source_value"),
+        source.get("sourceValue"),
+        input_pkg.get("source_value"),
+        input_pkg.get("sourceValue"),
+        audio_in.get("value"),
+        audio_in_meta.get("url"),
+        audio_in_meta.get("fileName"),
+        connected.get("audio_url"),
+        connected.get("audioUrl"),
+        connected.get("source_value"),
+        connected.get("sourceValue"),
+        connected.get("fileName"),
+        connected_audio.get("value"),
+        _safe_dict(connected_audio.get("meta")).get("url"),
+        _safe_dict(connected_audio.get("meta")).get("fileName"),
+    ]
+    seen: set[str] = set()
+    values: list[str] = []
+    for item in raw_candidates:
+        value = str(item or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            values.append(value)
+    return values
+
+
+def _extract_asset_rel_path_from_audio_candidate(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlparse(raw)
+    source = parsed.path or raw
+    decoded = urllib.parse.unquote(str(source).strip())
+    normalized = decoded.replace("\\", "/").lstrip("/")
+    marker = "static/assets/"
+    lower = normalized.lower()
+    idx = lower.find(marker)
+    if idx >= 0:
+        return normalized[idx + len(marker) :].strip("/")
+    if normalized.lower().startswith("assets/"):
+        return normalized[len("assets/") :].strip("/")
+    return ""
+
+
+def _resolve_local_audio_asset_path(
+    *,
+    audio_url: str,
+    input_payload: dict[str, Any] | None = None,
+    refs_inventory: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    assets_root = Path(ASSETS_DIR).resolve()
+    candidates = _collect_audio_resolution_candidates(audio_url, input_payload, refs_inventory)
+    basename_candidates: list[str] = []
+    selected_rel_path = ""
+
+    debug: dict[str, Any] = {
+        "audio_url": str(audio_url or ""),
+        "extracted_asset_relative_path": "",
+        "final_local_path": "",
+        "exists": False,
+        "fallback_to_basename_lookup": False,
+    }
+
+    for candidate in candidates:
+        rel_path = _extract_asset_rel_path_from_audio_candidate(candidate)
+        parsed = urllib.parse.urlparse(candidate)
+        basename = Path(urllib.parse.unquote(parsed.path or candidate)).name
+        if basename and basename not in basename_candidates:
+            basename_candidates.append(basename)
+        if not rel_path:
+            continue
+        if not selected_rel_path:
+            selected_rel_path = rel_path
+        try:
+            file_path = (assets_root / rel_path).resolve()
+            if assets_root not in file_path.parents:
+                continue
+            if file_path.exists() and file_path.is_file():
+                debug["extracted_asset_relative_path"] = rel_path
+                debug["final_local_path"] = str(file_path)
+                debug["exists"] = True
+                return str(file_path), debug
+        except Exception:
+            continue
+
+    debug["extracted_asset_relative_path"] = selected_rel_path
+    debug["fallback_to_basename_lookup"] = bool(basename_candidates)
+    for basename in basename_candidates:
+        try:
+            candidate_path = (assets_root / basename).resolve()
+            if assets_root not in candidate_path.parents:
+                continue
+            if candidate_path.exists() and candidate_path.is_file():
+                debug["final_local_path"] = str(candidate_path)
+                debug["exists"] = True
+                return str(candidate_path), debug
+        except Exception:
+            continue
+
+    return "", debug
 
 
 def _float_points(values: Any, duration_sec: float, *, min_t: float = 0.0, max_t: float | None = None) -> list[float]:
@@ -2422,6 +2541,7 @@ def _summarize_audio_map_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
     diagnostics = _safe_dict(package.get("diagnostics"))
 
     audio_url = str(input_pkg.get("audio_url") or "").strip()
@@ -2500,7 +2620,22 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
             cleanup_path: str | None = None
             raw_analysis: dict[str, Any] = {}
             try:
-                analysis_path, cleanup_path = _resolve_audio_analysis_path(audio_url)
+                local_audio_path, local_resolution_debug = _resolve_local_audio_asset_path(
+                    audio_url=audio_url,
+                    input_payload=input_pkg,
+                    refs_inventory=refs_inventory,
+                )
+                _append_diag_event(
+                    package,
+                    "audio_map local audio resolution "
+                    f"audio_url={str(local_resolution_debug.get('audio_url') or '')} "
+                    f"asset_rel={str(local_resolution_debug.get('extracted_asset_relative_path') or '')} "
+                    f"local_path={str(local_resolution_debug.get('final_local_path') or '')} "
+                    f"exists={bool(local_resolution_debug.get('exists'))} "
+                    f"basename_fallback={bool(local_resolution_debug.get('fallback_to_basename_lookup'))}",
+                    stage_id="audio_map",
+                )
+                analysis_path, cleanup_path = _resolve_audio_analysis_path(local_audio_path or audio_url)
                 if not analysis_path:
                     diagnostics["audio_map_dynamics_error"] = "audio_source_unavailable_for_dynamics"
                     _append_diag_event(
