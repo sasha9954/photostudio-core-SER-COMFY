@@ -450,8 +450,8 @@ function ensureDistinctStartEndPrompts(scene = {}) {
     ? "mouth just opening on first sung syllable, face fully readable"
     : "movement starting, body still compact";
   const endAction = isLipSync
-    ? "final sung syllable, changed head angle and hand placement, emotion progressed, face remains readable"
-    : "movement peak reached, transformed pose clearly visible with changed head angle and hand placement";
+    ? "final sung syllable, visibly progressed from opening frame, changed pose, changed head angle, changed hand placement, emotion progressed, face remains readable"
+    : "visibly progressed from opening frame, changed pose, changed head angle, changed hand placement, evolved emotion, transformed motion state clearly visible";
   return {
     startFramePrompt: sanitizeVisiblePromptText(`${identity}, ${startAction}, ${composition}, ${atmosphere}`),
     endFramePrompt: sanitizeVisiblePromptText(`${identity}, ${endAction}, ${composition}, ${atmosphere}, intensified particles and light`),

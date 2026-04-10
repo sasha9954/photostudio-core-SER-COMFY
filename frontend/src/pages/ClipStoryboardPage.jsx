@@ -10731,6 +10731,10 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           sceneId,
           restoredAt: "handleGenerateScenarioImage.refsForImageRequest",
           fallbackCounts: summarizeRefsByRole(refsFallbackFromContext),
+          refsByRoleCounts: summarizeRefsByRole(refsForImageRequest?.refsByRole || {}),
+          primaryRole: refsForImageRequest?.primaryRole || "",
+          mustAppear: Array.isArray(refsForImageRequest?.mustAppear) ? refsForImageRequest.mustAppear : [],
+          heroEntityId: String(refsForImageRequest?.heroEntityId || "").trim(),
         });
       }
       const selectedSceneRefsDebug = {
@@ -11246,6 +11250,12 @@ Aspect ratio: ${imageFormat}`,
       } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
         const existingStartAssetUrl = String(targetScene?.startImageUrl || targetScene?.startFrameImageUrl || "").trim();
         const duplicatedFirstLastOutput = imageStrategy === "first_last" && existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl;
+        console.debug("[SCENARIO FIRST_LAST ASSET CHECK]", {
+          sceneId: String(sceneId || ""),
+          startImageUrl: existingStartAssetUrl,
+          endImageUrl: String(generatedImageUrl || "").trim(),
+          identical: Boolean(duplicatedFirstLastOutput),
+        });
         if (duplicatedFirstLastOutput) {
           throw new Error("first_last_end_image_matches_start_asset");
         }
