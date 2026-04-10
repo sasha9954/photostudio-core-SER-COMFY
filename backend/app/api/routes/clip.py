@@ -9142,7 +9142,12 @@ def _clean_refs_by_role_for_image(refs_by_role: dict | None) -> dict[str, list[s
     return out
 
 
-def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str]]:
+def _extract_refs_by_role_from_generic_source(
+    source: Any,
+    *,
+    _visited: set[int] | None = None,
+    _depth: int = 0,
+) -> dict[str, list[str]]:
     role_aliases = {
         "ref_character_1": "character_1",
         "ref_character_2": "character_2",
@@ -9163,6 +9168,22 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
     out: dict[str, list[str]] = {role: [] for role in COMFY_REF_ROLES}
     if not isinstance(source, dict):
         return out
+    if _depth > 12:
+        logger.debug(
+            "[REF EXTRACT RECURSION GUARD] skippedContainer=true reason=max_depth depth=%s",
+            _depth,
+        )
+        return out
+    visited = _visited if _visited is not None else set()
+    source_id = id(source)
+    if source_id in visited:
+        logger.debug(
+            "[REF EXTRACT RECURSION GUARD] skippedContainer=true reason=already_visited type=%s keys=%s",
+            type(source).__name__,
+            len(source.keys()),
+        )
+        return out
+    visited.add(source_id)
     non_url_ref_markers = {"required", "omit", "present", "true", "false", "hero", "location"}
     def _is_url_like_ref_string(value: str) -> bool:
         normalized = str(value or "").strip()
@@ -9224,7 +9245,11 @@ def _extract_refs_by_role_from_generic_source(source: Any) -> dict[str, list[str
     for container in nested_ref_containers:
         if not isinstance(container, dict):
             continue
-        nested = _extract_refs_by_role_from_generic_source(container)
+        nested = _extract_refs_by_role_from_generic_source(
+            container,
+            _visited=visited,
+            _depth=_depth + 1,
+        )
         for role in COMFY_REF_ROLES:
             out[role] = list(dict.fromkeys([*(out.get(role) or []), *(nested.get(role) or [])]))
     for raw_role, raw_value in source.items():
