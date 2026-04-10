@@ -153,19 +153,6 @@ const normalizeStoryboardSourcesForUi = ({ narrativeSource, storySource } = {}) 
   };
 };
 
-const COMFY_BRAIN_REF_HANDLE_CONFIG = {
-  ref_character_1: { sourceType: "refNode", sourceHandle: "ref_character" },
-  ref_character_2: { sourceType: "refCharacter2", sourceHandle: "ref_character_2" },
-  ref_character_3: { sourceType: "refCharacter3", sourceHandle: "ref_character_3" },
-  ref_animal: { sourceType: "refAnimal", sourceHandle: "ref_animal" },
-  ref_group: { sourceType: "refGroup", sourceHandle: "ref_group" },
-  ref_location: { sourceType: "refNode", sourceHandle: "ref_location" },
-  ref_style: { sourceType: "refNode", sourceHandle: "ref_style" },
-  ref_props: { sourceType: "refNode", sourceHandle: "ref_items" },
-};
-
-const COMFY_STORYBOARD_MAIN_HANDLE = "comfy_scene_video_out";
-const COMFY_STORYBOARD_INTRO_HANDLE = "comfy_storyboard_intro_out";
 const INTRO_FRAME_STORY_HANDLE = "story_context";
 
 const REMOVED_LEGACY_NODE_TYPES = new Set([
@@ -1071,14 +1058,6 @@ function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = 
       size: payload?.meta?.size || 0,
     })}`;
   }
-  if (targetHandle === "video_file_in" && sourceNode.type === "comfyStoryboard") {
-    const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
-    return `video_ref:${JSON.stringify(scenes.map((scene) => ({
-      sceneId: String(scene?.sceneId || ""),
-      videoUrl: String(scene?.videoUrl || scene?.assetUrl || "").trim(),
-      imageUrl: String(scene?.imageUrl || "").trim(),
-    })))}`;
-  }
   if (["ref_character_1", "ref_location", "ref_style", "ref_props"].includes(targetHandle) && sourceNode.type === "refNode") {
     const normalized = normalizeRefData(sourceNode?.data || {}, sourceNode?.data?.kind || "");
     return `ref_node:${targetHandle}:${JSON.stringify({
@@ -1096,14 +1075,6 @@ function getNarrativeSourceRefreshSignature({ sourceNode = null, targetHandle = 
     })}`;
   }
   return "";
-}
-
-function isBrainInput(handleId) {
-  return handleId === "audio" || handleId === "text" || handleId === "ref_character" || handleId === "ref_location" || handleId === "ref_style" || handleId === "ref_items";
-}
-
-function isComfyBrainInput(handleId) {
-  return ["brain_package", "audio", "text", ...Object.keys(COMFY_BRAIN_REF_HANDLE_CONFIG)].includes(handleId);
 }
 
 function isNarrativeInput(handleId) {
@@ -4098,41 +4069,6 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       meta: {
         ...(payload.meta && typeof payload.meta === "object" ? payload.meta : {}),
         kind: "video_ref",
-      },
-    };
-  }
-
-  if (targetHandle === "video_file_in" && sourceNode.type === "comfyStoryboard" && sourceHandle === COMFY_STORYBOARD_MAIN_HANDLE) {
-    const scenes = Array.isArray(sourceNode?.data?.mockScenes) ? sourceNode.data.mockScenes : [];
-    const videoUrls = scenes
-      .map((scene) => String(scene?.videoUrl || scene?.assetUrl || "").trim())
-      .filter(Boolean)
-      .slice(0, 5);
-    const firstVideoUrl = videoUrls[0] || "";
-    const readyVideoCount = videoUrls.length;
-    const fallbackPreview = readyVideoCount
-      ? `${readyVideoCount} видео из COMFY STORYBOARD`
-      : `${scenes.length || 0} сцен в COMFY STORYBOARD`;
-    console.log("[VIDEO_REF->NARRATIVE payload]", {
-      sourceNode,
-      extracted: {
-        videoUrls,
-        readyVideoCount,
-        fallbackPreview,
-      },
-      edge: { sourceHandle, targetHandle },
-    });
-    if (!firstVideoUrl && !scenes.length) return null;
-    return {
-      value: firstVideoUrl || fallbackPreview,
-      preview: firstVideoUrl || fallbackPreview,
-      sourceLabel: "Внешний видео-референс",
-      url: firstVideoUrl,
-      assetUrl: firstVideoUrl,
-      fileName: getAssetFileName(firstVideoUrl),
-      meta: {
-        sceneCount: scenes.length || 0,
-        readyVideoCount,
       },
     };
   }
@@ -17451,52 +17387,6 @@ const hydrate = useCallback((source = "unknown") => {
         .filter((n) => !REMOVED_LEGACY_NODE_TYPES.has(String(n?.type || "")))
         .map((n) => {
           const data = { ...(n.data || {}) };
-
-          if (n.type === "brainNode") {
-            const mode = ["clip", "kino", "reklama", "scenario"].includes(data.mode) ? data.mode : "clip";
-            const scenarioKey = SCENARIO_OPTIONS.some((option) => option.value === data.scenarioKey)
-              ? data.scenarioKey
-              : "clip";
-            data.mode = mode;
-            data.scenarioKey = scenarioKey;
-            data.isParsing = false;
-            delete data.activeParseToken;
-          }
-
-          if (n.type === "comfyBrain") {
-            data.audioStoryMode = normalizeAudioStoryMode(data.audioStoryMode || "lyrics_music");
-            data.parseStatus = ["idle", "parsing", "ready", "error"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
-          }
-
-          if (n.type === "comfyStoryboard") {
-            data.parseStatus = ["idle", "updating", "ready", "error", "stale"].includes(String(data.parseStatus || "")) ? data.parseStatus : "idle";
-            data.mockScenes = normalizeSceneCollectionWithSceneId(data.mockScenes, "comfy_scene");
-            data.sceneCount = Math.max(data.mockScenes.length, Number(data.sceneCount || 0));
-            if (data.parseStatus === "updating") {
-              const fallbackStatus = data.isStale === true
-                ? "stale"
-                : (data.sceneCount > 0 ? "ready" : "idle");
-              console.warn("[COMFY STORYBOARD] hydrate reset non-active updating status", {
-                nodeId: String(n.id || ""),
-                fallbackStatus,
-                activeRequestId: String(data.activeRequestId || ""),
-                activeRequestSourceNodeId: String(data.activeRequestSourceNodeId || ""),
-                sceneCount: data.sceneCount,
-              });
-              data.parseStatus = fallbackStatus;
-            }
-            data.activeRequestId = "";
-            data.activeRequestSourceNodeId = "";
-            data.activeRequestStartedAt = "";
-            data.hasActiveRequest = false;
-            data.isUpdating = false;
-            data.isGenerating = false;
-            data.isBusy = false;
-          }
-
-          if (n.type === "storyboardNode") {
-            data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene");
-          }
 
           if (n.type === "scenarioStoryboard") {
             data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene").map((sceneItem) => {
