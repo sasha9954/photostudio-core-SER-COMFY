@@ -111,22 +111,31 @@ def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
 
 
 def _extract_ref_urls(ref_node: Any) -> list[str]:
+    def _looks_like_ref_url(value: str) -> bool:
+        lower = value.lower()
+        if lower.startswith(("http://", "https://", "blob:", "data:")):
+            return True
+        if value.startswith("/"):
+            return True
+        if "static/assets/" in lower:
+            return True
+        return "/" in value
+
     if isinstance(ref_node, str):
         value = ref_node.strip()
-        return [value] if value else []
+        return [value] if value and _looks_like_ref_url(value) else []
     node = _safe_dict(ref_node)
     urls: list[str] = []
     for candidate in (
         node.get("value"),
-        node.get("preview"),
         _safe_dict(node.get("meta")).get("url"),
     ):
         value = str(candidate or "").strip()
-        if value:
+        if value and _looks_like_ref_url(value):
             urls.append(value)
     for ref in _safe_list(node.get("refs")):
         value = str(ref or "").strip()
-        if value:
+        if value and _looks_like_ref_url(value):
             urls.append(value)
     return list(dict.fromkeys(urls))
 
