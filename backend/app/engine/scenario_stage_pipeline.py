@@ -46,14 +46,40 @@ STAGE_DEPENDENCIES: dict[str, list[str]] = {
     "story_core": ["input_package"],
     "audio_map": ["story_core"],
     "role_plan": ["story_core", "audio_map"],
-    "scene_plan": ["audio_map", "role_plan"],
-    "scene_prompts": ["scene_plan"],
-    "finalize": ["scene_prompts"],
+    "scene_plan": ["story_core", "audio_map", "role_plan"],
+    "scene_prompts": ["story_core", "audio_map", "role_plan", "scene_plan"],
+    "finalize": ["story_core", "audio_map", "role_plan", "scene_plan", "scene_prompts"],
 }
 
 DOWNSTREAM_BY_STAGE: dict[str, list[str]] = {
     stage_id: [candidate for candidate, deps in STAGE_DEPENDENCIES.items() if stage_id in deps]
     for stage_id in STAGE_IDS
+}
+
+MANUAL_RESET_DOWNSTREAM: dict[str, list[str]] = {
+    "story_core": ["audio_map", "role_plan", "scene_plan", "scene_prompts", "finalize"],
+    "audio_map": ["role_plan", "scene_plan", "scene_prompts", "finalize"],
+    "role_plan": ["scene_plan", "scene_prompts", "finalize"],
+    "scene_plan": ["scene_prompts", "finalize"],
+    "scene_prompts": ["finalize"],
+    "finalize": [],
+}
+
+STAGE_SECTION_RESETTERS: dict[str, Any] = {
+    "audio_map": lambda: {},
+    "role_plan": lambda: {},
+    "scene_plan": lambda: {"scenes": []},
+    "scene_prompts": lambda: {"scenes": []},
+    "finalize": lambda: {"scenes": []},
+}
+
+STAGE_DIAGNOSTIC_PREFIXES: dict[str, tuple[str, ...]] = {
+    "story_core": ("story_core_",),
+    "audio_map": ("audio_", "transcript_"),
+    "role_plan": ("role_plan_",),
+    "scene_plan": ("scene_plan_",),
+    "scene_prompts": ("scene_prompts_",),
+    "finalize": ("finalize_",),
 }
 
 
@@ -487,6 +513,41 @@ def mark_stale_downstream(package: dict[str, Any], from_stage_id: str, reason: s
     return pkg
 
 
+def _clear_stage_diagnostics(diagnostics: dict[str, Any], stage_id: str) -> dict[str, Any]:
+    prefixes = STAGE_DIAGNOSTIC_PREFIXES.get(stage_id, ())
+    if not prefixes:
+        return diagnostics
+    next_diagnostics = dict(diagnostics)
+    for key in list(next_diagnostics.keys()):
+        if any(str(key).startswith(prefix) for prefix in prefixes):
+            next_diagnostics.pop(key, None)
+    return next_diagnostics
+
+
+def invalidate_downstream_stages(package: dict[str, Any], from_stage_id: str, reason: str = "") -> dict[str, Any]:
+    pkg = deepcopy(_safe_dict(package))
+    downstream = MANUAL_RESET_DOWNSTREAM.get(from_stage_id, [])
+    statuses = _safe_dict(pkg.get("stage_statuses"))
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    for stage_id in downstream:
+        if stage_id == "finalize":
+            pkg["final_storyboard"] = {"scenes": []}
+        elif stage_id in STAGE_SECTION_RESETTERS:
+            section_name = "final_storyboard" if stage_id == "finalize" else stage_id
+            pkg[section_name] = STAGE_SECTION_RESETTERS[stage_id]()
+        stage_state = _safe_dict(statuses.get(stage_id))
+        stage_state["status"] = "stale"
+        stage_state["updated_at"] = _utc_iso()
+        stage_state["error"] = ""
+        statuses[stage_id] = stage_state
+        diagnostics = _clear_stage_diagnostics(diagnostics, stage_id)
+    pkg["stage_statuses"] = statuses
+    diagnostics["stale_reason"] = str(reason or f"rerun:{from_stage_id}")
+    pkg["diagnostics"] = diagnostics
+    pkg["updated_at"] = _utc_iso()
+    return pkg
+
+
 def _set_stage_status(package: dict[str, Any], stage_id: str, status: str, *, error: str = "") -> None:
     statuses = _safe_dict(package.get("stage_statuses"))
     stage_state = _safe_dict(statuses.get(stage_id))
@@ -639,6 +700,20 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             role for role in active_roles
             if isinstance(role, str) and role.strip() and role in refs_inventory
         ]
+        must_appear = list(
+            dict.fromkeys(
+                [
+                    str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip(),
+                    *[str(role).strip() for role in active_roles if str(role).strip()],
+                ]
+            )
+        )
+        refs_by_role_input = _safe_dict(input_pkg.get("refs_by_role"))
+        refs_used_by_role = {
+            role: _safe_list(refs_by_role_input.get(role))
+            for role in refs_used
+            if _safe_list(refs_by_role_input.get(role))
+        }
         audio_slice_start_sec = t0 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_end_sec = t1 if route_contract["route"] == "ia2v" else 0.0
         audio_slice_expected_duration_sec = max(0.0, audio_slice_end_sec - audio_slice_start_sec)
@@ -681,7 +756,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "primary_role": str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip(),
             "secondary_roles": secondary_roles,
             "active_roles": active_roles,
+            "mustAppear": must_appear,
             "refsUsed": refs_used,
+            "refsUsedByRole": refs_used_by_role,
             "image_prompt": str(prompt_row.get("photo_prompt") or "").strip(),
             "video_prompt": str(prompt_row.get("video_prompt") or "").strip(),
             "negative_prompt": str(prompt_row.get("negative_prompt") or "").strip(),
@@ -698,6 +775,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "role_type_by_role": assigned_roles,
             "world_continuity": _safe_dict(role_plan.get("world_continuity")),
             "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
+            "story_locks": {
+                "identity_lock": _safe_dict(story_core.get("identity_lock")),
+                "world_lock": _safe_dict(story_core.get("world_lock")),
+                "style_lock": _safe_dict(story_core.get("style_lock")),
+            },
         }
 
         if route_contract["route"] == "first_last":
@@ -2234,8 +2316,9 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
     statuses = _safe_dict(pkg.get("stage_statuses"))
     missing = [dep for dep in deps if str(_safe_dict(statuses.get(dep)).get("status") or "") not in {"done"}]
     if missing:
-        _set_stage_status(pkg, stage_id, "error", error=f"missing_dependencies:{','.join(missing)}")
-        _safe_dict(pkg.get("diagnostics")).setdefault("errors", []).append(f"{stage_id}: missing dependencies {missing}")
+        error_code = "missing_upstream_stage" if stage_id == "finalize" else "missing_dependencies"
+        _set_stage_status(pkg, stage_id, "error", error=f"{error_code}:{','.join(missing)}")
+        _safe_dict(pkg.get("diagnostics")).setdefault("errors", []).append(f"{stage_id}: {error_code} {missing}")
         return pkg
 
     try:
@@ -2264,6 +2347,18 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
 
     pkg["updated_at"] = _utc_iso()
     return pkg
+
+
+def run_manual_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if stage_id not in STAGE_IDS:
+        raise ValueError(f"unknown_stage:{stage_id}")
+    pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
+    if stage_id == "story_core":
+        pkg = run_stage("input_package", pkg, payload)
+        if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get("input_package")).get("status") or "") == "error":
+            return pkg
+    pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
+    return run_stage(stage_id, pkg, payload)
 
 
 def run_pipeline(stage_ids: list[str], package: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -243,6 +243,60 @@ def _build_human_subject_label(role_row: dict[str, Any], story_core: dict[str, A
     return "the protagonist"
 
 
+def _build_scene_anchor_bundle(
+    *,
+    package: dict[str, Any],
+    story_core: dict[str, Any],
+    role_row: dict[str, Any],
+    scene_plan_row: dict[str, Any],
+    world_continuity: dict[str, Any],
+) -> dict[str, str]:
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    active_roles = [str(role).strip() for role in _safe_list(role_row.get("active_roles")) if str(role).strip()]
+    hero_ref_hint = "same heroine from character_1 reference" if _safe_dict(refs_inventory.get("ref_character_1")) else ""
+    location_ref_hint = "same location from reference" if _safe_dict(refs_inventory.get("location")) else ""
+
+    identity_lock = _safe_dict(story_core.get("identity_lock"))
+    hero = _safe_dict(identity_lock.get("hero"))
+    age_band = str(hero.get("age_bracket") or "").strip()
+    hair = str(hero.get("hair_signature") or hero.get("appearance_notes") or "").strip()
+    outfit = str(hero.get("outfit_essentials") or "").strip()
+    identity_parts = [hero_ref_hint, "same hero identity continuity", age_band, hair, outfit]
+    identity_anchor = ", ".join([part for part in identity_parts if part])[:220]
+
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    style_lock = _safe_dict(story_core.get("style_lock"))
+    environment = str(
+        world_continuity.get("environment_family")
+        or world_lock.get("setting")
+        or world_lock.get("setting_description")
+        or "same environment"
+    ).strip()
+    lighting = str(style_lock.get("lighting") or "same lighting family").strip()
+    world_anchor = ", ".join([part for part in [location_ref_hint, environment, "same world continuity"] if part])[:220]
+    lighting_anchor = lighting[:160]
+
+    route = str(scene_plan_row.get("route") or "i2v").strip().lower()
+    continuity_anchor = f"{str(scene_plan_row.get('scene_function') or 'scene beat').strip()}, route={route}, active_roles={','.join(active_roles) or 'none'}"
+    return {
+        "identity_anchor": identity_anchor or "same hero identity continuity",
+        "world_anchor": world_anchor or "same world continuity",
+        "lighting_anchor": lighting_anchor or "same lighting family",
+        "continuity_anchor": continuity_anchor[:240],
+    }
+
+
+def _enrich_prompt_with_anchor(prompt: str, identity_anchor: str, world_anchor: str) -> str:
+    clean = str(prompt or "").strip()
+    prefix = "; ".join([part for part in [identity_anchor, world_anchor] if part]).strip()
+    if not prefix:
+        return clean
+    if prefix.lower() in clean.lower():
+        return clean
+    joined = f"{prefix}. {clean}" if clean else prefix
+    return joined[:900]
+
+
 def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
@@ -408,6 +462,7 @@ def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
 
 
 def _build_fallback_scene_prompts(
+    package: dict[str, Any],
     scene_plan_row: dict[str, Any],
     role_row: dict[str, Any],
     story_core: dict[str, Any],
@@ -424,6 +479,13 @@ def _build_fallback_scene_prompts(
     motion_intent = str(scene_plan_row.get("motion_intent") or "subtle motion")
     world_anchor = str(world_continuity.get("environment_family") or world_continuity.get("country_or_region") or "grounded realistic world")
     opening_anchor = str(story_core.get("opening_anchor") or "")
+    anchors = _build_scene_anchor_bundle(
+        package=package,
+        story_core=story_core,
+        role_row=role_row,
+        scene_plan_row=scene_plan_row,
+        world_continuity=world_continuity,
+    )
 
     if route == "ia2v":
         photo_prompt = (
@@ -459,9 +521,12 @@ def _build_fallback_scene_prompts(
 
     fallback_notes = _prompt_notes_template(route)
     fallback_notes["shot_intent"] = scene_function
-    fallback_notes["continuity_anchor"] = (
+    fallback_notes["continuity_anchor"] = anchors["continuity_anchor"] if anchors["continuity_anchor"] else (
         f"{opening_anchor[:120]}" if opening_anchor else fallback_notes["continuity_anchor"]
     )
+    fallback_notes["world_anchor"] = anchors["world_anchor"]
+    fallback_notes["identity_anchor"] = anchors["identity_anchor"]
+    fallback_notes["lighting_anchor"] = anchors["lighting_anchor"]
     if route == "first_last":
         fallback_notes["first_state"] = first_state
         fallback_notes["last_state"] = last_state
@@ -469,14 +534,15 @@ def _build_fallback_scene_prompts(
     return {
         "scene_id": scene_id,
         "route": route,
-        "photo_prompt": photo_prompt,
-        "video_prompt": video_prompt,
+        "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
+        "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
         "negative_prompt": _GLOBAL_NEGATIVE_PROMPT,
         "prompt_notes": fallback_notes,
     }
 
 
 def _normalize_scene_prompts(
+    package: dict[str, Any],
     raw: dict[str, Any],
     *,
     scene_rows: list[dict[str, Any]],
@@ -509,7 +575,15 @@ def _normalize_scene_prompts(
             expected_route = "i2v"
 
         base = _safe_dict(by_id.get(scene_id))
-        fallback_row = _build_fallback_scene_prompts(scene, _safe_dict(role_lookup.get(scene_id)), story_core, world_continuity)
+        role_row = _safe_dict(role_lookup.get(scene_id))
+        fallback_row = _build_fallback_scene_prompts(package, scene, role_row, story_core, world_continuity)
+        anchors = _build_scene_anchor_bundle(
+            package=package,
+            story_core=story_core,
+            role_row=role_row,
+            scene_plan_row=scene,
+            world_continuity=world_continuity,
+        )
 
         actual_route = str(base.get("route") or expected_route).strip()
         if actual_route != expected_route:
@@ -574,8 +648,8 @@ def _normalize_scene_prompts(
         scene_out = {
             "scene_id": scene_id,
             "route": actual_route,
-            "photo_prompt": photo_prompt,
-            "video_prompt": video_prompt,
+            "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
+            "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
@@ -661,6 +735,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             ia2v_audio_driven,
             route_semantics_mismatch_count,
         ) = _normalize_scene_prompts(
+            package,
             parsed,
             scene_rows=scene_rows,
             role_lookup=role_lookup,
@@ -693,6 +768,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             ia2v_audio_driven,
             route_semantics_mismatch_count,
         ) = _normalize_scene_prompts(
+            package,
             {},
             scene_rows=scene_rows,
             role_lookup=role_lookup,
