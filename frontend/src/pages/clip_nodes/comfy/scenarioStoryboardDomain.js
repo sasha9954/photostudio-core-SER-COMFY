@@ -391,6 +391,36 @@ function buildLipSyncPromptCanonSuffix() {
   );
 }
 
+function resolveLipSyncEnergyTier(scene = {}) {
+  const source = scene && typeof scene === "object" ? scene : {};
+  const energyHints = [
+    source.audioEnergy,
+    source.audio_energy,
+    source.energyLevel,
+    source.energy_level,
+    source.musicEnergy,
+    source.music_energy,
+    source.emotion,
+    source.performanceEnergy,
+    source.performance_energy,
+  ].map((value) => normalizeText(value).toLowerCase()).filter(Boolean);
+  const blob = energyHints.join(" ");
+  if (/high|peak|explosive|intense|climax|drop|power|max|макс|пик|взрыв|сильн|энергич/i.test(blob)) return "high";
+  if (/medium|mid|moderate|steady|groove|normal|средн|умерен|ровн/i.test(blob)) return "medium";
+  return "low";
+}
+
+function buildLipSyncExpressivePolicy(scene = {}) {
+  const tier = resolveLipSyncEnergyTier(scene);
+  if (tier === "high") {
+    return sanitizeVisiblePromptText("LIP-SYNC EXPRESSIVITY HIGH ENERGY: expressive eyes and emotional singing mouth shape, stronger upper-body performance with controlled shoulder/torso pulse, lyric-timed soft hand gestures, readable face priority. Keep movement safe for LTX and identity lock: no wild dance, no spins, no abrupt body whips.");
+  }
+  if (tier === "medium") {
+    return sanitizeVisiblePromptText("LIP-SYNC EXPRESSIVITY MEDIUM ENERGY: expressive eyes, clear emotional mouth singing shapes, subtle head emphasis, one-hand lyric-marking gestures, light torso pulse. Gestures soft and controlled, no sharp hits, no chaotic dance.");
+  }
+  return sanitizeVisiblePromptText("LIP-SYNC EXPRESSIVITY LOW ENERGY: face-first performance, expressive eyes, nuanced mouth articulation, breath-level head emphasis, minimal torso pulse, gentle near-chest hand gesture accents only; keep body mostly stable and calm.");
+}
+
 function buildDanceSafePromptCanonSuffix() {
   return sanitizeVisiblePromptText(
     "DANCE MOTION SAFETY: smooth dynamic nightclub realism, controlled musical movement, beat-shaped but readable motion, stable anatomy-safe choreography, elegant club-energy not frantic chaos. Use groove/sway/step/pivot/rebound/pose progression and phrase-shaped accents with moderate amplitude. Avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency shaking, extreme rotation velocity, aggressive torso snapping, stroboscopic pose changes, ultra-fast partner turbulence."
@@ -420,8 +450,8 @@ function ensureDistinctStartEndPrompts(scene = {}) {
     ? "mouth just opening on first sung syllable, face fully readable"
     : "movement starting, body still compact";
   const endAction = isLipSync
-    ? "final sung syllable, rotation peak reached, face remains readable"
-    : "movement peak reached, transformed pose clearly visible";
+    ? "final sung syllable, changed head angle and hand placement, emotion progressed, face remains readable"
+    : "movement peak reached, transformed pose clearly visible with changed head angle and hand placement";
   return {
     startFramePrompt: sanitizeVisiblePromptText(`${identity}, ${startAction}, ${composition}, ${atmosphere}`),
     endFramePrompt: sanitizeVisiblePromptText(`${identity}, ${endAction}, ${composition}, ${atmosphere}, intensified particles and light`),
@@ -1386,11 +1416,12 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   const routeKey = String(normalizedScene.resolvedWorkflowKey || "").trim().toLowerCase();
   const isLipSyncRoute = routeKey === "lip_sync_music" || Boolean(normalizedScene.lipSync || normalizedScene.requiresAudioSensitiveVideo);
   const lipSyncCanonSuffix = buildLipSyncPromptCanonSuffix();
+  const lipSyncExpressivePolicy = buildLipSyncExpressivePolicy(normalizedScene);
   const danceCanonSuffix = buildDanceSafePromptCanonSuffix();
   const orbitCanonSuffix = buildOrbitSafetyCanonSuffix();
   if (isLipSyncRoute) {
-    normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${lipSyncCanonSuffix}. ${orbitCanonSuffix}`);
-    normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${lipSyncCanonSuffix}`);
+    normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${lipSyncCanonSuffix}. ${lipSyncExpressivePolicy}. ${orbitCanonSuffix}`);
+    normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${lipSyncCanonSuffix}. ${lipSyncExpressivePolicy}`);
   } else {
     normalizedScene.videoPromptEn = sanitizeVisiblePromptText(`${normalizedScene.videoPromptEn}. ${danceCanonSuffix}. ${orbitCanonSuffix}`);
     normalizedScene.imagePromptEn = sanitizeVisiblePromptText(`${normalizedScene.imagePromptEn}. ${danceCanonSuffix}`);
