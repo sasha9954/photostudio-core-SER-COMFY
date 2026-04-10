@@ -10993,17 +10993,73 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         scenarioPackageForImage?.connected_context_summary?.refsByRole,
         scenarioPackageForImage?.connected_context_summary?.refs_by_role,
       ].find((candidate) => isNonEmptyRoleMap(candidate)) || {});
+      const connectedInputsFallback = ([
+        refsForImageRequest?.connectedInputs,
+        targetScene?.connectedInputs,
+        targetScene?.connected_inputs,
+        targetScene?.connectedContextSummary?.connectedInputs,
+        targetScene?.connectedContextSummary?.connected_inputs,
+        targetScene?.connected_context_summary?.connectedInputs,
+        targetScene?.connected_context_summary?.connected_inputs,
+        scenarioPackageForImage?.connectedInputs,
+        scenarioPackageForImage?.connected_inputs,
+        scenarioPackageForImage?.connectedContextSummary?.connectedInputs,
+        scenarioPackageForImage?.connectedContextSummary?.connected_inputs,
+        scenarioPackageForImage?.connected_context_summary?.connectedInputs,
+        scenarioPackageForImage?.connected_context_summary?.connected_inputs,
+        targetNode?.data?.connectedInputs,
+        targetNode?.data?.connected_inputs,
+      ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || {});
+      const contextRefsFallback = (
+        targetScene?.context_refs
+        || targetScene?.contextRefs
+        || targetScene?.connected_context_summary?.context_refs
+        || targetScene?.connected_context_summary?.contextRefs
+        || targetScene?.connectedContextSummary?.context_refs
+        || targetScene?.connectedContextSummary?.contextRefs
+        || scenarioPackageForImage?.context_refs
+        || scenarioPackageForImage?.contextRefs
+        || scenarioPackageForImage?.connected_context_summary?.context_refs
+        || scenarioPackageForImage?.connected_context_summary?.contextRefs
+        || scenarioPackageForImage?.connectedContextSummary?.context_refs
+        || scenarioPackageForImage?.connectedContextSummary?.contextRefs
+        || {}
+      );
+      const refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
+        ? refsForImageRequest.refsByRole
+        : (hasNonEmptyRefsByRole(refsByRoleForImage || {}) ? refsByRoleForImage : refsFallbackFromContext);
+      const refsUsedByRoleEffective = isNonEmptyRoleMap(refsUsedByRoleFallback)
+        ? refsUsedByRoleFallback
+        : Object.fromEntries(
+          Object.entries(refsByRoleEffective || {})
+            .filter(([, urls]) => Array.isArray(urls) && urls.length > 0)
+            .map(([role, urls]) => [role, urls.map(() => "required")])
+        );
+      const mustAppearEffective = Array.isArray(refsForImageRequest?.mustAppear)
+        ? refsForImageRequest.mustAppear
+        : (Array.isArray(derivedRoleContract?.mustAppear) ? derivedRoleContract.mustAppear : []);
+      const ensuredMustAppear = [...new Set([
+        ...mustAppearEffective,
+        ...(Array.isArray(refsByRoleEffective?.character_1) && refsByRoleEffective.character_1.length > 0 ? ["character_1"] : []),
+        ...(Array.isArray(refsByRoleEffective?.location) && refsByRoleEffective.location.length > 0 ? ["location"] : []),
+      ])];
+      const primaryRoleEffective = String(refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "character_1").trim();
+      const heroEntityIdEffective = String(
+        refsForImageRequest?.heroEntityId
+        || targetScene?.heroEntityId
+        || primaryRoleEffective
+        || "character_1"
+      ).trim();
       const refsPayloadForRequest = {
         ...refsForImageRequest,
-        refsByRole: hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
-          ? refsForImageRequest.refsByRole
-          : (hasNonEmptyRefsByRole(refsByRoleForImage || {}) ? refsByRoleForImage : refsFallbackFromContext),
-        refsUsedByRole: refsUsedByRoleFallback,
-        primaryRole: refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "",
-        mustAppear: Array.isArray(refsForImageRequest?.mustAppear)
-          ? refsForImageRequest.mustAppear
-          : (Array.isArray(derivedRoleContract?.mustAppear) ? derivedRoleContract.mustAppear : []),
-        heroEntityId: String(refsForImageRequest?.heroEntityId || targetScene?.heroEntityId || derivedRoleContract?.primaryRole || "").trim(),
+        refsByRole: refsByRoleEffective,
+        refsUsedByRole: refsUsedByRoleEffective,
+        connectedInputs: connectedInputsFallback,
+        primaryRole: primaryRoleEffective,
+        mustAppear: ensuredMustAppear,
+        heroEntityId: heroEntityIdEffective,
+        context_refs: contextRefsFallback,
+        connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || scenarioPackageForImage?.connected_context_summary || scenarioPackageForImage?.connectedContextSummary || {},
       };
       console.debug("[SCENARIO IMAGE REQUEST PAYLOAD]", {
         sceneId,
@@ -11016,41 +11072,67 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       if (String(sceneId || "").trim().toLowerCase() === "sc_1") {
         console.debug("[SCENARIO IMAGE REQUEST BODY.REFS sc_1]", refsPayloadForRequest);
       }
+      const sceneContractForRequest = {
+        ...scenarioContractPayloadSanitized,
+        refsByRole: refsByRoleEffective,
+        refsUsedByRole: refsUsedByRoleEffective,
+        connectedInputs: connectedInputsFallback,
+        context_refs: contextRefsFallback,
+        connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || scenarioPackageForImage?.connected_context_summary || scenarioPackageForImage?.connectedContextSummary || {},
+      };
+      const finalRequestBody = {
+        sceneId,
+        sceneDelta: `${finalSceneDelta}
+Aspect ratio: ${imageFormat}`,
+        sceneText,
+        width,
+        height,
+        storyboardRevision: requestStoryboardRevision,
+        storyboardSignature: requestStoryboardSignature,
+        sceneSignature: requestSceneSignature,
+        slot: normalizedSlot,
+        sceneContract: sceneContractForRequest,
+        ...scenarioContractPayload,
+        primaryRole: scenarioContractPayload?.primaryRole || refsPayloadForRequest?.primaryRole || "",
+        secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
+          ? scenarioContractPayload.secondaryRoles
+          : (refsPayloadForRequest?.secondaryRoles || []),
+        sceneActiveRoles: (Array.isArray(scenarioContractPayload?.sceneActiveRoles) && scenarioContractPayload.sceneActiveRoles.length)
+          ? scenarioContractPayload.sceneActiveRoles
+          : (refsPayloadForRequest?.sceneActiveRoles || []),
+        refsUsed: (Array.isArray(scenarioContractPayload?.refsUsed) && scenarioContractPayload.refsUsed.length)
+          ? scenarioContractPayload.refsUsed
+          : (refsPayloadForRequest?.refsUsed || []),
+        mustAppear: (Array.isArray(scenarioContractPayload?.mustAppear) && scenarioContractPayload.mustAppear.length)
+          ? scenarioContractPayload.mustAppear
+          : (refsPayloadForRequest?.mustAppear || []),
+        refs: refsPayloadForRequest,
+      };
+      const finalRefsByRoleCounts = summarizeRefsByRole(finalRequestBody?.refs?.refsByRole || {});
+      console.debug("[SCENARIO IMAGE FINAL REQUEST BODY]", {
+        sceneId,
+        refsByRoleCounts: finalRefsByRoleCounts,
+        refsUsedByRoleKeys: Object.keys(finalRequestBody?.refs?.refsUsedByRole || {}),
+        primaryRole: finalRequestBody?.refs?.primaryRole || "",
+        mustAppear: Array.isArray(finalRequestBody?.refs?.mustAppear) ? finalRequestBody.refs.mustAppear : [],
+        heroEntityId: finalRequestBody?.refs?.heroEntityId || "",
+        connectedInputsSummary: Object.fromEntries(
+          Object.entries(finalRequestBody?.refs?.connectedInputs || {}).map(([key, value]) => ([
+            key,
+            {
+              hasValue: !!String(value?.value || value?.url || value?.preview || "").trim(),
+              refsCount: Array.isArray(value?.refs) ? value.refs.length : 0,
+            },
+          ]))
+        ),
+        sceneContractRefsByRoleCounts: summarizeRefsByRole(finalRequestBody?.sceneContract?.refsByRole || {}),
+        sceneContractRefsUsedByRoleKeys: Object.keys(finalRequestBody?.sceneContract?.refsUsedByRole || {}),
+        hasCharacter1Ref: Number(finalRefsByRoleCounts?.character_1 || 0) > 0,
+        hasLocationRef: Number(finalRefsByRoleCounts?.location || 0) > 0,
+      });
       const out = await fetchJson(`/api/clip/image`, {
         method: "POST",
-        body: {
-          sceneId,
-          sceneDelta: `${finalSceneDelta}
-Aspect ratio: ${imageFormat}`,
-          sceneText,
-          width,
-          height,
-          storyboardRevision: requestStoryboardRevision,
-          storyboardSignature: requestStoryboardSignature,
-          sceneSignature: requestSceneSignature,
-          slot: normalizedSlot,
-          sceneContract: {
-            ...scenarioContractPayloadSanitized,
-            refsByRole: refsByRoleForImage,
-            context_refs: targetScene?.context_refs || targetScene?.contextRefs || {},
-            connected_context_summary: targetScene?.connected_context_summary || targetScene?.connectedContextSummary || {},
-          },
-          ...scenarioContractPayload,
-          primaryRole: scenarioContractPayload?.primaryRole || refsForImageRequest?.primaryRole || "",
-          secondaryRoles: (Array.isArray(scenarioContractPayload?.secondaryRoles) && scenarioContractPayload.secondaryRoles.length)
-            ? scenarioContractPayload.secondaryRoles
-            : (refsForImageRequest?.secondaryRoles || []),
-          sceneActiveRoles: (Array.isArray(scenarioContractPayload?.sceneActiveRoles) && scenarioContractPayload.sceneActiveRoles.length)
-            ? scenarioContractPayload.sceneActiveRoles
-            : (refsForImageRequest?.sceneActiveRoles || []),
-          refsUsed: (Array.isArray(scenarioContractPayload?.refsUsed) && scenarioContractPayload.refsUsed.length)
-            ? scenarioContractPayload.refsUsed
-            : (refsForImageRequest?.refsUsed || []),
-          mustAppear: (Array.isArray(scenarioContractPayload?.mustAppear) && scenarioContractPayload.mustAppear.length)
-            ? scenarioContractPayload.mustAppear
-            : (refsForImageRequest?.mustAppear || []),
-          refs: refsPayloadForRequest,
-        },
+        body: finalRequestBody,
       });
       const responseSceneId = String(out?.sceneId || "").trim();
       const generatedImageUrl = String(out?.imageUrl || "").trim();
