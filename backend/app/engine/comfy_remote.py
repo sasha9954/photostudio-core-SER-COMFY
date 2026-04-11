@@ -1354,6 +1354,8 @@ def _patch_duration_and_frames(
     duration_patch_ids: list[str] = []
     fps_patch_ids: list[str] = []
     frames_patch_ids: list[str] = []
+    length_patch_ids: list[str] = []
+    linked_length_patch_ids: list[str] = []
     expression_patch_ids: list[str] = []
 
     def _is_expression_or_math_class(class_name: str) -> bool:
@@ -1369,6 +1371,12 @@ def _patch_duration_and_frames(
             return False
         inputs["value"] = value
         return True
+
+    def _is_video_latent_branch_node(node: dict) -> bool:
+        class_type = str((node or {}).get("class_type") or "").strip().lower()
+        if class_type in COMFY_MAIN_VIDEO_BRANCH_CLASS_NAMES:
+            return True
+        return "latent" in class_type and "video" in class_type
 
     # Priority A: explicit duration/fps primitive nodes by title/meta/name.
     for node_id, node in workflow.items():
@@ -1389,15 +1397,16 @@ def _patch_duration_and_frames(
             if _patch_primitive_value(str(node_id), duration_value):
                 duration_patch_ids.append(str(node_id))
 
-    # Priority B: graph-aware linked chain patch for linked frames_number/frames/num_frames.
+    # Priority B: graph-aware linked chain patch for linked frames_number/frames/num_frames (+f_l linked length).
     frame_input_keys = ("frames_number", "frames", "num_frames")
+    linked_chain_keys = (*frame_input_keys, "length") if normalized_workflow_key in {"f_l"} else frame_input_keys
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
-        for key in frame_input_keys:
+        for key in linked_chain_keys:
             if key not in inputs:
                 continue
             value = inputs.get(key)
@@ -1479,6 +1488,15 @@ def _patch_duration_and_frames(
                 continue
             inputs[key] = int(frames)
             frames_patch_ids.append(str(node_id))
+        if normalized_workflow_key in {"f_l"} and "length" in inputs:
+            length_value = inputs.get("length")
+            if not _is_linked_input(length_value):
+                continue
+            if not _is_video_latent_branch_node(node):
+                continue
+            inputs["length"] = int(frames)
+            length_patch_ids.append(str(node_id))
+            linked_length_patch_ids.append(str(node_id))
 
     # Priority D: keep legacy reserve behavior.
     _patch_audio_frames(workflow, frames)
@@ -1491,10 +1509,13 @@ def _patch_duration_and_frames(
         "duration_patch_applied": bool(duration_patch_ids),
         "fps_patch_applied": bool(fps_patch_ids),
         "frames_patch_applied": bool(frames_patch_ids),
+        "length_patch_applied": bool(length_patch_ids),
         "expression_patch_applied": bool(expression_patch_ids),
         "patched_duration_node_ids": list(dict.fromkeys(duration_patch_ids)),
         "patched_fps_node_ids": list(dict.fromkeys(fps_patch_ids)),
         "patched_frames_node_ids": list(dict.fromkeys(frames_patch_ids)),
+        "patched_length_node_ids": list(dict.fromkeys(length_patch_ids)),
+        "patched_linked_length_node_ids": list(dict.fromkeys(linked_length_patch_ids)),
         "patched_expression_node_ids": list(dict.fromkeys(expression_patch_ids)),
     }
 
@@ -2425,10 +2446,13 @@ def _patch_workflow_inputs(
         "durationPatchApplied": bool(timing_patch_debug.get("duration_patch_applied")),
         "fpsPatchApplied": bool(timing_patch_debug.get("fps_patch_applied")),
         "framesPatchApplied": bool(timing_patch_debug.get("frames_patch_applied")),
+        "lengthPatchApplied": bool(timing_patch_debug.get("length_patch_applied")),
         "expressionPatchApplied": bool(timing_patch_debug.get("expression_patch_applied")),
         "patchedDurationNodeIds": timing_patch_debug.get("patched_duration_node_ids") or [],
         "patchedFpsNodeIds": timing_patch_debug.get("patched_fps_node_ids") or [],
         "patchedFramesNodeIds": timing_patch_debug.get("patched_frames_node_ids") or [],
+        "patchedLengthNodeIds": timing_patch_debug.get("patched_length_node_ids") or [],
+        "patchedLinkedLengthNodeIds": timing_patch_debug.get("patched_linked_length_node_ids") or [],
         "patchedExpressionNodeIds": timing_patch_debug.get("patched_expression_node_ids") or [],
         "requestedDurationSec": float(timing_patch_debug.get("requestedDurationSec") or requested_duration_sec),
         "providerDurationSec": float(timing_patch_debug.get("providerDurationSec") or requested_duration_sec),
@@ -2681,7 +2705,10 @@ def run_comfy_image_to_video(
             "durationPatchApplied": bool((workflow_discovery_debug or {}).get("durationPatchApplied")),
             "fpsPatchApplied": bool((workflow_discovery_debug or {}).get("fpsPatchApplied")),
             "framesPatchApplied": bool((workflow_discovery_debug or {}).get("framesPatchApplied")),
+            "lengthPatchApplied": bool((workflow_discovery_debug or {}).get("lengthPatchApplied")),
             "expressionPatchApplied": bool((workflow_discovery_debug or {}).get("expressionPatchApplied")),
+            "patchedLengthNodeIds": (workflow_discovery_debug or {}).get("patchedLengthNodeIds") or [],
+            "patchedLinkedLengthNodeIds": (workflow_discovery_debug or {}).get("patchedLinkedLengthNodeIds") or [],
             "patchedExpressionNodeIds": (workflow_discovery_debug or {}).get("patchedExpressionNodeIds") or [],
         },
     )
@@ -3480,6 +3507,7 @@ def run_comfy_image_to_video(
                         *(((workflow_discovery_debug or {}).get("patchedDurationNodeIds")) or []),
                         *(((workflow_discovery_debug or {}).get("patchedFpsNodeIds")) or []),
                         *(((workflow_discovery_debug or {}).get("patchedFramesNodeIds")) or []),
+                        *(((workflow_discovery_debug or {}).get("patchedLengthNodeIds")) or []),
                         *(((workflow_discovery_debug or {}).get("patchedExpressionNodeIds")) or []),
                     ]
                 )
@@ -3506,10 +3534,13 @@ def run_comfy_image_to_video(
             "duration_patch_applied": bool((workflow_discovery_debug or {}).get("durationPatchApplied")),
             "fps_patch_applied": bool((workflow_discovery_debug or {}).get("fpsPatchApplied")),
             "frames_patch_applied": bool((workflow_discovery_debug or {}).get("framesPatchApplied")),
+            "length_patch_applied": bool((workflow_discovery_debug or {}).get("lengthPatchApplied")),
             "expression_patch_applied": bool((workflow_discovery_debug or {}).get("expressionPatchApplied")),
             "patched_duration_node_ids": (workflow_discovery_debug or {}).get("patchedDurationNodeIds") or [],
             "patched_fps_node_ids": (workflow_discovery_debug or {}).get("patchedFpsNodeIds") or [],
             "patched_frames_node_ids": (workflow_discovery_debug or {}).get("patchedFramesNodeIds") or [],
+            "patched_length_node_ids": (workflow_discovery_debug or {}).get("patchedLengthNodeIds") or [],
+            "patched_linked_length_node_ids": (workflow_discovery_debug or {}).get("patchedLinkedLengthNodeIds") or [],
             "patched_expression_node_ids": (workflow_discovery_debug or {}).get("patchedExpressionNodeIds") or [],
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
