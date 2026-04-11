@@ -14167,26 +14167,36 @@ def clip_video(payload: ClipVideoIn):
         )
 
         scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
+        scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+        scene_video_prompt = str(
+            payload.videoPrompt
+            or scene_contract_for_prompt.get("positiveVideoPrompt")
+            or scene_contract_for_prompt.get("positive_video_prompt")
+            or scene_contract_for_prompt.get("videoPrompt")
+            or scene_contract_for_prompt.get("video_prompt")
+            or ""
+        ).strip()
         effective_prompt, prompt_debug = _compose_video_effective_prompt(
-            video_prompt=str(payload.videoPrompt or "").strip(),
+            video_prompt=scene_video_prompt,
             transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
             output_format=output_format,
             requested_duration_sec=requested_duration,
             scene_human_visual_anchors=scene_human_visual_anchors,
             scene_type=str(payload.sceneType or "").strip(),
             shot_type=str(payload.shotType or "").strip(),
-            scene_contract=payload.sceneContract if isinstance(payload.sceneContract, dict) else None,
+            scene_contract=scene_contract_for_prompt,
             scene_active_roles=payload.sceneActiveRoles,
             duet_lock_enabled=payload.duetLockEnabled,
             duet_identity_contract=payload.duetIdentityContract,
             director_genre_intent=payload.directorGenreIntent,
         )
-        scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
         scene_video_negative_prompt = str(
             payload.videoNegativePrompt
             or payload.video_negative_prompt
             or scene_contract_for_prompt.get("videoNegativePrompt")
             or scene_contract_for_prompt.get("video_negative_prompt")
+            or scene_contract_for_prompt.get("negativeVideoPrompt")
+            or scene_contract_for_prompt.get("negative_video_prompt")
             or ""
         ).strip()
         print(
@@ -14194,7 +14204,7 @@ def clip_video(payload: ClipVideoIn):
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} source_image_url={source_image_url} "
             f"videoPromptLength={prompt_debug.get('videoPromptLength')} transitionActionPromptLength={prompt_debug.get('transitionActionPromptLength')} "
             f"effectivePromptLength={prompt_debug.get('effectivePromptLength')} "
-            f"requestedPromptPreview={_prompt_preview(str(payload.videoPrompt or ''), 320)} "
+            f"requestedPromptPreview={_prompt_preview(scene_video_prompt, 320)} "
             f"effectivePromptPreview={str(prompt_debug.get('effectivePromptPreview') or '')} "
             f"videoNegativePromptPreview={_prompt_preview(scene_video_negative_prompt, 220)}"
         )
