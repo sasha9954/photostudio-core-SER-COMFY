@@ -15,6 +15,16 @@ _GLOBAL_NEGATIVE_PROMPT = (
     "no background teleportation"
 )
 
+_LIP_SYNC_NEGATIVE_PROMPT = (
+    "no strong body rotations, no camera chaos, no broken face motion, no broken body motion, "
+    "no unreadable mouth articulation, no identity drift, no outfit drift, no surreal deformation"
+)
+
+_FIRST_LAST_NEGATIVE_PROMPT = (
+    "camera drift, zoom, reframing, turn to camera, fast body rotation, background deformation, wall movement, "
+    "floating geometry, object pop-in, identity drift, outfit drift, surreal motion, temporal instability, artifacts"
+)
+
 _GLOBAL_PROMPT_RULES = [
     "Preserve hero identity, world anchor, style family, and realistic lighting continuity across all scenes.",
     "Keep prompts short, production-friendly, and route-aware; one clear action + one clear camera idea per video prompt.",
@@ -394,14 +404,15 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Avoid unnecessary world/geography decoration (no forced urban/industrial/location labels unless explicitly grounded in inputs).\\n"
         "Video prompts must be LTX-safe and anatomy-safe.\\n"
         "Route rules:\\n"
-        "- i2v: one observable action, simple/smooth camera, safe body motion.\\n"
+        "- i2v: one observable action, simple/smooth camera, safe body motion. No first/last frame language and no start/end frame pair logic.\\n"
         "- ia2v: AUDIO-SLICE-DRIVEN singing/performance for local scene audio slice; readable face and mouth; emotionally synced vocal delivery; upper-body emphasis; stable base; smooth camera; no abrupt choreography/spins/unstable legs. ia2v is a rare accent route, not every performance beat.\\n"
         "- first_last: controlled micro-transition only. Two near-neighbor states in same world/hero/location/outfit/lighting/framing family, with exactly one controlled action/state progression. Must include TWO standalone image prompts: start_image_prompt and end_image_prompt.\\n"
         "FIRST_LAST STRICT RULES:\\n"
-        "- same hero identity, same place/location family, same world continuity.\\n"
-        "- same outfit continuity unless outfit change is the explicit controlled reveal.\\n"
-        "- same lighting family and same camera/framing family.\\n"
-        "- only one controlled action or emotional state changes.\\n"
+        "- positive_video_prompt MUST start exactly with: Use the first image as the exact start frame and the second image as the exact end frame.\\n"
+        "- same exact wall/background geometry, same exact framing, same exact perspective, same exact body proportions, same exact clothing, same exact camera distance, same exact lighting.\\n"
+        "- only one controlled transition over scene duration, continuity remains extremely strong.\\n"
+        "- positive_video_prompt must include explicit bans: no camera drift, no layout change, no extra objects, no geometry morphing.\\n"
+        "- avoid vague wording like 'same heroine', 'same world continuity', 'subtle motion' unless explicit spatial constraints are also present.\\n"
         "- start_image_prompt and end_image_prompt must each be production-ready standalone still-image prompts (not just notes).\\n"
         "- no location jumps, no wardrobe jump (except explicit reveal), no camera grammar jump, no chaotic pose discontinuity, no identity drift, no background teleportation.\\n"
         "Scene-level quality beats (if scene ids exist):\\n"
@@ -411,12 +422,13 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- sc_7 (first_last): START face partly under cap shadow, hand just beginning toward brim. END brim lifted, face open, direct camera gaze, culminating reveal.\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
         "Always include compact negative_prompt with safety constraints.\\n"
+        "For first_last, return both positive_video_prompt and negative_video_prompt fields (negative_video_prompt is mandatory for first_last).\\n"
         "Set prompt_notes.audio_driven=true for ia2v scenes.\\n"
         "Return EXACT contract keys:\\n"
         "{\\n"
         '  \"plan_version\": \"scene_prompts_v1\",\\n'
         '  \"mode\": \"clip\",\\n'
-        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"route\": \"i2v\", \"photo_prompt\": \"\", \"video_prompt\": \"\", \"negative_prompt\": \"\", \"start_image_prompt\": \"\", \"end_image_prompt\": \"\", \"prompt_notes\": {\"shot_intent\": \"\", \"continuity_anchor\": \"\", \"world_anchor\": \"\", \"identity_anchor\": \"\", \"lighting_anchor\": \"\", \"motion_safety\": \"\", \"audio_driven\": false}}],\\n'
+        '  \"scenes\": [{\"scene_id\": \"sc_1\", \"route\": \"i2v\", \"photo_prompt\": \"\", \"video_prompt\": \"\", \"negative_prompt\": \"\", \"positive_video_prompt\": \"\", \"negative_video_prompt\": \"\", \"start_image_prompt\": \"\", \"end_image_prompt\": \"\", \"prompt_notes\": {\"shot_intent\": \"\", \"continuity_anchor\": \"\", \"world_anchor\": \"\", \"identity_anchor\": \"\", \"lighting_anchor\": \"\", \"motion_safety\": \"\", \"audio_driven\": false}}],\\n'
         '  \"global_prompt_rules\": [\"\"]\\n'
         "}\\n\\n"
         f"SCENE_PROMPTS_CONTEXT:\\n{json.dumps(context, ensure_ascii=False)}"
@@ -459,6 +471,8 @@ def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
         has_audio_lang = any(token in combined for token in ("audio", "sing", "vocal", "performance"))
         return not (bool(notes.get("audio_driven")) and has_audio_lang)
     if route == "first_last":
+        positive_video = str(scene_row.get("positive_video_prompt") or scene_row.get("video_prompt") or "").lower()
+        negative_video = str(scene_row.get("negative_video_prompt") or scene_row.get("negative_prompt") or "").lower()
         continuity_flags_ok = all(
             bool(notes.get(key))
             for key in (
@@ -471,11 +485,15 @@ def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
         has_two_image_prompts = bool(str(scene_row.get("start_image_prompt") or "").strip()) and bool(
             str(scene_row.get("end_image_prompt") or "").strip()
         )
-        has_transition_lang = any(token in combined for token in ("a->b", "transition", "start state", "end state", "near-neighbor"))
+        has_transition_lang = any(token in positive_video for token in ("exact start frame", "exact end frame", "controlled transition"))
+        has_negative_contract = all(
+            token in negative_video for token in ("camera drift", "zoom", "reframing", "identity drift", "temporal instability")
+        )
         return not (
             continuity_flags_ok
             and has_transition_lang
             and has_two_image_prompts
+            and has_negative_contract
             and str(notes.get("transition_contract") or "") == "controlled_micro_transition"
         )
     if route == "i2v":
@@ -509,6 +527,9 @@ def _build_fallback_scene_prompts(
         world_continuity=world_continuity,
     )
 
+    positive_video_prompt = ""
+    negative_video_prompt = ""
+
     if route == "ia2v":
         photo_prompt = (
             f"Medium three-quarter shot of {primary_role} in {world_anchor}, delivering a vocal phrase with readable face and mouth, "
@@ -519,6 +540,7 @@ def _build_fallback_scene_prompts(
             "Readable face and mouth, emotionally synced vocal delivery, restrained upper-body performance in neck/shoulders/hands, "
             "stable legs and body base, smooth gentle camera move, no abrupt turns or choreography."
         )
+        negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
         first_state = str(scene_plan_row.get("motion_intent") or "").strip() or f"{primary_role} initiates the key hinge action"
         last_state = str(scene_plan_row.get("emotional_intent") or "").strip() or f"{primary_role} completes the same hinge action"
@@ -552,11 +574,15 @@ def _build_fallback_scene_prompts(
                 f"End frame still of {primary_role} in the same wall-side setup, brim lifted, face open and readable, direct gaze to camera, "
                 "culmination reveal while preserving same outfit/light/camera family."
             )
-        video_prompt = (
-            "Controlled micro-transition in the same exact scene space. Same subject, same outfit continuity, same lighting family, "
-            "same framing family. Start state and end state are near-neighbor moments of one action. "
-            "Only one meaningful progression occurs. No background jump, no wardrobe jump, no identity drift, no pose discontinuity, no multi-change."
+        positive_video_prompt = (
+            "Use the first image as the exact start frame and the second image as the exact end frame. "
+            f"Locked shot of {primary_role} in the same exact wall-side setup. Preserve same exact wall geometry, same exact framing, same exact perspective, "
+            "same exact camera distance, same exact body proportions, same exact clothing, and same exact lighting. "
+            "Over the full scene duration, perform only one controlled micro-transition from the start state to the end state. "
+            "Continuity must remain extremely strong. No camera drift, no layout change, no extra objects, no geometry morphing, no turn, no zoom."
         )
+        negative_video_prompt = _FIRST_LAST_NEGATIVE_PROMPT
+        video_prompt = positive_video_prompt
     else:
         if scene_id == "sc_1":
             photo_prompt = (
@@ -603,13 +629,19 @@ def _build_fallback_scene_prompts(
         "route": route,
         "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
         "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
+        "positive_video_prompt": _enrich_prompt_with_anchor(
+            positive_video_prompt or video_prompt,
+            anchors["identity_anchor"],
+            anchors["world_anchor"],
+        ),
+        "negative_video_prompt": negative_video_prompt or _GLOBAL_NEGATIVE_PROMPT,
         "start_image_prompt": _enrich_prompt_with_anchor(start_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
         if route == "first_last"
         else "",
         "end_image_prompt": _enrich_prompt_with_anchor(end_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
         if route == "first_last"
         else "",
-        "negative_prompt": _GLOBAL_NEGATIVE_PROMPT,
+        "negative_prompt": (negative_video_prompt or _GLOBAL_NEGATIVE_PROMPT),
         "prompt_notes": fallback_notes,
     }
 
@@ -671,13 +703,34 @@ def _normalize_scene_prompts(
             photo_prompt = str(fallback_row.get("photo_prompt") or "")
 
         video_prompt = str(base.get("video_prompt") or "").strip()
+        positive_video_prompt = str(base.get("positive_video_prompt") or "").strip()
+        negative_video_prompt = str(base.get("negative_video_prompt") or "").strip()
         if not video_prompt:
             missing_video_count += 1
             used_fallback = True
             video_prompt = str(fallback_row.get("video_prompt") or "")
 
-        negative_prompt = str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
-        if not str(base.get("negative_prompt") or "").strip():
+        if actual_route == "first_last":
+            positive_video_prompt = positive_video_prompt or video_prompt or str(fallback_row.get("positive_video_prompt") or "")
+            video_prompt = positive_video_prompt or video_prompt
+            negative_video_prompt = (
+                negative_video_prompt
+                or str(base.get("negative_prompt") or "").strip()
+                or str(fallback_row.get("negative_video_prompt") or "").strip()
+                or _FIRST_LAST_NEGATIVE_PROMPT
+            )
+            negative_prompt = negative_video_prompt
+        elif actual_route == "ia2v":
+            negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _LIP_SYNC_NEGATIVE_PROMPT
+            positive_video_prompt = positive_video_prompt or video_prompt
+            negative_prompt = negative_video_prompt
+        else:
+            positive_video_prompt = positive_video_prompt or video_prompt
+            negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
+            negative_prompt = negative_video_prompt
+        if not (
+            str(base.get("negative_prompt") or "").strip() or str(base.get("negative_video_prompt") or "").strip()
+        ):
             used_fallback = True
 
         prompt_notes = _safe_dict(base.get("prompt_notes"))
@@ -731,6 +784,12 @@ def _normalize_scene_prompts(
             "route": actual_route,
             "photo_prompt": _enrich_prompt_with_anchor(photo_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
             "video_prompt": _enrich_prompt_with_anchor(video_prompt, anchors["identity_anchor"], anchors["world_anchor"]),
+            "positive_video_prompt": _enrich_prompt_with_anchor(
+                positive_video_prompt or video_prompt,
+                anchors["identity_anchor"],
+                anchors["world_anchor"],
+            ),
+            "negative_video_prompt": negative_video_prompt,
             "start_image_prompt": _enrich_prompt_with_anchor(start_image_prompt, anchors["identity_anchor"], anchors["world_anchor"])
             if actual_route == "first_last"
             else "",

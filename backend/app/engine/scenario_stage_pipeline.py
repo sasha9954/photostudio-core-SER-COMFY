@@ -909,6 +909,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "image_prompt": str(prompt_row.get("photo_prompt") or "").strip(),
             "video_prompt": str(prompt_row.get("video_prompt") or "").strip(),
             "negative_prompt": str(prompt_row.get("negative_prompt") or "").strip(),
+            "positive_video_prompt": str(prompt_row.get("positive_video_prompt") or "").strip(),
+            "negative_video_prompt": str(prompt_row.get("negative_video_prompt") or "").strip(),
+            "positiveVideoPrompt": str(prompt_row.get("positive_video_prompt") or "").strip(),
+            "negativeVideoPrompt": str(prompt_row.get("negative_video_prompt") or "").strip(),
             "audio_slice_start_sec": audio_slice_start_sec,
             "audio_slice_end_sec": audio_slice_end_sec,
             "audio_slice_expected_duration_sec": audio_slice_expected_duration_sec,
@@ -930,6 +934,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         }
 
         if route_contract["route"] == "first_last":
+            if scene_contract.get("positive_video_prompt"):
+                scene_contract["video_prompt"] = str(scene_contract.get("positive_video_prompt") or "").strip()
+            if scene_contract.get("negative_video_prompt"):
+                scene_contract["negative_prompt"] = str(scene_contract.get("negative_video_prompt") or "").strip()
             first_frame_prompt = _first_text(
                 prompt_row.get("first_frame_prompt"),
                 prompt_row.get("firstFramePrompt"),
