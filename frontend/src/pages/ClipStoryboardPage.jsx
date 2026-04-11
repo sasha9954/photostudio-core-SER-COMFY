@@ -8114,6 +8114,24 @@ const activeScenarioPipelineDebugNode = useMemo(() => {
   if (activeScenarioPipelineDebugId) return nodes.find((n) => n.id === activeScenarioPipelineDebugId && n.type === "scenarioPipelineDebug") || null;
   return nodes.find((n) => n.type === "scenarioPipelineDebug") || null;
 }, [activeScenarioPipelineDebugId, nodes]);
+useEffect(() => {
+  if (!isScenarioStoryboardOpen) return;
+  const storyboardNodes = (Array.isArray(nodes) ? nodes : []).filter((nodeItem) => nodeItem?.type === "scenarioStoryboard");
+  if (!storyboardNodes.length) return;
+  const hasCurrentActive = !!activeScenarioStoryboardId && storyboardNodes.some((nodeItem) => nodeItem?.id === activeScenarioStoryboardId);
+  const nextActiveId = hasCurrentActive
+    ? String(activeScenarioStoryboardId || "").trim()
+    : String(storyboardNodes[0]?.id || "").trim();
+  if (nextActiveId && nextActiveId !== String(activeScenarioStoryboardId || "").trim()) {
+    setActiveScenarioStoryboardId(nextActiveId);
+  }
+  if (nextActiveId) {
+    setScenarioEditor((prev) => {
+      if (String(prev?.nodeId || "").trim() === nextActiveId) return prev;
+      return { ...prev, nodeId: nextActiveId };
+    });
+  }
+}, [activeScenarioStoryboardId, isScenarioStoryboardOpen, nodes]);
 const activeScenarioAudioData = activeScenarioStoryboardNode?.data?.audioData && typeof activeScenarioStoryboardNode.data.audioData === "object"
   ? activeScenarioStoryboardNode.data.audioData
   : {};
@@ -11095,15 +11113,69 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     return { sceneIndex, scene, storyboardRevision, storyboardSignature, sceneSignature };
   }, [resolveScenarioSceneIndex, scenarioFlowSourceNode, scenarioScenes]);
 
+  const resolveScenarioStoryboardTargetNode = useCallback((options = {}) => {
+    const explicitNodeId = String(options?.nodeId || "").trim();
+    const activeFlowNodeId = String(scenarioFlowSourceNode?.id || "").trim();
+    const openStoryboardNodeId = String(activeScenarioStoryboardNode?.id || activeScenarioStoryboardId || "").trim();
+    const editorNodeId = String(scenarioEditor?.nodeId || "").trim();
+    const availableStoryboardNodes = (nodesRef.current || []).filter((nodeItem) => nodeItem?.type === "scenarioStoryboard");
+    const availableScenarioStoryboardNodeIds = availableStoryboardNodes.map((nodeItem) => String(nodeItem?.id || "").trim()).filter(Boolean);
+    const candidateIds = [
+      { nodeId: explicitNodeId, resolvedBy: "explicit" },
+      { nodeId: activeFlowNodeId, resolvedBy: "active" },
+      { nodeId: openStoryboardNodeId, resolvedBy: "open_editor" },
+      { nodeId: editorNodeId, resolvedBy: "legacy_editor" },
+    ];
+    for (const candidate of candidateIds) {
+      const normalizedCandidateId = String(candidate?.nodeId || "").trim();
+      if (!normalizedCandidateId) continue;
+      const candidateNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === normalizedCandidateId) || null;
+      if (candidateNode) {
+        return {
+          targetNodeId: normalizedCandidateId,
+          targetNode: candidateNode,
+          resolvedBy: candidate.resolvedBy,
+          activeScenarioNodeId: activeFlowNodeId,
+          openStoryboardNodeId,
+          availableScenarioStoryboardNodeIds,
+        };
+      }
+    }
+    const fallbackNode = availableStoryboardNodes[0] || null;
+    return {
+      targetNodeId: String(fallbackNode?.id || "").trim(),
+      targetNode: fallbackNode,
+      resolvedBy: fallbackNode ? "fallback_scan" : "none",
+      activeScenarioNodeId: activeFlowNodeId,
+      openStoryboardNodeId,
+      availableScenarioStoryboardNodeIds,
+    };
+  }, [activeScenarioStoryboardId, activeScenarioStoryboardNode?.id, scenarioEditor?.nodeId, scenarioFlowSourceNode?.id]);
+
   const handleGenerateScenarioImage = useCallback(async (slot = "single", options = {}) => {
-    const targetNodeId = String(scenarioEditor?.nodeId || scenarioFlowSourceNode?.id || "").trim();
-    const targetNode = (nodesRef.current || []).find((nodeItem) => nodeItem?.id === targetNodeId) || scenarioFlowSourceNode || null;
+    const requestedSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
+    const requestedSceneId = String(options?.sceneId || options?.selectedSceneId || scenarioEditor?.selectedSceneId || scenarioSelected?.sceneId || "").trim();
+    const targetNodeResolution = resolveScenarioStoryboardTargetNode(options);
+    const targetNodeId = String(targetNodeResolution?.targetNodeId || "").trim();
+    const targetNode = targetNodeResolution?.targetNode || null;
+    if (CLIP_TRACE_SCENARIO_EDITOR_GENERATE) {
+      console.debug("[SCENARIO EDITOR IMAGE TARGET RESOLVE]", {
+        sceneId: requestedSceneId,
+        selectedSceneId: String(scenarioEditor?.selectedSceneId || "").trim(),
+        requestedSceneId,
+        targetNodeId,
+        activeScenarioNodeId: String(targetNodeResolution?.activeScenarioNodeId || ""),
+        openStoryboardNodeId: String(targetNodeResolution?.openStoryboardNodeId || ""),
+        resolvedTargetNodeId: targetNodeId,
+        resolvedBy: String(targetNodeResolution?.resolvedBy || "none"),
+        hasTargetNode: !!targetNode,
+        availableScenarioStoryboardNodeIds: targetNodeResolution?.availableScenarioStoryboardNodeIds || [],
+      });
+    }
     const targetRawScenes = Array.isArray(targetNode?.data?.scenes)
       ? targetNode.data.scenes
       : (Array.isArray(options?.rawScenes) ? options.rawScenes : []);
     const targetScenes = normalizeSceneCollectionWithSceneId(targetRawScenes, "scene");
-    const requestedSceneIndex = Number.isInteger(options?.sceneIndex) ? options.sceneIndex : scenarioEditor.selected;
-    const requestedSceneId = String(options?.sceneId || options?.selectedSceneId || scenarioEditor?.selectedSceneId || scenarioSelected?.sceneId || "").trim();
     const resolvedSceneIndex = requestedSceneId ? resolveScenarioSceneIndex(requestedSceneId, targetScenes) : -1;
     const targetSceneIndex = resolvedSceneIndex >= 0
       ? resolvedSceneIndex
@@ -11112,9 +11184,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const requestSceneId = String(targetScene?.sceneId || requestedSceneId || "").trim();
     if (!targetNodeId || !targetNode) {
       console.error("[SCENARIO EDITOR IMAGE EARLY RETURN] missing_target_node", {
-        targetNodeId,
-        hasTargetNode: !!targetNode,
+        sceneId: requestSceneId,
+        selectedSceneId: String(scenarioEditor?.selectedSceneId || "").trim(),
         requestedSceneId,
+        targetNodeId,
+        activeScenarioNodeId: String(targetNodeResolution?.activeScenarioNodeId || ""),
+        openStoryboardNodeId: String(targetNodeResolution?.openStoryboardNodeId || ""),
+        resolvedTargetNodeId: String(targetNodeResolution?.targetNodeId || ""),
+        resolvedBy: String(targetNodeResolution?.resolvedBy || "none"),
+        availableScenarioStoryboardNodeIds: targetNodeResolution?.availableScenarioStoryboardNodeIds || [],
+        hasTargetNode: !!targetNode,
         requestedSceneIndex,
       });
       setScenarioImageError("Не найден source node для Scenario image generate.");
@@ -12406,7 +12485,7 @@ Aspect ratio: ${imageFormat}`,
     } finally {
       setScenarioImageLoading(false);
     }
-  }, [clearActiveVideoJob, notify, resolveScenarioLiveBinding, resolveScenarioSceneIndex, scenarioEditor?.nodeId, scenarioEditor.selected, scenarioFlowSourceNode?.id, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, scenarioSelected?.sceneId, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
+  }, [activeScenarioStoryboardNode?.id, clearActiveVideoJob, notify, resolveScenarioLiveBinding, resolveScenarioSceneIndex, resolveScenarioStoryboardTargetNode, scenarioEditor?.nodeId, scenarioEditor?.selectedSceneId, scenarioEditor.selected, scenarioFlowSourceNode?.data?.scenarioPackage, scenarioFlowSourceNode?.data?.storyboardRevision, scenarioFlowSourceNode?.data?.storyboardSignature, scenarioScenes, scenarioSelected?.sceneId, scenarioBrainRefs, updateScenarioScene, updateScenarioSceneGenerationRuntime]);
 
   const handleClearScenarioImage = useCallback((slot = "single") => {
     setScenarioImageError("");
@@ -16301,15 +16380,15 @@ onClipSec: (nodeId, value) => {
                 })));
 
                 if (normalizedAction === "image") {
-                  handleGenerateScenarioImage("single", { sceneIndex, sceneId: resolvedSceneId, normalizedScenes, rawScenes, ...meta });
+                  handleGenerateScenarioImage("single", { nodeId, sceneIndex, sceneId: resolvedSceneId, normalizedScenes, rawScenes, ...meta });
                   return;
                 }
                 if (normalizedAction === "start_frame") {
-                  handleGenerateScenarioImage("start", { sceneIndex, sceneId: resolvedSceneId, normalizedScenes, rawScenes, ...meta });
+                  handleGenerateScenarioImage("start", { nodeId, sceneIndex, sceneId: resolvedSceneId, normalizedScenes, rawScenes, ...meta });
                   return;
                 }
                 if (normalizedAction === "end_frame") {
-                  handleGenerateScenarioImage("end", { sceneIndex, sceneId: resolvedSceneId, normalizedScenes, rawScenes, ...meta });
+                  handleGenerateScenarioImage("end", { nodeId, sceneIndex, sceneId: resolvedSceneId, normalizedScenes, rawScenes, ...meta });
                   return;
                 }
                 handleScenarioGenerateVideo({ sceneIndex, sceneId: resolvedSceneId, ...meta });
