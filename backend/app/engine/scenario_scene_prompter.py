@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
@@ -30,12 +31,20 @@ _GLOBAL_PROMPT_RULES = [
 _NEGATIVE_LEAK_TOKENS = (
     "low quality",
     "blurry",
-    "distorted anatomy",
-    "extra limbs",
     "worst quality",
+    "distorted features",
+    "morphing",
+    "flickering",
+    "extra limbs",
+    "unrealistic physics",
+    "neon",
+    "club lighting",
+    "warehouse",
+    "distorted anatomy",
     "bad quality",
     "deformed",
 )
+_STALE_WORLD_TOKENS = ("apartment", "cassette", "headscarf")
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -552,6 +561,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Prompts are translation layer only: do not invent new plot geography beyond upstream story/role/scene contracts.\\n"
         "Do NOT produce render payloads or API calls.\\n"
         "For each scene from scene_plan, write route-aware photo_prompt and video_prompt with compact production language.\\n"
+        "Use only CURRENT PACKAGE context in this request; do not reuse stale or previous package prompts.\\n"
         "Preserve identity/world/style continuity and realism.\\n"
         "Prompt text must be short, usable, and not overloaded.\\n"
         "Avoid unnecessary world/geography decoration (no forced urban/industrial/location labels unless explicitly grounded in inputs).\\n"
@@ -665,11 +675,58 @@ def _sanitize_positive_prompt(text: str, negative_text: str) -> str:
         idx = low.find(token)
         if idx >= 0 and (cut_idx < 0 or idx < cut_idx):
             cut_idx = idx
-    if cut_idx > 0:
+    if cut_idx >= 0:
         clean = clean[:cut_idx].rstrip(" ,;.")
     if neg_low and neg_low in clean.lower():
         clean = clean[: clean.lower().find(neg_low)].rstrip(" ,;.")
+    clean = re.sub(r"\s*[,;:.!?-]\s*[,;:.!?-]\s*", ", ", clean)
+    clean = re.sub(r"\s{2,}", " ", clean).strip(" ,;:.")
     return clean[:900]
+
+
+def _build_package_anchor_fingerprint(package: dict[str, Any], story_core: dict[str, Any], world_continuity: dict[str, Any]) -> dict[str, Any]:
+    refs = _safe_dict(package.get("refs_inventory"))
+    hero = _safe_dict(_safe_dict(story_core.get("identity_lock")).get("hero"))
+    style_lock = _safe_dict(story_core.get("style_lock"))
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    anchor_tokens = [
+        str(hero.get("outfit_essentials") or ""),
+        str(hero.get("appearance_notes") or ""),
+        str(world_continuity.get("environment_family") or ""),
+        str(world_lock.get("setting") or ""),
+        str(world_lock.get("setting_description") or ""),
+        str(style_lock.get("lighting") or ""),
+        str(_safe_dict(refs.get("ref_location")).get("value") or ""),
+        str(_safe_dict(refs.get("ref_character_1")).get("value") or ""),
+    ]
+    token_words: set[str] = set()
+    for chunk in anchor_tokens:
+        for word in re.findall(r"[a-zA-Z]{4,}", chunk.lower()):
+            token_words.add(word)
+    return {
+        "hero_anchor": _build_identity_lock_summary(story_core),
+        "world_anchor": _build_world_lock_summary(story_core),
+        "lighting_anchor": str(style_lock.get("lighting") or "").strip(),
+        "continuity_tokens": sorted(token_words)[:40],
+    }
+
+
+def _row_looks_unrelated_to_current_package(row: dict[str, Any], fingerprint: dict[str, Any]) -> bool:
+    blob = " ".join(
+        [
+            str(row.get("photo_prompt") or ""),
+            str(row.get("video_prompt") or ""),
+            str(row.get("positive_video_prompt") or ""),
+            str(_safe_dict(row.get("prompt_notes")).get("world_anchor") or ""),
+            str(_safe_dict(row.get("prompt_notes")).get("identity_anchor") or ""),
+        ]
+    ).lower()
+    if not blob:
+        return False
+    stale_hits = sum(1 for token in _STALE_WORLD_TOKENS if token in blob)
+    continuity_tokens = _safe_list(fingerprint.get("continuity_tokens"))
+    anchor_hits = sum(1 for token in continuity_tokens if token and str(token) in blob)
+    return stale_hits > 0 and anchor_hits == 0
 
 
 def _build_fallback_scene_prompts(
@@ -813,7 +870,7 @@ def _normalize_scene_prompts(
     role_lookup: dict[str, dict[str, Any]],
     story_core: dict[str, Any],
     world_continuity: dict[str, Any],
-) -> tuple[dict[str, Any], bool, str, int, int, int, int]:
+) -> tuple[dict[str, Any], bool, str, int, int, int, int, dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(raw.get("scenes")):
         row = _safe_dict(row_raw)
@@ -827,6 +884,9 @@ def _normalize_scene_prompts(
     missing_photo_count = 0
     missing_video_count = 0
     route_semantics_mismatch_count = 0
+    repaired_from_current_package_count = 0
+    unrelated_rows_discarded_count = 0
+    fingerprint = _build_package_anchor_fingerprint(package, story_core, world_continuity)
 
     for scene_raw in scene_rows:
         scene = _safe_dict(scene_raw)
@@ -854,11 +914,19 @@ def _normalize_scene_prompts(
             used_fallback = True
             validation_errors.append(f"route_mismatch:{scene_id}")
             actual_route = expected_route
+        row_repaired_from_current_package = False
+        if base and _row_looks_unrelated_to_current_package(base, fingerprint):
+            used_fallback = True
+            row_repaired_from_current_package = True
+            unrelated_rows_discarded_count += 1
+            validation_errors.append(f"unrelated_prompt_row_discarded:{scene_id}")
+            base = {}
 
         photo_prompt = str(base.get("photo_prompt") or "").strip()
         if not photo_prompt:
             missing_photo_count += 1
             used_fallback = True
+            row_repaired_from_current_package = True
             photo_prompt = str(fallback_row.get("photo_prompt") or "")
 
         video_prompt = str(base.get("video_prompt") or "").strip()
@@ -867,6 +935,7 @@ def _normalize_scene_prompts(
         if not video_prompt:
             missing_video_count += 1
             used_fallback = True
+            row_repaired_from_current_package = True
             video_prompt = str(fallback_row.get("video_prompt") or "")
 
         if actual_route == "first_last":
@@ -1004,6 +1073,8 @@ def _normalize_scene_prompts(
             "negative_prompt": negative_prompt,
             "prompt_notes": normalized_notes,
         }
+        if row_repaired_from_current_package:
+            repaired_from_current_package_count += 1
         if _route_semantics_mismatch(scene_out):
             route_semantics_mismatch_count += 1
         scenes.append(scene_out)
@@ -1018,6 +1089,14 @@ def _normalize_scene_prompts(
     ia2v_audio_driven_count = sum(
         1 for row in scenes if str(row.get("route") or "") == "ia2v" and bool(_safe_dict(row.get("prompt_notes")).get("audio_driven"))
     )
+    normalization_diag = {
+        "rows_source_count": len(scene_rows),
+        "rows_model_count": len(_safe_list(raw.get("scenes"))),
+        "rows_normalized_count": len(scenes),
+        "repaired_from_current_package_count": repaired_from_current_package_count,
+        "unrelated_rows_discarded_count": unrelated_rows_discarded_count,
+        "stage_source": "current_package",
+    }
     return (
         normalized,
         used_fallback,
@@ -1026,6 +1105,7 @@ def _normalize_scene_prompts(
         missing_video_count,
         ia2v_audio_driven_count,
         route_semantics_mismatch_count,
+        normalization_diag,
     )
 
 
@@ -1085,6 +1165,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             missing_video,
             ia2v_audio_driven,
             route_semantics_mismatch_count,
+            normalization_diag,
         ) = _normalize_scene_prompts(
             package,
             parsed,
@@ -1099,6 +1180,12 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "missing_video_count": int(missing_video),
                 "ia2v_audio_driven_count": int(ia2v_audio_driven),
                 "scene_prompts_route_semantics_mismatch_count": int(route_semantics_mismatch_count),
+                "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
+                "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
+                "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
+                "repaired_from_current_package_count": int(normalization_diag.get("repaired_from_current_package_count") or 0),
+                "unrelated_rows_discarded_count": int(normalization_diag.get("unrelated_rows_discarded_count") or 0),
+                "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
             }
         )
         return {
@@ -1118,6 +1205,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
             missing_video,
             ia2v_audio_driven,
             route_semantics_mismatch_count,
+            normalization_diag,
         ) = _normalize_scene_prompts(
             package,
             {},
@@ -1132,6 +1220,12 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 "missing_video_count": int(missing_video),
                 "ia2v_audio_driven_count": int(ia2v_audio_driven),
                 "scene_prompts_route_semantics_mismatch_count": int(route_semantics_mismatch_count),
+                "rows_source_count": int(normalization_diag.get("rows_source_count") or 0),
+                "rows_model_count": int(normalization_diag.get("rows_model_count") or 0),
+                "rows_normalized_count": int(normalization_diag.get("rows_normalized_count") or 0),
+                "repaired_from_current_package_count": int(normalization_diag.get("repaired_from_current_package_count") or 0),
+                "unrelated_rows_discarded_count": int(normalization_diag.get("unrelated_rows_discarded_count") or 0),
+                "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
             }
         )
         return {

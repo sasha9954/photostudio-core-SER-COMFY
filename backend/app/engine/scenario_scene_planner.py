@@ -206,6 +206,9 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Audio energy is the primary default driver of dramaturgy in clip/music_video mode.\\n"
         "Refs lock identity/world/style continuity; text sets premise only when present.\\n"
         "Use scene windows exactly as provided.\\n"
+        "Do not add, merge, split, or invent extra scenes.\\n"
+        "Return exactly one scene row per provided fixed scene window.\\n"
+        "scene_id, t0, t1, duration_sec must remain aligned to provided windows.\\n"
         "Keep route mix intelligent (not random), preserve role/world continuity, and keep rhythm/emotional variation.\\n"
         "For 8 scenes, 4 i2v / 2 ia2v / 2 first_last is a soft heuristic only; audio behavior + continuity feasibility can override it.\\n"
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
@@ -486,21 +489,52 @@ def _rebalance_routes(scenes: list[dict[str, Any]], target: dict[str, int]) -> b
     return changed
 
 
-def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[str, Any]], role_lookup: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], bool, str, int]:
+def _normalize_scene_plan(
+    raw_plan: dict[str, Any],
+    *,
+    scene_windows: list[dict[str, Any]],
+    role_lookup: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], bool, str, int, dict[str, Any]]:
     known_ids = {str(row.get("scene_id") or ""): row for row in scene_windows}
+    raw_model_rows: list[dict[str, Any]] = []
     raw_scenes_by_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(raw_plan.get("scenes")):
         row = _safe_dict(row_raw)
+        raw_model_rows.append(row)
         scene_id = str(row.get("scene_id") or "").strip()
-        if scene_id in known_ids:
+        model_t0 = _round3(row.get("t0"))
+        model_t1 = _round3(row.get("t1"))
+        source = _safe_dict(known_ids.get(scene_id))
+        aligned = bool(source) and model_t0 == _round3(source.get("t0")) and model_t1 == _round3(source.get("t1"))
+        if scene_id in known_ids and aligned and scene_id not in raw_scenes_by_id:
             raw_scenes_by_id[scene_id] = row
 
     used_fallback = False
     watchability_fallback_count = 0
     normalized_scenes: list[dict[str, Any]] = []
+    model_rows_used = set(raw_scenes_by_id.keys())
+    row_count_source = len(scene_windows)
+    row_count_model = len(raw_model_rows)
+    missing_rows_filled = 0
+    repaired_to_audio_windows = False
+
+    ordered_fallback_rows = [
+        _safe_dict(row_raw)
+        for row_raw in raw_model_rows
+        if str(_safe_dict(row_raw).get("scene_id") or "").strip() not in model_rows_used
+    ]
+    fallback_idx = 0
     for idx, window in enumerate(scene_windows):
         scene_id = str(window.get("scene_id") or "")
         raw_row = _safe_dict(raw_scenes_by_id.get(scene_id))
+        if not raw_row:
+            if fallback_idx < len(ordered_fallback_rows):
+                raw_row = _safe_dict(ordered_fallback_rows[fallback_idx])
+                fallback_idx += 1
+                repaired_to_audio_windows = True
+            else:
+                missing_rows_filled += 1
+                repaired_to_audio_windows = True
         role_row = _safe_dict(role_lookup.get(scene_id))
 
         route_raw = str(raw_row.get("route") or "").strip().lower()
@@ -603,7 +637,18 @@ def _normalize_scene_plan(raw_plan: dict[str, Any], *, scene_windows: list[dict[
     }
 
     validation_error = "" if normalized_scenes else "scene_plan_empty_after_normalization"
-    return plan, used_fallback, validation_error, watchability_fallback_count
+    synthetic_rows_dropped = max(0, row_count_model - row_count_source)
+    if row_count_model != row_count_source or synthetic_rows_dropped or missing_rows_filled:
+        repaired_to_audio_windows = True
+    normalization_diag = {
+        "window_count_source": row_count_source,
+        "window_count_model": row_count_model,
+        "window_count_normalized": len(normalized_scenes),
+        "repaired_to_audio_windows": repaired_to_audio_windows,
+        "synthetic_rows_dropped": synthetic_rows_dropped,
+        "missing_rows_filled": missing_rows_filled,
+    }
+    return plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag
 
 
 def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
@@ -621,7 +666,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
     }
 
     if not scene_windows:
-        plan, used_fallback, validation_error, watchability_fallback_count = _normalize_scene_plan(
+        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
             {},
             scene_windows=scene_windows,
             role_lookup=role_lookup,
@@ -632,6 +677,12 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "presence_modes": [],
                 "route_flat": False,
                 "watchability_fallback_count": int(watchability_fallback_count),
+                "window_count_source": int(normalization_diag.get("window_count_source") or 0),
+                "window_count_model": int(normalization_diag.get("window_count_model") or 0),
+                "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
+                "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
+                "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
+                "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
             }
         )
         return {
@@ -658,7 +709,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 
         parsed = _extract_json_obj(_extract_gemini_text(response))
-        scene_plan, used_fallback, validation_error, watchability_fallback_count = _normalize_scene_plan(
+        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
             parsed,
             scene_windows=scene_windows,
             role_lookup=role_lookup,
@@ -683,6 +734,12 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 "presence_modes": presence_modes,
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
                 "watchability_fallback_count": int(watchability_fallback_count),
+                "window_count_source": int(normalization_diag.get("window_count_source") or 0),
+                "window_count_model": int(normalization_diag.get("window_count_model") or 0),
+                "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
+                "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
+                "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
+                "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
                 "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
                 "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
                 "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
@@ -697,7 +754,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
             "diagnostics": diagnostics,
         }
     except Exception as exc:  # noqa: BLE001
-        scene_plan, used_fallback, validation_error, watchability_fallback_count = _normalize_scene_plan(
+        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag = _normalize_scene_plan(
             {},
             scene_windows=scene_windows,
             role_lookup=role_lookup,
@@ -721,6 +778,12 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any]) -> dict[st
                 ),
                 "route_flat": bool(_safe_list(scene_plan.get("scenes")) and len({r for r, c in route_counts.items() if c > 0}) <= 1),
                 "watchability_fallback_count": int(watchability_fallback_count),
+                "window_count_source": int(normalization_diag.get("window_count_source") or 0),
+                "window_count_model": int(normalization_diag.get("window_count_model") or 0),
+                "window_count_normalized": int(normalization_diag.get("window_count_normalized") or 0),
+                "repaired_to_audio_windows": bool(normalization_diag.get("repaired_to_audio_windows")),
+                "synthetic_rows_dropped": int(normalization_diag.get("synthetic_rows_dropped") or 0),
+                "missing_rows_filled": int(normalization_diag.get("missing_rows_filled") or 0),
                 "scene_plan_has_adjacent_ia2v": bool(spacing.get("has_adjacent_ia2v")),
                 "scene_plan_has_adjacent_first_last": bool(spacing.get("has_adjacent_first_last")),
                 "scene_plan_route_spacing_warning": str(spacing.get("warning") or ""),
