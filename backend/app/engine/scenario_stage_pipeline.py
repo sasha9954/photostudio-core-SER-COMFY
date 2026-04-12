@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import math
@@ -575,8 +576,15 @@ def _build_story_core_prompt(
             "- User did not provide narrative directive text.\n"
             "- Audio energy is the default dramaturgic driver.\n"
             "- Build compact emotional/visual arc from energy, phrasing, escalation, release, afterimage.\n"
-            "- Do NOT invent heavy literal geography or random premise/world travel without refs or text grounding.\n"
+            "- Prefer one coherent world anchor with escalating emotional and physical intensity.\n"
+            "- Do NOT invent multi-location travel plot or literal geography chain unless refs explicitly demand it.\n"
+            "- Do NOT expand a single locked environment into city/alley/courtyard/market progression from nowhere.\n"
             "- Keep clip premise cinematic but concise, not over-plotted.\n"
+        )
+    else:
+        mode_instructions += (
+            "- Keep story core compact and clip-like, not screenplay-like.\n"
+            "- Avoid unnecessary geography expansion beyond user directive and refs.\n"
         )
     return (
         "You are STORY CORE stage of a scenario pipeline.\n"
@@ -814,6 +822,18 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _scene_prompts_upstream_signature(package: dict[str, Any]) -> str:
+    snapshot = {
+        "story_core": _safe_dict(package.get("story_core")),
+        "audio_map": _safe_dict(package.get("audio_map")),
+        "role_plan": _safe_dict(package.get("role_plan")),
+        "scene_plan": _safe_dict(package.get("scene_plan")),
+        "refs_inventory": _safe_dict(package.get("refs_inventory")),
+    }
+    payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 def _normalize_route_contract(route_value: Any) -> dict[str, Any]:
@@ -3142,6 +3162,12 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_flat"] = False
     diagnostics["scene_plan_watchability_fallback_count"] = 0
     diagnostics["scene_plan_world_summary_used"] = False
+    diagnostics["scene_plan_window_count_source"] = 0
+    diagnostics["scene_plan_window_count_model"] = 0
+    diagnostics["scene_plan_window_count_normalized"] = 0
+    diagnostics["scene_plan_repaired_to_audio_windows"] = False
+    diagnostics["scene_plan_synthetic_rows_dropped"] = 0
+    diagnostics["scene_plan_missing_rows_filled"] = 0
     diagnostics["scene_plan_has_adjacent_ia2v"] = False
     diagnostics["scene_plan_has_adjacent_first_last"] = False
     diagnostics["scene_plan_route_spacing_warning"] = False
@@ -3174,6 +3200,12 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_flat"] = bool(scene_diag.get("route_flat"))
     diagnostics["scene_plan_watchability_fallback_count"] = int(scene_diag.get("watchability_fallback_count") or 0)
     diagnostics["scene_plan_world_summary_used"] = bool(scene_diag.get("world_summary_used"))
+    diagnostics["scene_plan_window_count_source"] = int(scene_diag.get("window_count_source") or 0)
+    diagnostics["scene_plan_window_count_model"] = int(scene_diag.get("window_count_model") or 0)
+    diagnostics["scene_plan_window_count_normalized"] = int(scene_diag.get("window_count_normalized") or 0)
+    diagnostics["scene_plan_repaired_to_audio_windows"] = bool(scene_diag.get("repaired_to_audio_windows"))
+    diagnostics["scene_plan_synthetic_rows_dropped"] = int(scene_diag.get("synthetic_rows_dropped") or 0)
+    diagnostics["scene_plan_missing_rows_filled"] = int(scene_diag.get("missing_rows_filled") or 0)
     diagnostics["scene_plan_has_adjacent_ia2v"] = bool(scene_diag.get("scene_plan_has_adjacent_ia2v"))
     diagnostics["scene_plan_has_adjacent_first_last"] = bool(scene_diag.get("scene_plan_has_adjacent_first_last"))
     diagnostics["scene_plan_route_spacing_warning"] = bool(scene_diag.get("scene_plan_route_spacing_warning"))
@@ -3196,9 +3228,16 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
+    current_signature = _scene_prompts_upstream_signature(package)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_prompts_backend"] = "gemini"
     diagnostics["scene_prompts_prompt_version"] = SCENE_PROMPTS_PROMPT_VERSION
+    diagnostics["scene_prompts_stage_source"] = "current_package"
+    diagnostics["scene_prompts_rows_source_count"] = 0
+    diagnostics["scene_prompts_rows_model_count"] = 0
+    diagnostics["scene_prompts_rows_normalized_count"] = 0
+    diagnostics["scene_prompts_repaired_from_current_package_count"] = 0
+    diagnostics["scene_prompts_unrelated_rows_discarded_count"] = 0
     diagnostics["scene_prompts_used_fallback"] = False
     diagnostics["scene_prompts_scene_count"] = 0
     diagnostics["scene_prompts_missing_photo_count"] = 0
@@ -3208,7 +3247,11 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
+    previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "")
+    diagnostics["scene_prompts_upstream_changed"] = bool(previous_signature and previous_signature != current_signature)
+    diagnostics["scene_prompts_upstream_signature"] = current_signature
     package["diagnostics"] = diagnostics
+    package["scene_prompts"] = {"scenes": []}
 
     result = build_gemini_scene_prompts(
         api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
@@ -3222,6 +3265,16 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_prompts_backend"] = "gemini"
     diagnostics["scene_prompts_prompt_version"] = str(prompts_diag.get("prompt_version") or SCENE_PROMPTS_PROMPT_VERSION)
+    diagnostics["scene_prompts_stage_source"] = str(prompts_diag.get("stage_source") or "current_package")
+    diagnostics["scene_prompts_rows_source_count"] = int(prompts_diag.get("rows_source_count") or 0)
+    diagnostics["scene_prompts_rows_model_count"] = int(prompts_diag.get("rows_model_count") or 0)
+    diagnostics["scene_prompts_rows_normalized_count"] = int(prompts_diag.get("rows_normalized_count") or 0)
+    diagnostics["scene_prompts_repaired_from_current_package_count"] = int(
+        prompts_diag.get("repaired_from_current_package_count") or 0
+    )
+    diagnostics["scene_prompts_unrelated_rows_discarded_count"] = int(
+        prompts_diag.get("unrelated_rows_discarded_count") or 0
+    )
     diagnostics["scene_prompts_used_fallback"] = bool(result.get("used_fallback"))
     diagnostics["scene_prompts_scene_count"] = int(prompts_diag.get("scene_count") or len(_safe_list(scene_prompts.get("scenes"))))
     diagnostics["scene_prompts_missing_photo_count"] = int(prompts_diag.get("missing_photo_count") or 0)
