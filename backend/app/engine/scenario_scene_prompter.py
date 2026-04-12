@@ -9,20 +9,16 @@ SCENE_PROMPTS_PROMPT_VERSION = "scene_prompts_v1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
 
 _GLOBAL_NEGATIVE_PROMPT = (
-    "no anatomy drift, no identity drift, no outfit drift, no lighting/world drift, "
-    "no abrupt body twists, no chaotic hand motion, no unstable legs, no unnatural spin, "
-    "no camera chaos, no surreal deformation, no extra limbs, no face or mouth distortion, "
-    "no background teleportation"
+    "Safety tail: keep identity/outfit/world continuity, stable anatomy, controlled camera, no extra limbs, no surreal deformation."
 )
 
 _LIP_SYNC_NEGATIVE_PROMPT = (
-    "no strong body rotations, no camera chaos, no broken face motion, no broken body motion, "
-    "no unreadable mouth articulation, no identity drift, no outfit drift, no surreal deformation"
+    "Safety tail: keep face and mouth readable, stable anatomy/balance, controlled camera, no frantic dance or chaotic motion."
 )
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
-    "camera drift, zoom, reframing, turn to camera, fast body rotation, background deformation, wall movement, "
-    "floating geometry, object pop-in, identity drift, outfit drift, surreal motion, temporal instability, artifacts"
+    "Safety tail: same subject/stance/world/outfit/shot feeling; no stepping, crouching, bowing, torso dip, dance choreography, "
+    "large arm action, spins, dramatic camera movement, added actors, or layout changes."
 )
 
 _GLOBAL_PROMPT_RULES = [
@@ -399,11 +395,10 @@ def _build_first_last_start_image_prompt(
     first_state: str,
     attached_prop_token: str,
 ) -> str:
-    prop_clause = f", {attached_prop_token} worn and attached to the character" if attached_prop_token else ""
+    prop_clause = f", {attached_prop_token} stays worn in the same place" if attached_prop_token else ""
     return (
-        f"Start frame still of {primary_role} in {scene_space}. Exact start-state pose: {first_state}. "
-        "Same exact wall geometry, same exact framing, same exact perspective, same exact camera distance, "
-        f"same exact clothing, same exact body proportions, same exact lighting{prop_clause}."
+        f"Start frame still of {primary_role} in {scene_space}, holding the anchor pose: {first_state}. "
+        f"Keep the same subject, world, wardrobe, and shot feeling{prop_clause}."
     )
 
 
@@ -414,18 +409,17 @@ def _build_first_last_end_image_prompt(
     last_state: str,
     attached_prop_token: str,
 ) -> str:
-    prop_clause = f", {attached_prop_token} remains attached/worn in the same logical placement" if attached_prop_token else ""
+    prop_clause = f", {attached_prop_token} remains worn in the same place" if attached_prop_token else ""
     return (
-        f"End frame still of {primary_role} in {scene_space}. Same frame and world as start; one controlled delta only: {last_state} relative to start. "
-        "Keep same exact wall geometry, same exact framing, same exact perspective, same exact camera distance, "
-        f"same exact clothing, same exact body proportions, same exact lighting{prop_clause}."
+        f"End frame still of {primary_role} in {scene_space}, showing one subtle delta from the anchor frame: {last_state}. "
+        f"Keep the same subject, world, wardrobe, and shot feeling{prop_clause}."
     )
 
 
 def _build_first_last_negative_prompt(*, attached_prop_token: str) -> str:
     base = (
-        "camera drift, zoom, reframing, turn to camera, fast body rotation, shoulder swing, hip twist, walking, step, "
-        "object pop-in, floating prop, detached prop, wall motion, geometry morphing, identity drift, outfit drift, surreal motion, temporal instability, artifacts"
+        "Safety tail: same subject/stance/world/outfit/shot feeling; one subtle delta only; no stepping, crouching, bowing, torso dip, dance choreography, "
+        "large arm action, spins, dramatic camera movement, added background actors, layout changes, surreal motion, or temporal instability"
     )
     if not attached_prop_token:
         return base
@@ -458,11 +452,9 @@ def _build_first_last_prompt_pair(
     )
     prop_clause = f" Keep {attached_prop_token} attached/worn with no drift or detachment." if attached_prop_token else ""
     positive_video_prompt = (
-        "Use the first image as the exact start frame and the second image as the exact end frame. "
-        f"Locked transition for {primary_role} in {scene_space}: one controlled A→B progression only: {_trim_sentence(visual_delta, max_len=140)}. "
-        "Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. "
-        "No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing."
-        f"{prop_clause}"
+        f"The still frame breathes into motion as {primary_role} makes one tiny transition in {scene_space}: {_trim_sentence(visual_delta, max_len=180)}. "
+        "The movement stays minimal and continuous, with the same stance, same shot feeling, and no choreography or camera show-off. "
+        f"Safety tail: keep world/identity continuity, keep camera stable, and avoid layout changes or added actors.{prop_clause}"
     )
     negative_video_prompt = _build_first_last_negative_prompt(attached_prop_token=attached_prop_token)
     return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
@@ -556,26 +548,24 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Preserve identity/world/style continuity and realism.\\n"
         "Prompt text must be short, usable, and not overloaded.\\n"
         "Avoid unnecessary world/geography decoration (no forced urban/industrial/location labels unless explicitly grounded in inputs).\\n"
-        "Video prompts must be LTX-safe and anatomy-safe.\\n"
+        "Video prompts must be LTX-native, anatomy-safe, and motion-first.\\n"
+        "Write prompts in natural cinematic English, present tense, one connected paragraph, chronological motion logic.\\n"
+        "Describe what starts happening after the still image; do NOT mechanically re-describe all static elements already visible.\\n"
+        "Keep one primary motion idea per scene and avoid contradictory instruction stacks.\\n"
+        "Hard constraints must be compressed into a short safety tail at the end only.\\n"
         "Route rules:\\n"
-        "- i2v: one observable action, simple/smooth camera, safe body motion. No first/last frame language and no start/end frame pair logic.\\n"
-        "- ia2v: AUDIO-SLICE-DRIVEN singing/performance for local scene audio slice; readable face and mouth; emotionally synced vocal delivery; upper-body emphasis; stable base; smooth camera; no abrupt choreography/spins/unstable legs. ia2v is a rare accent route, not every performance beat.\\n"
-        "- first_last: controlled micro-transition only. Two near-neighbor states in same world/hero/location/outfit/lighting/framing family, with exactly one controlled action/state progression. Must include TWO standalone image prompts: start_image_prompt and end_image_prompt.\\n"
-        "FIRST_LAST STRICT RULES:\\n"
-        "- positive_video_prompt MUST start exactly with: Use the first image as the exact start frame and the second image as the exact end frame.\\n"
-        "- same exact wall/background geometry, same exact framing, same exact perspective, same exact body proportions, same exact clothing, same exact camera distance, same exact lighting.\\n"
-        "- only one controlled transition over scene duration, continuity remains extremely strong.\\n"
-        "- positive_video_prompt must include explicit bans: no camera drift, no layout change, no extra objects, no geometry morphing.\\n"
-        "- avoid vague wording like 'same heroine', 'same world continuity', 'subtle motion' unless explicit spatial constraints are also present.\\n"
-        "- start_image_prompt and end_image_prompt must each be production-ready standalone still-image prompts (not just notes).\\n"
-        "- no location jumps, no wardrobe jump (except explicit reveal), no camera grammar jump, no chaotic pose discontinuity, no identity drift, no background teleportation.\\n"
+        "- i2v (normal): motion-first continuation from the still image, one visible action line, camera behavior, energy/atmosphere, short safety tail at end.\\n"
+        "- ia2v (lip_sync_music/performance): performance-first, readable face/mouth, musical phrasing drives upper-body expressivity, stable balance, smooth camera, short safety tail at end.\\n"
+        "- first_last (locked transition): micro-transition between near-matched anchor frames with one subtle visible delta only; same subject/stance/world/costume/shot feeling; must include TWO standalone prompts start_image_prompt and end_image_prompt; short safety tail at end.\\n"
+        "FIRST_LAST FORBIDDEN BY DEFAULT: stepping, crouching, bowing, torso dip, dance choreography, large arm action, spinning, dramatic camera movement, added background actors, layout changes.\\n"
+        "Do NOT use dance/performance language in first_last unless scene contract explicitly asks for it.\\n"
         "Scene-level quality beats (if scene ids exist):\\n"
         "- sc_1: intro-observational, more static, more closed, shadow-heavy, restrained framing intent.\\n"
         "- sc_2 (first_last): controlled internal shift. START: head lowered, gaze down, cap obscures more face. END: head slightly raised, gaze slightly higher, emotion starts to surface while cap still partially closes face.\\n"
         "- sc_5: breather with internal defiance; quiet but tense pause with readable subtle emotional charge (not dead static).\\n"
         "- sc_7 (first_last): START face partly under cap shadow, hand just beginning toward brim. END brim lifted, face open, direct camera gaze, culminating reveal.\\n"
         "Honor scene_plan route semantics exactly: first_last must stay strict first_last contract; ia2v must stay audio-driven singing/performance; i2v must stay simple observable action.\\n"
-        "Always include compact negative_prompt with safety constraints.\\n"
+        "Always include compact negative_prompt with safety constraints as short tail text.\\n"
         "For first_last, return both positive_video_prompt and negative_video_prompt fields (negative_video_prompt is mandatory for first_last).\\n"
         "Set prompt_notes.audio_driven=true for ia2v scenes.\\n"
         "Return EXACT contract keys:\\n"
@@ -639,9 +629,9 @@ def _route_semantics_mismatch(scene_row: dict[str, Any]) -> bool:
         has_two_image_prompts = bool(str(scene_row.get("start_image_prompt") or "").strip()) and bool(
             str(scene_row.get("end_image_prompt") or "").strip()
         )
-        has_transition_lang = any(token in positive_video for token in ("exact start frame", "exact end frame", "controlled transition"))
+        has_transition_lang = any(token in positive_video for token in ("micro-transition", "subtle delta", "tiny transition", "one subtle"))
         has_negative_contract = all(
-            token in negative_video for token in ("camera drift", "zoom", "reframing", "identity drift", "temporal instability")
+            token in negative_video for token in ("same subject", "one subtle delta", "layout", "camera", "temporal instability")
         )
         return not (
             continuity_flags_ok
@@ -686,13 +676,11 @@ def _build_fallback_scene_prompts(
 
     if route == "ia2v":
         photo_prompt = (
-            f"Medium three-quarter shot of {primary_role} in {world_anchor}, delivering a vocal phrase with readable face and mouth, "
-            f"emotionally engaged expression, realistic lighting, continuity with established look and wardrobe."
+            f"Performance portrait of {primary_role} in {world_anchor}, framed to keep face and mouth readable while the vocal phrase carries emotion through eyes, shoulders, and hands."
         )
         video_prompt = (
-            "Medium/three-quarter framing. Local audio slice drives visible singing of the phrase. "
-            "Readable face and mouth, emotionally synced vocal delivery, restrained upper-body performance in neck/shoulders/hands, "
-            "stable legs and body base, smooth gentle camera move, no abrupt turns or choreography."
+            "The still frame opens into a performance beat as the vocal phrase leads subtle rhythmic sway, a controlled torso pulse, a gentle head turn, and soft hand phrasing while the face stays readable and emotionally alive. "
+            "Camera motion stays smooth and supportive. Safety tail: stable anatomy and balance, no frantic dance, spins, flailing arms, or camera gimmicks."
         )
         negative_video_prompt = _LIP_SYNC_NEGATIVE_PROMPT
     elif route == "first_last":
@@ -752,8 +740,8 @@ def _build_fallback_scene_prompts(
                 f"emotion: {emotional}, continuity with prior scenes and lighting arc."
             )
             video_prompt = (
-                "One observable action with a simple motion line: "
-                f"{motion_intent}. Use minimal or gentle camera move, keep body motion stable and natural, preserve identity/world/lighting continuity."
+                f"After the still frame, the moment moves forward through one clear action: {motion_intent}, with camera behavior that follows the action and keeps the atmosphere grounded in {emotional}. "
+                "Safety tail: preserve identity/world continuity, stable anatomy, and controlled camera."
             )
 
     fallback_notes = _prompt_notes_template(route)
