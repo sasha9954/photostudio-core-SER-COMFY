@@ -26,6 +26,7 @@ FIRST_LAST_MODES = {
     "camera_settle",
     "visibility_reveal",
 }
+TRANSIT_I2V_FAMILIES = {"baseline_forward_walk", "side_tracking_walk", "push_in_follow"}
 GENERIC_ENVIRONMENT_FAMILIES = {"urban", "city", "interior", "outdoor"}
 TURN_FUNCTION_HINTS = {
     "turn",
@@ -361,6 +362,8 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "CLIP MODE CORE PRINCIPLE: visual/emotional arc under music energy, NOT literal travel-story by default.\\n"
         "If user/director text does not explicitly demand travel plot, keep one coherent environment family and build progression through energy/intimacy/framing/pressure-release.\\n"
         "Do not invent alley->market->courtyard city-route narratives from nowhere.\\n"
+        "Soft anti-repetition policy: avoid 3+ same-family transit/walk scenes in a row; when transit repeats, switch to a fresh visual pressure/release function.\\n"
+        "Encourage coherent world variety through spatial texture (compression/density/friction/partial release/vertical transition/open reveal/final settling) inside one grounded environment family.\\n"
         "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
         "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
         "Add motion/prop complexity risk tags for each scene for downstream prompt simplification and strategy redirection.\\n\\n"
@@ -384,6 +387,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Choose first_last only for reveal/turn/payoff threshold moments where continuity can hold.\\n"
         "Never use first_last for transit-through-space, turning a corner, walking into another place, location progression, world jump, implied geography change, or fine-motor prop choreography.\\n"
         "For first_last scenes, include first_last_mode from allowed taxonomy: push_in_emotional, pull_back_release, small_side_arc, reveal_face_from_shadow, foreground_parallax, camera_settle, visibility_reveal.\\n"
+        "Prefer continuity-safe first_last modes (push_in_emotional / pull_back_release / reveal_face_from_shadow / camera_settle / visibility_reveal / safe foreground_parallax). Keep small_side_arc rare, low-priority, and only when explicitly justified.\\n"
         "Low energy: held/restrained/observational/afterimage feel. Medium: build movement and pressure. High: concentrated performance intensity. Release tail: settle instead of new travel invention.\\n\\n"
         "Return EXACT contract keys:\\n"
         "{\\n"
@@ -537,8 +541,16 @@ def _visual_event_type(scene: dict[str, Any]) -> str:
     presence_mode = str(scene.get("scene_presence_mode") or "").lower()
     if "callback" in scene_function or "afterimage" in scene_function:
         return "callback"
+    if any(token in scene_function for token in ("crowd", "market", "density", "compression")):
+        return "crowd_compression"
+    if any(token in scene_function for token in ("crossing", "intersection", "threshold", "passage")):
+        return "threshold_crossing"
+    if any(token in scene_function for token in ("stair", "slope", "rooftop", "vertical")):
+        return "vertical_transition"
     if "transit" in presence_mode or "transit" in scene_function:
         return "transit"
+    if any(token in scene_function for token in ("reveal", "overlook", "terrace", "courtyard", "city edge")):
+        return "environment_reveal"
     if route == "ia2v":
         return "face"
     if "environment" in scene_function or "anchor" in scene_function:
@@ -601,6 +613,7 @@ def _select_i2v_motion_family(
     idx: int,
     total: int,
     prev_i2v_family: str,
+    transit_streak: int,
 ) -> dict[str, Any]:
     scene_function = str(scene.get("scene_function") or "").lower()
     scene_presence_mode = str(scene.get("scene_presence_mode") or "").lower()
@@ -642,10 +655,14 @@ def _select_i2v_motion_family(
         and i2v_mid_or_late
     ):
         family = "push_in_follow"
+    elif transit_like and transit_streak >= 2 and not high_energy:
+        family = "look_reveal_follow"
     elif transit_like and (prev_i2v_family == "push_in_follow" or "world" in blob or "space" in blob):
         family = "side_tracking_walk"
     elif transit_like and not too_wide and high_energy:
         family = "push_in_follow"
+    elif transit_like and transit_streak >= 2:
+        family = "look_reveal_follow"
     elif transit_like:
         family = "side_tracking_walk"
     else:
@@ -730,8 +747,31 @@ def _infer_first_last_mode(scene: dict[str, Any], idx: int, total: int) -> str:
         return "push_in_emotional"
     if "parallax" in blob:
         return "foreground_parallax"
-    if "arc" in blob or "side" in blob:
+    if "arc_experimental" in blob or "side_arc" in blob:
         return "small_side_arc"
+    return "camera_settle"
+
+
+def _stabilize_first_last_mode(mode: str, scene: dict[str, Any], idx: int, total: int) -> str:
+    selected = str(mode or "").strip().lower()
+    if selected != "small_side_arc":
+        return selected if selected in FIRST_LAST_MODES else _infer_first_last_mode(scene, idx, total)
+    blob = " ".join(
+        [
+            str(scene.get("scene_function") or "").lower(),
+            str(scene.get("emotional_intent") or "").lower(),
+            str(scene.get("motion_intent") or "").lower(),
+            str(scene.get("watchability_role") or "").lower(),
+        ]
+    )
+    if "arc_experimental" in blob or "side_arc" in blob:
+        return "small_side_arc"
+    if idx == total - 1 or any(token in blob for token in ("release", "afterimage", "resolution", "settle")):
+        return "pull_back_release"
+    if any(token in blob for token in ("reveal", "visibility", "open", "surface")):
+        return "visibility_reveal"
+    if any(token in blob for token in ("push", "intimate", "threshold", "closer")):
+        return "push_in_emotional"
     return "camera_settle"
 
 
@@ -767,8 +807,14 @@ def _infer_watchability_role(scene: dict[str, Any], idx: int, total: int) -> str
 
     if "environment_anchor" in presence_mode or "environment_anchor" in scene_function:
         return "anchor world and atmosphere"
+    if any(k in scene_function for k in {"crowd", "market", "density", "compression"}):
+        return "add public pressure and crowd texture"
+    if any(k in scene_function for k in {"crossing", "threshold", "passage"}):
+        return "mark threshold crossing into next space"
+    if any(k in scene_function for k in {"courtyard", "terrace", "overlook", "city edge", "reveal"}):
+        return "open spatial relief with city-layer reveal"
     if "transit" in presence_mode or "transit" in scene_function:
-        return "carry momentum between spaces"
+        return "carry momentum while refreshing spatial texture"
     if ("setup" in scene_function or idx == 0) and "observational" in presence_mode:
         return "establish hero in public world"
     if route == "ia2v" and (performance_focus or any(k in scene_function for k in {"tension", "conflict", "pressure"})):
@@ -784,7 +830,7 @@ def _infer_watchability_role(scene: dict[str, Any], idx: int, total: int) -> str
     if route == "ia2v":
         return "deepen emotional connection through performance"
     if route == "first_last":
-        return "mark transition into the next emotional state"
+        return "settle frame into a clear state shift"
     return "sustain watchable continuity and momentum"
 
 
@@ -897,6 +943,9 @@ def _normalize_scene_plan(
     missing_rows_filled = 0
     repaired_to_audio_windows = False
     seen_phrase_counts: dict[str, int] = {}
+    scene_family_seen_counts: dict[str, int] = {}
+    transit_scene_streak = 0
+    intimate_scene_streak = 0
 
     ordered_fallback_rows = [
         _safe_dict(row_raw)
@@ -971,10 +1020,35 @@ def _normalize_scene_plan(
             "repeat_variation_rule": repeat_variation_rule,
             "motion_risk": _safe_dict(raw_row.get("motion_risk")) or motion_risk,
         }
+        if visual_event_type in {"transit"}:
+            transit_scene_streak += 1
+        else:
+            transit_scene_streak = 0
+        if visual_event_type == "face" and route == "ia2v":
+            intimate_scene_streak += 1
+        else:
+            intimate_scene_streak = 0
+        scene_family = visual_event_type or route
+        scene_family_seen_counts[scene_family] = scene_family_seen_counts.get(scene_family, 0) + 1
+        family_repeat_idx = max(0, scene_family_seen_counts.get(scene_family, 1) - 1)
+        if transit_scene_streak >= 3 and scene_row.get("visual_event_type") == "transit":
+            scene_row["visual_event_type"] = "environment_reveal"
+            scene_row["watchability_role"] = "break transit repetition with fresh spatial reveal"
+            repeat_variation_rule = f"{repeat_variation_rule}; anti_repeat: shift from transit chain to spatial reveal"
+        if intimate_scene_streak >= 2 and scene_row.get("route") == "ia2v":
+            repeat_variation_rule = f"{repeat_variation_rule}; anti_repeat: keep emotional beat but add new scale/space pressure"
+        if family_repeat_idx > 0 and "anti_repeat" not in repeat_variation_rule:
+            repeat_variation_rule = (
+                f"{repeat_variation_rule}; anti_repeat: family_repeat_{family_repeat_idx} requires new pressure/reveal logic"
+            )
+        scene_row["repeat_variation_rule"] = repeat_variation_rule
         if route == "first_last":
             first_last_mode_raw = str(raw_row.get("first_last_mode") or "").strip().lower()
-            scene_row["first_last_mode"] = (
-                first_last_mode_raw if first_last_mode_raw in FIRST_LAST_MODES else _infer_first_last_mode(scene_row, idx, len(scene_windows))
+            scene_row["first_last_mode"] = _stabilize_first_last_mode(
+                first_last_mode_raw,
+                scene_row,
+                idx,
+                len(scene_windows),
             )
         if route == "first_last" and not _is_first_last_candidate(scene_row, idx, len(scene_windows)):
             route = "i2v"
@@ -995,17 +1069,25 @@ def _normalize_scene_plan(
         route = str(row.get("route") or "")
         if route == "first_last":
             mode_raw = str(row.get("first_last_mode") or "").strip().lower()
-            row["first_last_mode"] = mode_raw if mode_raw in FIRST_LAST_MODES else _infer_first_last_mode(row, idx, len(normalized_scenes))
+            row["first_last_mode"] = _stabilize_first_last_mode(mode_raw, row, idx, len(normalized_scenes))
         else:
             row.pop("first_last_mode", None)
     i2v_motion_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
     i2v_rows_enriched_count = 0
     unsupported_i2v_family_count = 0
     prev_i2v_family = ""
+    transit_i2v_streak = 0
     for idx, row in enumerate(normalized_scenes):
         if str(row.get("route") or "") != "i2v":
+            transit_i2v_streak = 0
             continue
-        enriched = _select_i2v_motion_family(row, idx=idx, total=len(normalized_scenes), prev_i2v_family=prev_i2v_family)
+        enriched = _select_i2v_motion_family(
+            row,
+            idx=idx,
+            total=len(normalized_scenes),
+            prev_i2v_family=prev_i2v_family,
+            transit_streak=transit_i2v_streak,
+        )
         row.update(enriched)
         family = str(row.get("i2v_motion_family") or "")
         if family not in I2V_MOTION_FAMILIES:
@@ -1015,6 +1097,7 @@ def _normalize_scene_plan(
         i2v_motion_family_counts[family] = i2v_motion_family_counts.get(family, 0) + 1
         i2v_rows_enriched_count += 1
         prev_i2v_family = family
+        transit_i2v_streak = transit_i2v_streak + 1 if family in TRANSIT_I2V_FAMILIES else 0
 
     route_counts = {route: sum(1 for row in normalized_scenes if row.get("route") == route) for route in ("i2v", "ia2v", "first_last")}
     has_adjacent_ia2v = _has_adjacent_route(normalized_scenes, "ia2v")
