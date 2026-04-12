@@ -2585,7 +2585,7 @@ const SCENARIO_PIPELINE_DEBUG_CLEAR_FIELDS = [
   "executedStages",
   "diagnostics",
   "stageStatuses",
-  "rawScenarioResponse",
+  "rawScenarioResponseSummary",
   "normalizedStageOutputs",
 ];
 
@@ -2683,6 +2683,39 @@ function clearScenarioPipelineDebugNodeData(nodeData = {}) {
     else nextData[key] = null;
   });
   return nextData;
+}
+
+function buildScenarioResponseSummary(response) {
+  if (!response || typeof response !== "object" || Array.isArray(response)) return null;
+  const storyboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object" && !Array.isArray(response.storyboardPackage)
+    ? response.storyboardPackage
+    : {};
+  const diagnostics = response?.diagnostics && typeof response.diagnostics === "object" && !Array.isArray(response.diagnostics)
+    ? response.diagnostics
+    : (storyboardPackage?.diagnostics && typeof storyboardPackage.diagnostics === "object" && !Array.isArray(storyboardPackage.diagnostics) ? storyboardPackage.diagnostics : {});
+  const stageStatuses = storyboardPackage?.stage_statuses && typeof storyboardPackage.stage_statuses === "object" && !Array.isArray(storyboardPackage.stage_statuses)
+    ? storyboardPackage.stage_statuses
+    : {};
+  return {
+    ...(Object.prototype.hasOwnProperty.call(response, "ok") ? { ok: response.ok } : {}),
+    ...(Object.prototype.hasOwnProperty.call(response, "pipeline") ? { pipeline: response.pipeline } : {}),
+    ...(Object.prototype.hasOwnProperty.call(response, "requestedStage") ? { requestedStage: response.requestedStage } : {}),
+    ...(Array.isArray(response?.executedStages) ? { executedStages: response.executedStages } : {}),
+    updatedAt: new Date().toISOString(),
+    hasStoryboardPackage: !!(response?.storyboardPackage && typeof response.storyboardPackage === "object" && !Array.isArray(response.storyboardPackage)),
+    hasFinalStoryboard: !!(storyboardPackage?.final_storyboard && typeof storyboardPackage.final_storyboard === "object" && !Array.isArray(storyboardPackage.final_storyboard)),
+    stageStatuses,
+    diagnosticsKeys: Object.keys(diagnostics || {}),
+    diagnosticsWarningsCount: Array.isArray(diagnostics?.warnings) ? diagnostics.warnings.length : 0,
+    diagnosticsErrorsCount: Array.isArray(diagnostics?.errors) ? diagnostics.errors.length : 0,
+  };
+}
+
+function stripRawScenarioPayload(outputs) {
+  if (!outputs || typeof outputs !== "object" || Array.isArray(outputs)) return {};
+  const nextOutputs = { ...outputs };
+  if (Object.prototype.hasOwnProperty.call(nextOutputs, "raw")) delete nextOutputs.raw;
+  return nextOutputs;
 }
 
 function stripScenarioGeneratedAssets(scene = {}) {
@@ -6398,6 +6431,7 @@ function serializeNodesForStorage(nodes) {
       serialNode.data.storyboardOut = serialNode.data.scenarioPackage;
       delete serialNode.data.storyboardPackage;
       delete serialNode.data.rawScenarioResponse;
+      delete serialNode.data.rawScenarioResponseSummary;
     }
     if (nodeType === "scenarioPipelineDebug") {
       serialNode.data.storyboardOut = buildLeanRuntimeStoryboardContract(serialNode?.data?.storyboardOut || serialNode?.data?.storyboardPackage || {}, {
@@ -6411,6 +6445,7 @@ function serializeNodesForStorage(nodes) {
         && !Array.isArray(serialNode.data.storyboardPackage)
       ) ? serialNode.data.storyboardPackage : {};
       delete serialNode.data.rawScenarioResponse;
+      delete serialNode.data.rawScenarioResponseSummary;
       delete serialNode.data.normalizedStageOutputs;
     }
     if (nodeType === "comfyNarrative") {
@@ -6432,6 +6467,8 @@ function serializeNodesForStorage(nodes) {
         serialNode.data.pendingOutputs.runtimeStoryboard = pendingRuntime;
         serialNode.data.pendingOutputs.scenarioPackage = pendingRuntime;
       }
+      delete serialNode.data.pendingRawResponse;
+      delete serialNode.data.pendingRawResponseSummary;
     }
 
     acc.push(serialNode);
@@ -8748,7 +8785,7 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
       const nextData = { ...(nodeItem?.data || {}) };
       if (fullClear) {
         nextData.pendingOutputs = null;
-        nextData.pendingRawResponse = null;
+        nextData.pendingRawResponseSummary = null;
         nextData.pendingStoryboardOut = null;
         nextData.pendingDirectorOutput = null;
         nextData.pendingGeneratedAt = "";
@@ -8780,7 +8817,7 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
           }
         }
         nextData.pendingOutputs = pendingOutputs;
-        nextData.pendingRawResponse = null;
+        nextData.pendingRawResponseSummary = null;
         nextData.pendingStoryboardOut = null;
         nextData.pendingDirectorOutput = null;
         nextData.pendingGeneratedAt = "";
@@ -15851,7 +15888,7 @@ onClipSec: (nodeId, value) => {
             : isLegacyNarrativeSource
               ? (sourceNode?.data?.pendingOutputs?.directorOutput || sourceNode?.data?.outputs?.directorOutput || null)
               : null;
-          const rawScenarioResponse = isLegacyNarrativeSource ? (sourceNode?.data?.pendingRawResponse || null) : null;
+          const rawScenarioResponseSummary = isLegacyNarrativeSource ? (sourceNode?.data?.pendingRawResponseSummary || null) : null;
           const sourceScenarioRevision = isDirectPipelineSource
             ? String(sourceNode?.data?.scenarioRevision || "")
             : isLegacyNarrativeSource
@@ -16439,7 +16476,7 @@ onClipSec: (nodeId, value) => {
               scenarioPackage: leanRuntimeStoryboard,
               debugStoryboardPackage: normalizedPackage,
               sceneContractSource: String(normalizedPackage?.sceneContractSource || "").trim(),
-              rawScenarioResponse,
+              rawScenarioResponseSummary,
               storyboardOut: leanRuntimeStoryboard,
               directorOutput,
               storyboardPackage: (
@@ -17102,8 +17139,10 @@ onClipSec: (nodeId, value) => {
                   const nextStoryboardPackage = response?.storyboardPackage && typeof response.storyboardPackage === "object"
                     ? response.storyboardPackage
                     : (nodeItem?.data?.storyboardPackage || {});
-                  const nextDirectorOutput = normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object"
-                    ? normalizedOutputs.directorOutput
+                  const compactResponseSummary = buildScenarioResponseSummary(response);
+                  const compactNormalizedOutputs = stripRawScenarioPayload(normalizedOutputs);
+                  const nextDirectorOutput = compactNormalizedOutputs?.directorOutput && typeof compactNormalizedOutputs.directorOutput === "object"
+                    ? compactNormalizedOutputs.directorOutput
                     : (nodeItem?.data?.directorOutput || {});
                   const hasNormalizedStoryboardOut = !!(
                     normalizedOutputs?.storyboardOut
@@ -17169,8 +17208,8 @@ onClipSec: (nodeId, value) => {
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                       diagnostics: nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object" ? nextStoryboardPackage.diagnostics : {},
                       stageStatuses: nextStoryboardPackage?.stage_statuses && typeof nextStoryboardPackage.stage_statuses === "object" ? nextStoryboardPackage.stage_statuses : {},
-                      rawScenarioResponse: response && typeof response === "object" ? response : null,
-                      normalizedStageOutputs: normalizedOutputs,
+                      rawScenarioResponseSummary: compactResponseSummary,
+                      normalizedStageOutputs: compactNormalizedOutputs,
                     },
                   };
                 }).map((nodeItem) => {
@@ -17180,12 +17219,14 @@ onClipSec: (nodeId, value) => {
                     : {};
                   const generatedAt = new Date().toISOString();
                   const nextRevision = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                  const compactResponseSummary = buildScenarioResponseSummary(response);
+                  const compactNormalizedOutputs = stripRawScenarioPayload(normalizedOutputs);
                   const normalizedPending = {
-                    ...(normalizedOutputs && typeof normalizedOutputs === "object" ? normalizedOutputs : {}),
+                    ...(compactNormalizedOutputs && typeof compactNormalizedOutputs === "object" ? compactNormalizedOutputs : {}),
                     storyboardOut: runtimeStoryboard,
                     runtimeStoryboard,
                     directorOutput: {
-                      ...(normalizedOutputs?.directorOutput && typeof normalizedOutputs.directorOutput === "object" ? normalizedOutputs.directorOutput : {}),
+                      ...(compactNormalizedOutputs?.directorOutput && typeof compactNormalizedOutputs.directorOutput === "object" ? compactNormalizedOutputs.directorOutput : {}),
                       pipeline: "scenario_stage_v1",
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
@@ -17197,7 +17238,7 @@ onClipSec: (nodeId, value) => {
                     data: {
                       ...nodeItem.data,
                       pendingOutputs: normalizedPending,
-                      pendingRawResponse: response && typeof response === "object" ? response : null,
+                      pendingRawResponseSummary: compactResponseSummary,
                       pendingStoryboardOut: normalizedPending.storyboardOut,
                       pendingDirectorOutput: normalizedPending.directorOutput,
                       pendingGeneratedAt: generatedAt,
@@ -17354,7 +17395,7 @@ onClipSec: (nodeId, value) => {
                   directorOutput: null,
                 },
                 pendingOutputs: null,
-                pendingRawResponse: null,
+                pendingRawResponseSummary: null,
                 pendingStoryboardOut: null,
                 pendingDirectorOutput: null,
                 pendingGeneratedAt: "",
@@ -17515,9 +17556,9 @@ onClipSec: (nodeId, value) => {
                         storyboardOut: null,
                         directorOutput: null,
                         scenarioPackage: null,
-                        rawScenarioResponse: null,
+                        rawScenarioResponseSummary: null,
                         pendingOutputs: null,
-                        pendingRawResponse: null,
+                        pendingRawResponseSummary: null,
                         pendingStoryboardOut: null,
                         pendingDirectorOutput: null,
                         pendingGeneratedAt: "",
@@ -17733,6 +17774,7 @@ onClipSec: (nodeId, value) => {
                     throw new Error('Scenario Director backend returned an incomplete contract.');
                   }
                   const nextRevision = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                  const compactNormalizedOutputs = stripRawScenarioPayload(normalizedOutputs);
                   setNodes((prev) => {
                     const nextNodes = prev.map((x) => {
                       if (x.id !== nodeId) return x;
@@ -17744,15 +17786,15 @@ onClipSec: (nodeId, value) => {
                           isGenerating: false,
                           activeResultTab: 'history',
                           pendingOutputs: {
-                            ...(normalizedOutputs && typeof normalizedOutputs === "object" ? normalizedOutputs : {}),
+                            ...(compactNormalizedOutputs && typeof compactNormalizedOutputs === "object" ? compactNormalizedOutputs : {}),
                             storyboardOut: runtimeStoryboard,
                             runtimeStoryboard,
                             scenarioPackage: runtimeStoryboard,
-                            debugStoryboardPackage: normalizedOutputs?.debugStoryboardPackage || response?.storyboardPackage || null,
+                            debugStoryboardPackage: compactNormalizedOutputs?.debugStoryboardPackage || response?.storyboardPackage || null,
                           },
-                          pendingRawResponse: response && typeof response === "object" ? response : null,
+                          pendingRawResponseSummary: buildScenarioResponseSummary(response),
                           pendingStoryboardOut: runtimeStoryboard,
-                          pendingDirectorOutput: normalizedOutputs?.directorOutput || null,
+                          pendingDirectorOutput: compactNormalizedOutputs?.directorOutput || null,
                           pendingGeneratedAt: new Date().toISOString(),
                           pendingScenarioRevision: nextRevision,
                         },
