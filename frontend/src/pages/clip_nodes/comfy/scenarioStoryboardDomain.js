@@ -1583,7 +1583,11 @@ function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
   };
 }
 
-export function normalizeScenarioStoryboardPackage({ storyboardOut = null, directorOutput = null } = {}) {
+export function normalizeScenarioStoryboardPackage({
+  storyboardOut = null,
+  directorOutput = null,
+  allowDirectorSceneFallback = true,
+} = {}) {
   const storyboardInputKeys = storyboardOut && typeof storyboardOut === "object" ? Object.keys(storyboardOut) : [];
   const inputScenesFromStoryboardOut = Array.isArray(storyboardOut?.scenes)
     ? storyboardOut.scenes
@@ -1594,13 +1598,14 @@ export function normalizeScenarioStoryboardPackage({ storyboardOut = null, direc
   const inputScenesFromDirectorOutput = Array.isArray(directorOutput?.scenes)
     ? directorOutput.scenes
     : [];
-  const inputSceneCandidates = inputScenesFromDirectorOutput.length
+  const shouldUseDirectorSceneFallback = allowDirectorSceneFallback !== false;
+  const inputSceneCandidates = (shouldUseDirectorSceneFallback && inputScenesFromDirectorOutput.length)
     ? inputScenesFromDirectorOutput
     : inputScenesFromFinalStoryboard.length
       ? inputScenesFromFinalStoryboard
       : inputScenesFromStoryboardOut;
   const inputSceneCount = inputSceneCandidates.length;
-  const canonicalSceneSource = inputScenesFromDirectorOutput.length
+  const canonicalSceneSource = (shouldUseDirectorSceneFallback && inputScenesFromDirectorOutput.length)
     ? "directorOutput.scenes"
     : inputScenesFromFinalStoryboard.length
       ? "storyboardOut.final_storyboard.scenes"
