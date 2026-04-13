@@ -2375,7 +2375,40 @@ def _words_from_text(text: str) -> list[str]:
     return [token for token in re.findall(r"[^\s]+", str(text or "").strip()) if token]
 
 
+def _is_instrumental_tail_marker_text(text: Any) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    normalized = re.sub(r"[\[\]\(\)\{\}_\-:;,.!?]", " ", raw.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return False
+    marker_tokens = set(normalized.split())
+    instrumental_tokens = {
+        "instrumental",
+        "interlude",
+        "outro",
+        "tail",
+        "residual",
+        "residue",
+        "ending",
+        "fade",
+        "music",
+        "nonlexical",
+        "non",
+        "lexical",
+        "vocal",
+        "vocals",
+        "no",
+    }
+    if not marker_tokens.issubset(instrumental_tokens):
+        return False
+    return bool(marker_tokens.intersection({"instrumental", "interlude", "outro", "tail", "residual", "residue", "fade"}))
+
+
 def _estimate_word_count_from_text(text: Any) -> int:
+    if _is_instrumental_tail_marker_text(text):
+        return 0
     return len(_words_from_text(str(text or "")))
 
 
@@ -2985,6 +3018,30 @@ def _build_scene_slots(
     slots, repair_stats = _repair_scene_slot_boundaries(raw_slots, duration_sec=duration_sec, word_rows=word_rows)
     if not slots:
         return [], {"audio_map_scene_slots_repair_stats": repair_stats}
+    if len(slots) >= 2:
+        last = slots[-1]
+        prev = slots[-2]
+        last_t0 = float(last.get("t0") or 0.0)
+        last_t1 = float(last.get("t1") or last_t0)
+        last_span = max(0.0, last_t1 - last_t0)
+        last_phrase_rows = [phrase_index[item] for item in _safe_list(last.get("phrase_ids")) if item in phrase_index]
+        last_texts = [str(phrase.get("text") or "").strip() for phrase in last_phrase_rows if str(phrase.get("text") or "").strip()]
+        marker_text_only = bool(last_texts) and all(_is_instrumental_tail_marker_text(text) for text in last_texts)
+        tail_has_no_words = sum(_phrase_word_count(phrase) for phrase in last_phrase_rows) == 0
+        if 0.0 < last_span <= 1.2 and marker_text_only and tail_has_no_words:
+            prev_t0 = float(prev.get("t0") or 0.0)
+            prev["t1"] = round(last_t1, 3)
+            prev["duration_sec"] = round(max(0.0, last_t1 - prev_t0), 3)
+            prev["phrase_ids"] = list(
+                dict.fromkeys(
+                    [str(item) for item in _safe_list(prev.get("phrase_ids")) if str(item)]
+                    + [str(item) for item in _safe_list(last.get("phrase_ids")) if str(item)]
+                )
+            )
+            slots.pop()
+            repair_stats["orphan_tail_merged"] = int(repair_stats.get("orphan_tail_merged", 0)) + 1
+            for slot_idx, row in enumerate(slots, start=1):
+                row["id"] = f"slot_{slot_idx}"
 
     beats = _float_points(analysis.get("beats"), duration_sec)
     energy_peaks = _float_points(analysis.get("energyPeaks"), duration_sec)
@@ -3031,6 +3088,9 @@ def _build_scene_slots(
             if text:
                 primary_phrase_text = text[:280]
                 break
+        is_instrumental_tail_slot = bool(slot_phrases) and all(
+            _is_instrumental_tail_marker_text(str(phrase.get("text") or "")) for phrase in slot_phrases
+        )
 
         vocal_overlap = 0.0
         for vp in vocal_phrases:
@@ -3042,7 +3102,10 @@ def _build_scene_slots(
         else:
             phrase_coverage = max(0.0, min(1.0, sum(_slot_phrase_overlap(t0, t1, phrase) for phrase in slot_phrases) / span))
             has_phrase_text = bool(primary_phrase_text)
-            if transcript_available and (phrase_ids or has_phrase_text):
+            if is_instrumental_tail_slot:
+                fallback_vocal_ratio = 0.03 + 0.07 * phrase_coverage
+                vocal_ratio = round(max(0.0, min(0.12, fallback_vocal_ratio)), 4)
+            elif transcript_available and (phrase_ids or has_phrase_text):
                 fallback_vocal_ratio = 0.45 + 0.35 * phrase_coverage + 0.20 * min(1.0, words_per_sec / 3.2)
                 vocal_ratio = round(max(0.0, min(0.95, fallback_vocal_ratio)), 4)
             elif has_phrase_text:
