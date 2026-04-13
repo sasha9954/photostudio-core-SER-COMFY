@@ -332,7 +332,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "- Both anchors must remain stable across scenes; variation only inside same world/style family.\n"
         "- If no location ref is provided, infer one coherent realistic world anchor from note/story/story_core and keep all scenes inside that same country/city/environment logic.\n"
         "- If user text is absent, avoid over-literal geographic progression and keep continuity tight.\n"
-        "- Do not drift into alley->market->courtyard journey logic unless explicit textual directive demands geography progression.\n"
+        "- Do not drift into arbitrary location-chain journey logic unless explicit textual directive demands geography progression.\n"
         "- Prefer world continuity + energy/intimacy progression over invented travel mechanics.\n"
         "- If refs imply one heroine + one location + one prop, keep same-world continuity and avoid unnecessary travel invention.\n"
         "- Allow only natural local progression when explicitly grounded; no random cross-country or cross-style jumps.\n"
@@ -478,10 +478,10 @@ def _default_lighting_continuity(time_of_day_base: str) -> dict[str, Any]:
 
 def _infer_environment_family(story_summary: str, country_or_region: str) -> str:
     story = str(story_summary or "").lower()
-    if country_or_region == "Iran":
-        return "realistic contemporary Iranian urban life"
     if "urban" in story or "street" in story:
         return "grounded contemporary urban environment"
+    if country_or_region:
+        return f"grounded contemporary environment in {country_or_region}"
     return "grounded realistic world"
 
 
@@ -804,7 +804,7 @@ def _normalize_role_plan(
     if not continuity_notes:
         continuity_notes = [
             "Single hero continuity: character_1 remains the only narrative subject across all windows.",
-            "Prop continuity: white baseball cap remains worn as a stable identity anchor.",
+            "Prop continuity: keep the current continuity object/wearable identity stable when present.",
             "World continuity: one coherent realistic urban location anchor is preserved across scenes.",
             "Lighting/realism lock: grounded daylight progression; avoid neon/club/warehouse drift.",
         ]

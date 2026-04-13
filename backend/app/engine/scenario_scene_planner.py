@@ -70,7 +70,7 @@ SAFE_MOTION_CANON = (
 CAUTION_MOTION_CANON = (
     "hand to chest",
     "one hand opening outward",
-    "cap brim reveal without complex finger choreography",
+    "wearable silhouette reveal without complex finger choreography",
     "partial body turn with face readability preserved",
     "close prop hold with minimal motion",
     "slight posture reconfiguration",
@@ -372,7 +372,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "safe_motion_canon": list(SAFE_MOTION_CANON),
             "caution_motion_canon": list(CAUTION_MOTION_CANON),
             "forbidden_motion_canon": list(FORBIDDEN_MOTION_CANON),
-            "baseball_cap_policy": "cap is continuity/silhouette anchor; not default action driver",
+            "wearable_anchor_policy": "wearable continuity anchors are silhouette/look anchors; not default action drivers",
             "first_last_modes": sorted(FIRST_LAST_MODES),
         },
         "video_capability_canon": {
@@ -422,7 +422,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n"
         "CLIP MODE CORE PRINCIPLE: visual/emotional arc under music energy, NOT literal travel-story by default.\\n"
         "If user/director text does not explicitly demand travel plot, keep one coherent environment family and build progression through energy/intimacy/framing/pressure-release.\\n"
-        "Do not invent alley->market->courtyard city-route narratives from nowhere.\\n"
+        "Do not invent arbitrary location-chain city-route narratives from nowhere.\\n"
         "Soft anti-repetition policy: avoid 3+ same-family transit/walk scenes in a row; when transit repeats, switch to a fresh visual pressure/release function.\\n"
         "Encourage coherent world variety through spatial texture (compression/density/friction/partial release/vertical transition/open reveal/final settling) inside one grounded environment family.\\n"
         "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
@@ -436,8 +436,8 @@ def _build_prompt(context: dict[str, Any]) -> str:
         f"- i2v BLOCKED (must not normalize): {i2v_blocked}.\\n"
         "Never treat experimental as baseline and never select blocked patterns.\\n"
         "Camera-led transitions are generally more reliable than fine-motor body actions; prefer camera/framing evolution when both can express the beat.\\n"
-        "Baseball cap must stay continuity/silhouette/mood anchor, not default action driver.\\n"
-        "Do not use cap touching/brim finger choreography as generic fallback motion.\\n\\n"
+        "Wearable continuity anchors must stay continuity/silhouette/mood anchors, not default action drivers.\\n"
+        "Do not use wearable-touch finger choreography as generic fallback motion.\\n\\n"
         "WATCHABILITY ROLE (MANDATORY): viewer-facing clip function of the scene, not role name.\\n"
         "Each scene.watchability_role must be a short phrase that says why this scene matters to the viewer/clip arc.\\n"
         "Avoid weak labels (hero/main character/character_1/route names/raw scene_function duplicates).\\n\\n"

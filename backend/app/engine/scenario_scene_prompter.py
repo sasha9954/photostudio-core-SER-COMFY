@@ -26,7 +26,7 @@ _LIP_SYNC_NEGATIVE_PROMPT = (
 )
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
-    "camera drift, zoom spikes, chaotic reframing, body-axis jump, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift, finger choreography near face, cap brim finger adjustment"
+    "camera drift, zoom spikes, chaotic reframing, body-axis jump, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift, finger choreography near face, wearable-touch micro choreography"
 )
 
 _GLOBAL_PROMPT_RULES = [
@@ -52,7 +52,7 @@ _NEGATIVE_LEAK_TOKENS = (
     "bad quality",
     "deformed",
 )
-_STALE_WORLD_TOKENS = ("apartment", "cassette", "headscarf")
+_STALE_WORLD_TOKENS = ("apartment", "cassette", "stale wardrobe token")
 _EXPLICIT_NEGATIVE_MARKERS = (
     "[negative:",
     "(negative:",
@@ -965,8 +965,8 @@ def _row_looks_unrelated_to_current_package(row: dict[str, Any], fingerprint: di
 
 def _build_i2v_base_guardrail(*, role_label: str, world_anchor: str, lighting_anchor: str) -> str:
     return (
-        f"Exact first-frame identity anchor for {role_label}: same woman, same face, same cap, same scarf, same clothes. "
-        f"Keep the same alley and {lighting_anchor or 'warm late-afternoon light'} in the same realistic Iranian urban environment ({world_anchor}). "
+        f"Exact first-frame identity anchor for {role_label}: same primary subject identity, same face, same wardrobe family when locked. "
+        f"Keep the same world family ({world_anchor}) and lighting family ({lighting_anchor or 'current locked lighting family'}) when locked by current context. "
         "Preserve same background geometry and grounded documentary realism. "
         "No identity drift, no wardrobe change, no location change, no broken anatomy, no floating limbs, no leg warping, no face deformation, no camera shake, no slow-motion feel, no stylized action feel, no bullet-time effect."
     )
@@ -998,28 +998,28 @@ def _build_i2v_motion_family_prompt(scene_plan_row: dict[str, Any]) -> tuple[str
     }
     templates = {
         "push_in_follow": (
-            "Natural forward motion line. Smooth push-in from medium-full framing toward a controlled medium shot; physically natural motion with stable legs/feet, natural simple arm swing only, subtle scarf/hair response, no dramatic camera turn.",
-            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, aggressive zoom spikes, extreme close-up crash-in",
+            "Natural forward motion line. Smooth push-in from medium-full framing toward a controlled medium shot; physically natural motion with stable legs/feet, natural simple arm swing only, subtle fabric/hair response, no dramatic camera turn.",
+            "identity drift, different subject, different face, different clothes, different wearable anchors, different location family, different lighting family, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, aggressive zoom spikes, extreme close-up crash-in",
         ),
         "side_tracking_walk": (
-            "Forward walk continuation while camera tracks sideways with clearly visible but controlled parallax. Keep alley walls and scene geometry stable, physically coherent body travel, and no background collapse.",
-            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax",
+            "Forward walk continuation while camera tracks sideways with clearly visible but controlled parallax. Keep environment geometry stable, physically coherent body travel, and no background collapse.",
+            "identity drift, different subject, different face, different clothes, different wearable anchors, different location family, different lighting family, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax",
         ),
         "look_reveal_follow": (
-            "She keeps moving forward and shifts attention; slight head/upper-body turn without stopping. Camera follows attention via lateral move plus pan, opening a revealed traveling view with believable parallax and stable geometry.",
-            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax, head turn without camera follow",
+            "Subject keeps moving forward and shifts attention; slight head/upper-body turn without stopping. Camera follows attention via lateral move plus pan, opening a revealed traveling view with believable parallax and stable geometry.",
+            "identity drift, different subject, different face, different clothes, different wearable anchors, different location family, different lighting family, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, unstable parallax, no parallax, head turn without camera follow",
         ),
         "baseline_forward_walk": (
             "Restrained natural forward walk: one to two calm steps or short grounded walk continuation, mostly stable frontal/stable-follow camera, subtle fabric/hair response, safe realism.",
-            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn",
+            "identity drift, different subject, different face, different clothes, different wearable anchors, different location family, different lighting family, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn",
         ),
         "tension_head_turn": (
             "Slight slowdown with restrained side glance/cautious check, subtle shoulder tension, simple body motion, suspicious/alert feel, no large gestures.",
-            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn",
+            "identity drift, different subject, different face, different clothes, different wearable anchors, different location family, different lighting family, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn",
         ),
         "pull_back_release": (
-            "Camera slowly pulls back while she remains grounded in motion/stance; alley depth opens behind her with stable buildings, poles, cars, and pedestrians; restrained emotional tone for release/aftermath distance.",
-            "identity drift, different woman, different face, different clothes, different scarf, different cap, different street, different lighting, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, static background collapse, artificial zoom feel",
+            "Camera slowly pulls back while subject remains grounded in motion/stance; world depth opens behind with stable geometry and ambient life; restrained emotional tone for release/aftermath distance.",
+            "identity drift, different subject, different face, different clothes, different wearable anchors, different location family, different lighting family, broken anatomy, extra limbs, extra fingers, warped legs, twisted knees, foot sliding, floating body, face distortion, flicker, surreal motion, background morphing, unstable geometry, slow motion, bullet time, matrix effect, dramatic camera rotation, 90-degree camera turn, static background collapse, artificial zoom feel",
         ),
     }
     motion_prompt, negative_prompt = templates.get("baseline_forward_walk")
@@ -1050,8 +1050,8 @@ def _build_i2v_prompt_bundle(
     motion_prompt, _ = _build_i2v_motion_family_prompt(scene_plan_row)
     negative_prompt = _build_i2v_negative_prompt(scene_plan_row)
     photo_prompt = (
-        f"Exact anchor frame of {role_label} in the same alley, same warm late-afternoon light, same realistic Iranian urban environment; "
-        "same face/cap/scarf/clothes and stable geometry, grounded documentary realism."
+        f"Exact anchor frame of {role_label} in the same locked world family and same locked lighting family; "
+        "same face/wardrobe continuity anchors and stable geometry, grounded documentary realism."
     )
     positive_video_prompt = f"{guardrail} {motion_prompt}".strip()
     return {
@@ -1169,7 +1169,7 @@ def _build_fallback_scene_prompts(
 
     if high_motion_risk and route in {"i2v", "ia2v"}:
         simplified = (
-            f"Use one broad readable action only in {world_anchor}: controlled gaze/head/shoulder shift with minimal hand emphasis, no tiny finger sequencing near face, no cap-brim adjustment details, no multistep prop manipulation. "
+            f"Use one broad readable action only in {world_anchor}: controlled gaze/head/shoulder shift with minimal hand emphasis, no tiny finger sequencing near face, no wearable-adjustment micro details, no multistep prop manipulation. "
             "Prefer smooth camera settle/push/pull over micro hand actions."
         )
         video_prompt = simplified
@@ -1508,7 +1508,7 @@ def _normalize_scene_prompts(
                 positive_video_prompt = f"{positive_video_prompt.rstrip('. ')}.{simplify_suffix}".strip()
             else:
                 simplified_video = (
-                    "Single readable motion line only: controlled gaze/head/shoulder shift, minimal hand emphasis, no tiny finger choreography near face, no cap-brim adjustment detail, no multistep prop manipulation. "
+                    "Single readable motion line only: controlled gaze/head/shoulder shift, minimal hand emphasis, no tiny finger choreography near face, no wearable-adjustment micro detail, no multistep prop manipulation. "
                     "Prefer camera settle/push/pull with continuity-first behavior."
                 )
                 video_prompt = simplified_video
