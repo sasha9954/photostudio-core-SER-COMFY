@@ -840,7 +840,7 @@ def _extract_director_world_lock_summary(input_pkg: dict[str, Any], story_user_c
     if not user_text:
         return ""
     markers = []
-    for token in ("not club", "не клуб", "not neon", "не неон", "not warehouse", "не warehouse", "iran", "иран", "realistic"):
+    for token in ("not club", "не клуб", "not neon", "не неон", "not warehouse", "не warehouse", "realistic"):
         if token in user_text:
             markers.append(token)
     return ", ".join(markers[:8])
@@ -924,10 +924,10 @@ def _build_story_core_input_context(
 def _default_story_core_guidance() -> dict[str, Any]:
     return {
         "world_progression_hints": [
-            "single coherent iranian/middle eastern urban world; progression follows one boy carrying one compact stolen box while avoiding visibility, not travel montage",
-            "move through pressure gradient: exposed street -> pressured passage -> tighter squeeze-through -> brief concealment pocket -> threshold crossing -> temporary refuge",
-            "favor thresholds, courtyard pockets, side passages, and shadow transitions where the carried box changes posture/speed/balance/route choices",
-            "each next scene family should increase or release spatial pressure tied to carrying burden and risk of being seen",
+            "single coherent grounded world; world family and location specifics must come from current text/refs/props, not defaults",
+            "move through pressure gradient: exposure -> pressured passage -> tighter squeeze-through -> concealment pocket -> threshold crossing -> temporary refuge",
+            "favor thresholds and local transitions where continuity/carry objects can change posture/speed/balance/route choices",
+            "each next scene family should increase or release spatial pressure tied to current narrative burden and visibility risk",
         ],
         "viewer_contrast_rules": [
             "compression_vs_release",
@@ -950,27 +950,28 @@ def _default_story_core_guidance() -> dict[str, Any]:
             "threshold into quieter pocket without changing world family",
         ],
         "prop_guidance": {
-            "stolen_box_role": "continuity/conflict/risk anchor",
-            "must_keep_same_box_identity_across_clip": True,
-            "forbid_random_box_size_material_shape_changes": True,
-            "box_is_burden_not_symbolic_decoration": True,
-            "box_affects_posture_speed_balance_concealment_route_choice_body_tension": True,
-            "forbid_overused_hand_choreography_around_box": True,
+            "continuity_object_role": "continuity/conflict/risk anchor",
+            "carried_object_role": "burden/constraint anchor when present",
+            "must_keep_same_object_identity_across_clip": True,
+            "forbid_random_object_identity_changes": True,
+            "object_is_functional_not_symbolic_decoration_by_default": True,
+            "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present": True,
+            "forbid_overused_hand_choreography_around_object": True,
             "forbid_magic_or_metaphor_prop_behavior": True,
         },
         "narrative_pressure_rules": [
-            "character_1 (boy) remains the action spine: exposed vulnerability -> risk of being seen -> pressured evasion while carrying box -> temporary refuge",
-            "the stolen box increases vulnerability and slows adaptation in open public zones",
+            "primary narrative role remains the action spine unless current input explicitly reassigns it",
+            "continuity/carry object may increase vulnerability and slow adaptation in open public zones when present",
             "world should feel less safe in open exposure and more survivable in compressed/shadowed spaces",
             "final refuge must read as temporary shelter, not triumphant resolution",
-            "character_2 is emotional witness/performance layer only, not chase co-lead and not action driver",
+            "secondary performance role must not steal narrative spine unless current input explicitly asks for co-lead behavior",
             "do not collapse into repeated another street/another alley/another walk shot; repeated movement is allowed only when environment function changes",
         ],
         "world_richness_rules": [
             "grounded realism only; no spectacle-first escalation",
             "one coherent country/city/environment logic across clip",
             "restrained motion scale; avoid complex hand/cloth gimmicks",
-            "character_2 appears mainly at selected lipsync/performance peaks while staying embedded in the same realistic world",
+            "support performance roles may appear at selected peaks while staying embedded in the same realistic world family",
             "no concert/pop-video takeover, no club, no neon, no fantasy drift",
         ],
     }
@@ -989,31 +990,40 @@ def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
         "unexpected_realistic_beats": [str(item).strip() for item in _safe_list(row.get("unexpected_realistic_beats")) if str(item).strip()]
         or _safe_list(fallback.get("unexpected_realistic_beats")),
         "prop_guidance": {
-            "stolen_box_role": str(prop_guidance.get("stolen_box_role") or fallback_prop_guidance.get("stolen_box_role") or "").strip(),
-            "must_keep_same_box_identity_across_clip": bool(
-                prop_guidance.get("must_keep_same_box_identity_across_clip")
-                if "must_keep_same_box_identity_across_clip" in prop_guidance
-                else fallback_prop_guidance.get("must_keep_same_box_identity_across_clip")
+            "continuity_object_role": str(
+                prop_guidance.get("continuity_object_role")
+                or fallback_prop_guidance.get("continuity_object_role")
+                or ""
+            ).strip(),
+            "carried_object_role": str(
+                prop_guidance.get("carried_object_role")
+                or fallback_prop_guidance.get("carried_object_role")
+                or ""
+            ).strip(),
+            "must_keep_same_object_identity_across_clip": bool(
+                prop_guidance.get("must_keep_same_object_identity_across_clip")
+                if "must_keep_same_object_identity_across_clip" in prop_guidance
+                else fallback_prop_guidance.get("must_keep_same_object_identity_across_clip")
             ),
-            "forbid_random_box_size_material_shape_changes": bool(
-                prop_guidance.get("forbid_random_box_size_material_shape_changes")
-                if "forbid_random_box_size_material_shape_changes" in prop_guidance
-                else fallback_prop_guidance.get("forbid_random_box_size_material_shape_changes")
+            "forbid_random_object_identity_changes": bool(
+                prop_guidance.get("forbid_random_object_identity_changes")
+                if "forbid_random_object_identity_changes" in prop_guidance
+                else fallback_prop_guidance.get("forbid_random_object_identity_changes")
             ),
-            "box_is_burden_not_symbolic_decoration": bool(
-                prop_guidance.get("box_is_burden_not_symbolic_decoration")
-                if "box_is_burden_not_symbolic_decoration" in prop_guidance
-                else fallback_prop_guidance.get("box_is_burden_not_symbolic_decoration")
+            "object_is_functional_not_symbolic_decoration_by_default": bool(
+                prop_guidance.get("object_is_functional_not_symbolic_decoration_by_default")
+                if "object_is_functional_not_symbolic_decoration_by_default" in prop_guidance
+                else fallback_prop_guidance.get("object_is_functional_not_symbolic_decoration_by_default")
             ),
-            "box_affects_posture_speed_balance_concealment_route_choice_body_tension": bool(
-                prop_guidance.get("box_affects_posture_speed_balance_concealment_route_choice_body_tension")
-                if "box_affects_posture_speed_balance_concealment_route_choice_body_tension" in prop_guidance
-                else fallback_prop_guidance.get("box_affects_posture_speed_balance_concealment_route_choice_body_tension")
+            "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present": bool(
+                prop_guidance.get("carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present")
+                if "carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present" in prop_guidance
+                else fallback_prop_guidance.get("carried_object_affects_posture_speed_balance_concealment_route_choice_body_tension_if_present")
             ),
-            "forbid_overused_hand_choreography_around_box": bool(
-                prop_guidance.get("forbid_overused_hand_choreography_around_box")
-                if "forbid_overused_hand_choreography_around_box" in prop_guidance
-                else fallback_prop_guidance.get("forbid_overused_hand_choreography_around_box")
+            "forbid_overused_hand_choreography_around_object": bool(
+                prop_guidance.get("forbid_overused_hand_choreography_around_object")
+                if "forbid_overused_hand_choreography_around_object" in prop_guidance
+                else fallback_prop_guidance.get("forbid_overused_hand_choreography_around_object")
             ),
             "forbid_magic_or_metaphor_prop_behavior": bool(
                 prop_guidance.get("forbid_magic_or_metaphor_prop_behavior")
@@ -1088,12 +1098,12 @@ def _build_story_core_prompt(
         "Audio must be primary dramaturgic driver; lyrics are secondary optional signal.\n"
         f"Video model capability bounds (must obey): {capability_bounds_text}\n"
         "HARD CONTRACT: Director note/user concept world constraints are NON-NEGOTIABLE and override generic music-video tropes.\n"
-        "HARD CONTRACT: If note says no club/no neon/no warehouse and requests realistic Iranian urban environment, NEVER switch to neon/club/warehouse aesthetics.\n"
+        "HARD CONTRACT: If note says no club/no neon/no warehouse and requests realistic grounded environment, NEVER switch to neon/club/warehouse aesthetics.\n"
         "HARD CONTRACT: Audio affects rhythm/emotional arc/pacing only; audio cannot rewrite locked world constraints.\n"
         "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
         "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
-        "Narrative spine must stay with character_1; character_2 is a secondary lipsync/performance witness layer, not a chase/escape co-lead.\n"
-        "Character_2 performance peaks must remain grounded in the same realistic world and must not switch clip logic into concert/pop-video mode.\n"
+        "Narrative spine must stay with the designated primary narrative role; secondary performance roles must remain support unless current input explicitly sets co-lead behavior.\n"
+        "Performance peaks must remain grounded in the same realistic world family and must not switch clip logic into concert/pop-video mode unless explicitly requested.\n"
         "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, story_guidance.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
         "story_guidance must be JSON object with keys:\n"
