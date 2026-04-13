@@ -1470,7 +1470,7 @@ export function normalizeScenarioDirectorApiResponse(response = {}, state = {}) 
         }
         : compactDirectorSummary,
       diagnostics: diagnosticsSummary,
-      raw: response,
+      ...(debugMode ? { raw: response } : {}),
     };
   }
   const clipPipelineUsed = String(response?.pipeline || "").trim() === "clip_chunked_v1";
