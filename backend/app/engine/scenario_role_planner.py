@@ -119,6 +119,19 @@ def _build_ref_binding_inventory(refs_inventory: dict[str, Any]) -> list[dict[st
     return inventory[:16]
 
 
+def _is_world_bound_binding_row(row: dict[str, Any]) -> bool:
+    ref_role = str(row.get("refRole") or "").strip().lower()
+    owner = str(row.get("ownershipRoleMapped") or "").strip().lower()
+    binding = str(row.get("bindingType") or "").strip().lower()
+    if owner == "environment":
+        return True
+    if ref_role in {"world", "location", "props", "style"}:
+        return True
+    if ref_role in {"character_1", "character_2", "character_3"}:
+        return False
+    return binding == "environment"
+
+
 def _round3(value: Any) -> float:
     try:
         return round(float(value), 3)
@@ -764,8 +777,8 @@ def _normalize_role_plan(
         if str(item.get("bindingType") or "").strip().lower() in {"worn", "pocketed", "nearby"}
     }
     has_world_environment_binding = any(
-        str(item.get("ownershipRoleMapped") or "").strip().lower() == "environment"
-        or str(item.get("bindingType") or "").strip().lower() == "environment"
+        _is_world_bound_binding_row(_safe_dict(item))
+        and str(item.get("bindingType") or "").strip().lower() == "environment"
         for item in binding_rows
     )
     for row_raw in _safe_list(raw_plan.get("scene_roles")):
@@ -813,7 +826,7 @@ def _normalize_role_plan(
                 scene_presence_mode in {"solo_performance", "solo_observational", "transit", "private_release"}
                 or any(tag in scene_function_blob for tag in {"pressure", "evasion", "conceal", "escape", "release"})
             )
-            held_owner_scene = primary_role in held_owner_props and scene_presence_mode in {"solo_performance", "solo_observational", "transit"}
+            held_owner_scene = primary_role in held_owner_props and scene_presence_mode in {"solo_performance", "solo_observational"}
             if carried_owner_scene or held_owner_scene:
                 if "props" not in active_roles:
                     active_roles.append("props")

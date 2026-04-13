@@ -175,7 +175,7 @@ def _binding_prompt_clause(primary_role: str, ownership_binding_inventory: list[
         if role and owner and owner != role:
             continue
         if binding == "carried":
-            return " Keep the owner-bound carried object close to body; it subtly affects posture, pace, and route."
+            return " Keep the same owner-bound carried object close to body; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
         if binding == "held":
             return " Keep one hand-occupied held-object continuity, with broad readable handling only."
         if binding == "worn":
@@ -1421,10 +1421,16 @@ def _normalize_scene_prompts(
             negative_video_prompt = negative_video_prompt or str(base.get("negative_prompt") or "").strip() or _GLOBAL_NEGATIVE_PROMPT
             negative_prompt = negative_video_prompt
         if carried_active_scene and "close to body" not in video_prompt.lower():
-            video_prompt = f"{video_prompt} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
+            video_prompt = (
+                f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
+                "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
+            ).strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
         if carried_active_scene and "close to body" not in positive_video_prompt.lower():
-            positive_video_prompt = f"{(positive_video_prompt or video_prompt)} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
+            positive_video_prompt = (
+                f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
+                "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
+            ).strip()
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         if video_sanitized:
             positive_negative_leak_stripped_count += 1
@@ -1442,7 +1448,7 @@ def _normalize_scene_prompts(
                 "shot_intent": str(prompt_notes.get("shot_intent") or fallback_row["prompt_notes"].get("shot_intent") or ""),
                 "continuity_anchor": str(
                     prompt_notes.get("continuity_anchor") or fallback_row["prompt_notes"].get("continuity_anchor") or ""
-                ) + ("; owner-bound carried continuity stays active" if carried_active_scene else ""),
+                ) + ("; same owner-bound carried object stays close to body through transit/evasion/release (not a replaceable random prop)" if carried_active_scene else ""),
                 "world_anchor": str(prompt_notes.get("world_anchor") or fallback_row["prompt_notes"].get("world_anchor") or ""),
                 "identity_anchor": str(prompt_notes.get("identity_anchor") or fallback_row["prompt_notes"].get("identity_anchor") or ""),
                 "lighting_anchor": str(prompt_notes.get("lighting_anchor") or fallback_row["prompt_notes"].get("lighting_anchor") or ""),
@@ -1577,10 +1583,16 @@ def _normalize_scene_prompts(
             i2v_template_rebuilt_count += 1
             i2v_template_override_applied = True
         if carried_active_scene and "close to body" not in video_prompt.lower():
-            video_prompt = f"{video_prompt} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
+            video_prompt = (
+                f"{video_prompt} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
+                "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
+            ).strip()
         video_prompt, video_sanitized = _sanitize_positive_prompt(video_prompt, negative_prompt)
         if carried_active_scene and "close to body" not in positive_video_prompt.lower():
-            positive_video_prompt = f"{(positive_video_prompt or video_prompt)} Keep the owner-bound carried object close to body; it affects posture, pace, and route/concealment choices.".strip()
+            positive_video_prompt = (
+                f"{(positive_video_prompt or video_prompt)} Keep the same owner-bound carried object close to body across transit/evasion/release beats, "
+                "even when it is not the frame center; it affects posture, pace, concealment, and route, and is not a replaceable random prop."
+            ).strip()
         positive_video_prompt, positive_sanitized = _sanitize_positive_prompt(positive_video_prompt or video_prompt, negative_prompt)
         photo_prompt, photo_sanitized = _sanitize_positive_prompt(photo_prompt, negative_prompt)
         if video_sanitized:

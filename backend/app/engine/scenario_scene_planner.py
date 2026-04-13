@@ -220,6 +220,19 @@ def _build_ref_binding_inventory(refs_inventory: dict[str, Any]) -> list[dict[st
     return out[:16]
 
 
+def _is_world_bound_binding_row(row: dict[str, Any]) -> bool:
+    ref_id = str(row.get("ref_id") or "").strip().lower()
+    owner = str(row.get("ownershipRoleMapped") or "").strip().lower()
+    binding = str(row.get("bindingType") or "").strip().lower()
+    if owner == "environment":
+        return True
+    if ref_id in {"ref_world", "ref_location", "ref_props", "ref_style"}:
+        return True
+    if ref_id in {"ref_character_1", "ref_character_2", "ref_character_3"}:
+        return False
+    return binding == "environment"
+
+
 def _resolve_active_video_model_id(package: dict[str, Any]) -> str:
     input_pkg = _safe_dict(package.get("input"))
     for key in ("video_model", "video_model_id", "model_id"):
@@ -1053,7 +1066,11 @@ def _normalize_scene_plan(
         for item in binding_rows
         if str(item.get("bindingType") or "").strip().lower() == "worn"
     }
-    has_environment_binding = any(str(item.get("bindingType") or "").strip().lower() == "environment" for item in binding_rows)
+    has_environment_binding = any(
+        _is_world_bound_binding_row(_safe_dict(item))
+        and str(item.get("bindingType") or "").strip().lower() == "environment"
+        for item in binding_rows
+    )
 
     ordered_fallback_rows = [
         _safe_dict(row_raw)
@@ -1160,14 +1177,13 @@ def _normalize_scene_plan(
             if scene_row["visual_event_type"] in {"environment", "face"}:
                 scene_row["visual_event_type"] = "character_action"
             if scene_row["motion_intent"] == "watchable realistic movement":
-                scene_row["motion_intent"] = "owner-bound carried/held object affects posture, pace, and route choices"
+                scene_row["motion_intent"] = "owner-bound carried object stays close to body and affects posture, pace, route, and concealment choices"
             if _is_weak_watchability_role(watchability_role_raw, route=route, scene_function=scene_function):
-                scene_row["watchability_role"] = "owner-bound continuity pressure with active object control"
-            if scene_row.get("prop_activation_mode") == "not_emphasized":
-                scene_row["prop_activation_mode"] = "visible_anchor"
+                scene_row["watchability_role"] = "owner-bound carried continuity anchor driving readable motion semantics"
+            scene_row["prop_activation_mode"] = "visible_anchor"
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in held_owner_roles:
             if scene_row["motion_intent"] == "watchable realistic movement":
-                scene_row["motion_intent"] = "hand-occupied continuity with controlled readable movement"
+                scene_row["motion_intent"] = "handling-driven held-object continuity with controlled readable movement"
             if scene_row.get("prop_activation_mode") == "not_emphasized":
                 scene_row["prop_activation_mode"] = "anchor_worn"
         elif scene_row["primary_role"] and scene_row["primary_role"].lower() in worn_owner_roles and scene_row["motion_intent"] == "watchable realistic movement":
