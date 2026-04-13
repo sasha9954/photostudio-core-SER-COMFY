@@ -2904,7 +2904,43 @@ def _build_scene_slots(
     if not phrase_units:
         return [], {"audio_map_scene_slots_repair_stats": {}}
     phrase_index = {str(item.get("id") or ""): item for item in phrase_units}
+    ordered_phrases = sorted(phrase_units, key=lambda item: (_to_float(item.get("t0"), 0.0), _to_float(item.get("t1"), 0.0)))
     seed_rows = [item for item in _safe_list(audio_map.get("scene_candidate_windows")) if isinstance(item, dict)] or phrase_units
+
+    def _slot_phrase_overlap(slot_t0: float, slot_t1: float, phrase: dict[str, Any]) -> float:
+        phrase_t0 = _to_float(phrase.get("t0"), 0.0)
+        phrase_t1 = _to_float(phrase.get("t1"), phrase_t0)
+        return max(0.0, min(slot_t1, phrase_t1) - max(slot_t0, phrase_t0))
+
+    def _intersected_phrase_rows(slot_t0: float, slot_t1: float) -> list[dict[str, Any]]:
+        slot_span = max(0.001, slot_t1 - slot_t0)
+        intersected: list[dict[str, Any]] = []
+        for phrase in ordered_phrases:
+            phrase_t0 = _to_float(phrase.get("t0"), 0.0)
+            phrase_t1 = _to_float(phrase.get("t1"), phrase_t0)
+            phrase_span = max(0.001, phrase_t1 - phrase_t0)
+            overlap = _slot_phrase_overlap(slot_t0, slot_t1, phrase)
+            if overlap <= 0.0:
+                continue
+            if overlap >= 0.1 or overlap / slot_span >= 0.18 or overlap / phrase_span >= 0.18:
+                intersected.append(phrase)
+        return intersected
+
+    def _nearest_phrase_row(slot_t0: float, slot_t1: float) -> dict[str, Any] | None:
+        if not ordered_phrases:
+            return None
+        center = (slot_t0 + slot_t1) / 2.0
+        nearest: dict[str, Any] | None = None
+        nearest_dist = float("inf")
+        for phrase in ordered_phrases:
+            phrase_t0 = _to_float(phrase.get("t0"), 0.0)
+            phrase_t1 = _to_float(phrase.get("t1"), phrase_t0)
+            phrase_center = (phrase_t0 + phrase_t1) / 2.0
+            dist = abs(phrase_center - center)
+            if dist < nearest_dist:
+                nearest_dist = dist
+                nearest = phrase
+        return nearest
 
     raw_slots: list[dict[str, Any]] = []
     for seed in seed_rows:
@@ -2952,10 +2988,36 @@ def _build_scene_slots(
         t0 = float(slot.get("t0") or 0.0)
         t1 = float(slot.get("t1") or t0)
         span = max(0.001, t1 - t0)
-        phrase_ids = [str(item) for item in _safe_list(slot.get("phrase_ids")) if str(item)]
-        slot_phrases = [phrase_index[item] for item in phrase_ids if item in phrase_index]
+        existing_ids = [str(item) for item in _safe_list(slot.get("phrase_ids")) if str(item)]
+        slot_phrases_by_id = [phrase_index[item] for item in existing_ids if item in phrase_index]
+        slot_phrase_rows = slot_phrases_by_id + _intersected_phrase_rows(t0, t1)
+        if not slot_phrase_rows:
+            nearest_phrase = _nearest_phrase_row(t0, t1)
+            if nearest_phrase is not None:
+                slot_phrase_rows = [nearest_phrase]
+
+        deduped_phrases: list[dict[str, Any]] = []
+        seen_phrase_ids: set[str] = set()
+        for phrase in sorted(
+            slot_phrase_rows,
+            key=lambda item: (_to_float(item.get("t0"), 0.0), _to_float(item.get("t1"), 0.0), str(item.get("id") or "")),
+        ):
+            phrase_id = str(phrase.get("id") or "")
+            if not phrase_id or phrase_id in seen_phrase_ids:
+                continue
+            deduped_phrases.append(phrase)
+            seen_phrase_ids.add(phrase_id)
+
+        slot_phrases = deduped_phrases
+        phrase_ids = [str(item.get("id") or "") for item in slot_phrases if str(item.get("id") or "")]
         word_count = sum(max(0, int(_to_float(phrase.get("word_count"), 0.0))) for phrase in slot_phrases)
         words_per_sec = word_count / span if span > 0 else 0.0
+        primary_phrase_text = ""
+        for phrase in slot_phrases:
+            text = str(phrase.get("text") or "").strip()
+            if text:
+                primary_phrase_text = text[:280]
+                break
 
         vocal_overlap = 0.0
         for vp in vocal_phrases:
@@ -3020,7 +3082,10 @@ def _build_scene_slots(
             "dialogue_candidate": bool(vocal_ratio >= 0.55 and rhythmic_intensity <= 0.45),
             "merge_candidate_priority": merge_priority,
         }
-        slot["primary_phrase_text"] = str(slot.get("primary_phrase_text") or "")
+        slot["phrase_ids"] = phrase_ids
+        slot["phrase_count"] = len(slot_phrases)
+        slot["word_count"] = word_count
+        slot["primary_phrase_text"] = primary_phrase_text
 
     diagnostics_patch = {
         "audio_map_scene_slots_repair_stats": repair_stats,
