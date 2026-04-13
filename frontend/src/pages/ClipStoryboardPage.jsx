@@ -17318,6 +17318,7 @@ onClipSec: (nodeId, value) => {
                   const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
                     storyboardOut: effectiveStoryboardOut,
                     directorOutput: nextDirectorOutput || {},
+                    allowDirectorSceneFallback: false,
                   });
                   const storedStoryboardOutSceneCount = Array.isArray(normalizedStoryboardOut?.scenes)
                     ? normalizedStoryboardOut.scenes.length
