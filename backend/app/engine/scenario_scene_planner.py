@@ -345,7 +345,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "identity_lock": _safe_dict(story_core.get("identity_lock")),
             "world_lock": _safe_dict(story_core.get("world_lock")),
             "style_lock": _safe_dict(story_core.get("style_lock")),
-            "scenes": _safe_list(story_core.get("scenes")),
+            "story_guidance": _safe_dict(story_core.get("story_guidance")),
         },
         "audio_map": {
             "sections": _safe_list(audio_map.get("sections")),
@@ -428,7 +428,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Add visual progression layer: repetitive phrases must not produce visually repetitive scenes.\\n"
         "Progress through shot scale, camera intimacy, performance openness, and focal event type.\\n"
         "Add motion/prop complexity risk tags for each scene for downstream prompt simplification and strategy redirection.\\n\\n"
-        "When story_core.scenes exists, use its visual_intent, scene_function_hint, continuity_requirement, and allowed_variation as planning hints.\\n"
+        "Use story_core.story_guidance as story-level planning grammar (not as scene rows): world progression, viewer contrast rules, realistic allowable beats, prop guidance, and anti-repetition pressure rules.\\n"
         "VIDEO CAPABILITY CANON (from model profile, use as source of truth):\\n"
         f"- MODEL: {str(canon.get('model_id') or DEFAULT_VIDEO_MODEL_ID)}; VERSION: {str(canon.get('capability_rules_source_version') or '')}.\\n"
         f"- i2v VERIFIED_SAFE (default-on): {i2v_safe}.\\n"

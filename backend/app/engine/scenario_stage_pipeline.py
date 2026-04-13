@@ -557,7 +557,7 @@ def _default_story_core(input_pkg: dict[str, Any]) -> dict[str, Any]:
         "identity_lock": {"rule": "Keep hero identity stable across all scenes."},
         "world_lock": {"rule": "Keep world/location logic coherent without random jumps."},
         "style_lock": {"rule": "Keep one cinematic style language across the whole track."},
-        "scenes": [],
+        "story_guidance": _default_story_core_guidance(),
     }
 
 
@@ -921,71 +921,97 @@ def _build_story_core_input_context(
     }
 
 
-def _default_story_core_scenes(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
-    scenes: list[dict[str, Any]] = []
-    for idx, row_raw in enumerate(_safe_list(audio_map.get("scene_candidate_windows")), start=1):
-        row = _safe_dict(row_raw)
-        t0 = _to_float(row.get("t0"), 0.0)
-        t1 = _to_float(row.get("t1"), t0)
-        if t1 <= t0:
-            continue
-        scene_function = str(row.get("scene_function") or "build").strip() or "build"
-        scenes.append(
-            {
-                "scene_id": str(row.get("id") or f"sc_{idx}").strip() or f"sc_{idx}",
-                "t0": round(t0, 3),
-                "t1": round(t1, 3),
-                "scene_goal": "Advance audio-driven narrative beat with clear visible action.",
-                "emotional_intent": str(row.get("energy") or "grounded").strip(),
-                "visual_intent": "Readable subject and world continuity with distinct framing progression.",
-                "action": "Simple, observable action aligned to rhythm and beat.",
-                "continuity_requirement": "Keep identity/world/style continuity from adjacent scenes.",
-                "role_hints": ["character_1"],
-                "prop_role_in_scene": "continuity",
-                "must_remain_same": ["face_identity", "world_family", "core_silhouette"],
-                "allowed_variation": ["camera_distance", "camera_angle", "micro_blocking"],
-                "scene_function_hint": scene_function,
-            }
-        )
-    return scenes
+def _default_story_core_guidance() -> dict[str, Any]:
+    return {
+        "world_progression_hints": [
+            "single coherent world; progression via changing urban pressure and release, not travel montage",
+            "allow grounded variation: narrow dusty street, shopfront passage, sunlit crossing, shadow threshold, side passage, stairs/slope, quieter courtyard pocket, elevated edge reveal",
+            "each next scene family should add new pressure, relief, or textural value",
+        ],
+        "viewer_contrast_rules": [
+            "compression_vs_release",
+            "public_exposure_vs_momentary_concealment",
+            "harsh_sunlight_vs_shadow_pocket",
+            "rigid_geometry_vs_soft_fabric_motion",
+            "forward_motion_vs_held_stillness",
+            "wider_geography_vs_intimate_facial_tension",
+            "crowd_pressure_vs_brief_solitude",
+            "threshold_crossing_vs_open_reveal",
+        ],
+        "unexpected_realistic_beats": [
+            "brief reflection glimpse in glass or metal",
+            "passing scooter, bicycle, or pedestrian layer without interaction",
+            "fabric awning movement or dust in sunlight",
+            "sharp transition from shadow to harsh sun",
+            "brief environmental obstruction or squeeze-through path",
+            "momentary slow-down to assess surroundings",
+            "distant movement in background plane",
+            "threshold into quieter pocket without changing world family",
+        ],
+        "prop_guidance": {
+            "baseball_cap_role": "continuity/silhouette/emotional shield anchor",
+            "baseball_cap_not_default_action_driver": True,
+            "forbid_generic_brim_touch_fallback": True,
+            "forbid_generic_finger_choreography_fallback": True,
+            "expression_priority": [
+                "gaze",
+                "pace_change",
+                "body_tension",
+                "framing",
+                "spatial_relation",
+                "environmental_pressure",
+            ],
+        },
+        "narrative_pressure_rules": [
+            "do not collapse into repeated another street/another alley/another walk shot",
+            "repeated movement is allowed only when environment function changes",
+            "world progression must feel like changing urban conditions, not recycled backdrop",
+        ],
+        "world_richness_rules": [
+            "grounded realism only; no spectacle-first escalation",
+            "one coherent country/city/environment logic across clip",
+            "restrained motion scale; avoid complex hand/cloth gimmicks",
+        ],
+    }
 
 
-def _normalize_story_core_scenes(raw_scenes: Any, audio_map: dict[str, Any]) -> list[dict[str, Any]]:
-    fallback_scenes = _default_story_core_scenes(audio_map)
-    fallback_by_id = {str(row.get("scene_id") or ""): row for row in fallback_scenes}
-    out: list[dict[str, Any]] = []
-    for idx, raw in enumerate(_safe_list(raw_scenes), start=1):
-        row = _safe_dict(raw)
-        fallback = fallback_by_id.get(str(row.get("scene_id") or "").strip()) or (
-            fallback_scenes[idx - 1] if idx - 1 < len(fallback_scenes) else {}
-        )
-        fallback = _safe_dict(fallback)
-        scene_id = str(row.get("scene_id") or fallback.get("scene_id") or f"sc_{idx}").strip() or f"sc_{idx}"
-        role_hints = [str(item).strip() for item in _safe_list(row.get("role_hints")) if str(item).strip()]
-        if not role_hints:
-            role_hints = _safe_list(fallback.get("role_hints")) or ["character_1"]
-        out.append(
-            {
-                "scene_id": scene_id,
-                "t0": round(_to_float(row.get("t0"), _to_float(fallback.get("t0"), 0.0)), 3),
-                "t1": round(_to_float(row.get("t1"), _to_float(fallback.get("t1"), 0.0)), 3),
-                "scene_goal": str(row.get("scene_goal") or fallback.get("scene_goal") or "").strip(),
-                "emotional_intent": str(row.get("emotional_intent") or fallback.get("emotional_intent") or "").strip(),
-                "visual_intent": str(row.get("visual_intent") or fallback.get("visual_intent") or "").strip(),
-                "action": str(row.get("action") or fallback.get("action") or "").strip(),
-                "continuity_requirement": str(row.get("continuity_requirement") or fallback.get("continuity_requirement") or "").strip(),
-                "role_hints": role_hints,
-                "prop_role_in_scene": str(row.get("prop_role_in_scene") or fallback.get("prop_role_in_scene") or "continuity").strip(),
-                "must_remain_same": [str(item).strip() for item in _safe_list(row.get("must_remain_same")) if str(item).strip()]
-                or _safe_list(fallback.get("must_remain_same")),
-                "allowed_variation": [str(item).strip() for item in _safe_list(row.get("allowed_variation")) if str(item).strip()]
-                or _safe_list(fallback.get("allowed_variation")),
-                "scene_function_hint": str(row.get("scene_function_hint") or fallback.get("scene_function_hint") or "build").strip(),
-            }
-        )
-    if not out:
-        return fallback_scenes
-    return out
+def _normalize_story_core_guidance(raw_guidance: Any) -> dict[str, Any]:
+    fallback = _default_story_core_guidance()
+    row = _safe_dict(raw_guidance)
+    prop_guidance = _safe_dict(row.get("prop_guidance"))
+    fallback_prop_guidance = _safe_dict(fallback.get("prop_guidance"))
+    return {
+        "world_progression_hints": [str(item).strip() for item in _safe_list(row.get("world_progression_hints")) if str(item).strip()]
+        or _safe_list(fallback.get("world_progression_hints")),
+        "viewer_contrast_rules": [str(item).strip() for item in _safe_list(row.get("viewer_contrast_rules")) if str(item).strip()]
+        or _safe_list(fallback.get("viewer_contrast_rules")),
+        "unexpected_realistic_beats": [str(item).strip() for item in _safe_list(row.get("unexpected_realistic_beats")) if str(item).strip()]
+        or _safe_list(fallback.get("unexpected_realistic_beats")),
+        "prop_guidance": {
+            "baseball_cap_role": str(prop_guidance.get("baseball_cap_role") or fallback_prop_guidance.get("baseball_cap_role") or "").strip(),
+            "baseball_cap_not_default_action_driver": bool(
+                prop_guidance.get("baseball_cap_not_default_action_driver")
+                if "baseball_cap_not_default_action_driver" in prop_guidance
+                else fallback_prop_guidance.get("baseball_cap_not_default_action_driver")
+            ),
+            "forbid_generic_brim_touch_fallback": bool(
+                prop_guidance.get("forbid_generic_brim_touch_fallback")
+                if "forbid_generic_brim_touch_fallback" in prop_guidance
+                else fallback_prop_guidance.get("forbid_generic_brim_touch_fallback")
+            ),
+            "forbid_generic_finger_choreography_fallback": bool(
+                prop_guidance.get("forbid_generic_finger_choreography_fallback")
+                if "forbid_generic_finger_choreography_fallback" in prop_guidance
+                else fallback_prop_guidance.get("forbid_generic_finger_choreography_fallback")
+            ),
+            "expression_priority": [str(item).strip() for item in _safe_list(prop_guidance.get("expression_priority")) if str(item).strip()]
+            or _safe_list(fallback_prop_guidance.get("expression_priority")),
+        },
+        "narrative_pressure_rules": [str(item).strip() for item in _safe_list(row.get("narrative_pressure_rules")) if str(item).strip()]
+        or _safe_list(fallback.get("narrative_pressure_rules")),
+        "world_richness_rules": [str(item).strip() for item in _safe_list(row.get("world_richness_rules")) if str(item).strip()]
+        or _safe_list(fallback.get("world_richness_rules")),
+    }
 
 
 def _build_story_core_prompt(
@@ -1052,10 +1078,11 @@ def _build_story_core_prompt(
         "HARD CONTRACT: Audio affects rhythm/emotional arc/pacing only; audio cannot rewrite locked world constraints.\n"
         "If lyrics are weak/repetitive, rely on rhythm/energy/repetition/emotional contour and user concept.\n"
         "Scenes must be distinct even for repeating musical structures (action/space/shot scale/angle/world relation/prop relation/emotional evolution).\n"
-        "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, scenes.\n"
+        "Required top-level keys only: story_summary, opening_anchor, ending_callback_rule, global_arc, identity_lock, world_lock, style_lock, story_guidance.\n"
         "identity_lock/world_lock/style_lock must be JSON objects.\n\n"
-        "scenes must be array of objects with required keys:\n"
-        "scene_id, t0, t1, scene_goal, emotional_intent, visual_intent, action, continuity_requirement, role_hints, prop_role_in_scene, must_remain_same, allowed_variation, scene_function_hint.\n"
+        "story_guidance must be JSON object with keys:\n"
+        "world_progression_hints, viewer_contrast_rules, unexpected_realistic_beats, prop_guidance, narrative_pressure_rules, world_richness_rules.\n"
+        "Do NOT output scene rows, per-scene actions, or explicit scene-by-scene choreography in story_core.\n"
         f"{mode_instructions}\n"
         f"story_core_mode={mode}\n\n"
         f"CORE_INPUT_CONTEXT:\n{json.dumps(compact_input, ensure_ascii=False)[:4200]}\n\n"
@@ -1673,7 +1700,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     fallback = _default_story_core(input_pkg)
     if not _is_usable_audio_map(audio_map):
         raise RuntimeError("story_core_requires_audio_map")
-    fallback["scenes"] = _default_story_core_scenes(audio_map)
+    fallback["story_guidance"] = _default_story_core_guidance()
     prop_contracts, prop_guard_applied = _normalize_story_core_prop_contracts(input_pkg, refs_inventory)
     ref_attachment_summary = {
         "character_1": {"attached": False, "error": "", "source": "", "url": ""},
@@ -1796,7 +1823,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             "identity_lock": _safe_dict(parsed.get("identity_lock")) or fallback["identity_lock"],
             "world_lock": _safe_dict(parsed.get("world_lock")) or fallback["world_lock"],
             "style_lock": _safe_dict(parsed.get("style_lock")) or fallback["style_lock"],
-            "scenes": _normalize_story_core_scenes(parsed.get("scenes"), audio_map),
+            "story_guidance": _normalize_story_core_guidance(parsed.get("story_guidance")),
         }
         if not _is_usable_story_core(story_core):
             raise ValueError("story_core_unusable_after_parse")
