@@ -570,6 +570,30 @@ def _detect_attached_prop_token(*texts: str) -> str:
     return ""
 
 
+def _resolve_first_last_continuity_mode(scene_plan_row: dict[str, Any]) -> str:
+    route = str(scene_plan_row.get("route") or "").strip().lower()
+    scene_function = str(scene_plan_row.get("scene_function") or "").strip().lower()
+    if route == "first_last" and scene_function in {"release", "afterimage"}:
+        return "strict_echo"
+    return "controlled_micro_transition"
+
+
+def _resolve_first_last_semantic_beat(scene_plan_row: dict[str, Any]) -> str:
+    scene_function = str(scene_plan_row.get("scene_function") or "").strip().lower()
+    if scene_function == "release":
+        return "dissipation_beat"
+    if scene_function == "afterimage":
+        return "residual_beat"
+    return "transition_beat"
+
+
+def _is_strict_echo_first_last_scene(scene_plan_row: dict[str, Any], notes: dict[str, Any] | None = None) -> bool:
+    continuity_mode = str(_safe_dict(notes).get("continuity_mode") or "").strip().lower()
+    if continuity_mode == "strict_echo":
+        return True
+    return _resolve_first_last_continuity_mode(scene_plan_row) == "strict_echo"
+
+
 def _build_first_last_visual_delta(
     *,
     scene_plan_row: dict[str, Any],
@@ -676,6 +700,8 @@ def _build_first_last_prompt_pair(
     first_last_mode: str = "",
     scene_function: str = "",
     emotional_intent: str = "",
+    continuity_mode: str = "controlled_micro_transition",
+    semantic_beat: str = "transition_beat",
 ) -> tuple[str, str, str, str]:
     start_image_prompt = _build_first_last_start_image_prompt(
         primary_role=primary_role,
@@ -702,18 +728,36 @@ def _build_first_last_prompt_pair(
     }
     camera_clause = camera_clause_map.get(clean_mode, "camera settles with no perspective jump")
     scene_function_low = str(scene_function or "").strip().lower()
+    continuity_mode_low = str(continuity_mode or "controlled_micro_transition").strip().lower()
+    semantic_beat_low = str(semantic_beat or "transition_beat").strip().lower()
     release_clause = ""
-    if "release" in scene_function_low:
+    if continuity_mode_low == "strict_echo" and scene_function_low == "release":
+        release_clause = (
+            " Dissipation beat (strict_echo): fade-out release, tension exits body line, breath settles, and energy decays "
+            "without geography change or new entity introduction."
+        )
+    elif continuity_mode_low == "strict_echo" and scene_function_low == "afterimage":
+        release_clause = (
+            " Residual beat (strict_echo): stillness holds, afterimage lingers as a trace, body line stabilizes, and final presence "
+            "remains without introducing new motion idea."
+        )
+    elif "release" in scene_function_low:
         release_clause = " Readable release beat: tension exits body line and breath settles without geography change."
     elif "afterimage" in scene_function_low:
         release_clause = " Readable afterimage beat: lingering echo of previous tension remains while body line stabilizes."
     elif "callback" in scene_function_low:
         release_clause = " Readable callback beat: visual echo links back to opening motif with continuity-first framing."
     emotion_clause = f" Emotional register: {_trim_sentence(emotional_intent, max_len=120)}." if emotional_intent else ""
+    continuity_clause = (
+        " Anchor strategy: same global world family, echo continuity from previous scene, and state delta from previous scene; "
+        "avoid local stage-label noise and avoid new entity invention."
+        if continuity_mode_low == "strict_echo"
+        else ""
+    )
     positive_video_prompt = (
         f"Controlled first_last transition in {scene_space}: {camera_clause} while {primary_role} keeps a broad readable state shift, {_trim_sentence(visual_delta, max_len=180)}. "
         "Keep same subject/world/outfit/shot family, same framing family, smooth continuity, no abrupt zoom spikes, no large perspective jump, no fine-motor prop choreography. "
-        f"Only one subtle visible delta, with no added actors or layout change.{release_clause}{emotion_clause}{prop_clause}"
+        f"Only one subtle visible delta, with no added actors or layout change.{continuity_clause}{release_clause}{emotion_clause} Mode={continuity_mode_low}; beat={semantic_beat_low}.{prop_clause}"
     )
     negative_video_prompt = _build_first_last_negative_prompt(attached_prop_token=attached_prop_token)
     return start_image_prompt[:650], end_image_prompt[:700], positive_video_prompt[:850], negative_video_prompt
@@ -971,6 +1015,8 @@ def _prompt_notes_template(route: str) -> dict[str, Any]:
         notes.update(
             {
                 "transition_contract": "controlled_micro_transition",
+                "continuity_mode": "controlled_micro_transition",
+                "semantic_beat": "transition_beat",
                 "first_last_mode": "",
                 "first_state": "",
                 "last_state": "",
@@ -995,6 +1041,8 @@ def _scene_plan_semantics_lock(scene_plan_row: dict[str, Any]) -> dict[str, Any]
         "performance_openness": str(scene_plan_row.get("performance_openness") or "").strip(),
         "visual_event_type": str(scene_plan_row.get("visual_event_type") or "").strip(),
         "first_last_mode": str(scene_plan_row.get("first_last_mode") or "").strip(),
+        "continuity_mode": _resolve_first_last_continuity_mode(scene_plan_row),
+        "semantic_beat": _resolve_first_last_semantic_beat(scene_plan_row),
         "i2v_motion_family": str(scene_plan_row.get("i2v_motion_family") or "").strip(),
         "pace_class": str(scene_plan_row.get("pace_class") or "").strip(),
         "camera_pattern": str(scene_plan_row.get("camera_pattern") or "").strip(),
@@ -1082,12 +1130,47 @@ def _detect_scene_prompt_contract_mismatch(*, expected_route: str, scene_plan_ro
             semantic_mismatch = True
         if transition_contract and not has_transition_contract:
             semantic_mismatch = True
-        if not (has_first_last_terms or (has_start and has_end and has_scene_function_echo)):
-            semantic_mismatch = True
-        if has_transition_transit_language:
-            semantic_mismatch = True
-        if has_performance_terms and not (has_first_last_terms or has_scene_function_echo):
-            semantic_mismatch = True
+
+        strict_echo_mode = _is_strict_echo_first_last_scene(scene_plan_row, notes)
+        if strict_echo_mode:
+            continuity_ok = any(
+                token in blob
+                for token in (
+                    "same subject",
+                    "same world",
+                    "continuity",
+                    "echo",
+                    "strict_echo",
+                    "state delta",
+                    "no added actors",
+                    "no new entity",
+                )
+            )
+            forbidden_new_entity = bool(
+                re.search(
+                    r"\b(new character|another character|extra character|extra identifiable actor|new actor|crowd appears|new world|different world|new location|different location|new prop|new key prop|switch to|cut to another place)\b",
+                    blob,
+                )
+            )
+            explicit_contradiction = bool(
+                re.search(
+                    r"\b(wardrobe change|different outfit|identity change|new costume|new cast|added cast)\b",
+                    blob,
+                )
+            )
+            if not continuity_ok:
+                semantic_mismatch = True
+            if forbidden_new_entity or explicit_contradiction or has_transition_transit_language:
+                semantic_mismatch = True
+            if has_performance_terms and "afterimage" in scene_function and "residual" not in blob and "echo" not in blob:
+                semantic_mismatch = True
+        else:
+            if not (has_first_last_terms or (has_start and has_end and has_scene_function_echo)):
+                semantic_mismatch = True
+            if has_transition_transit_language:
+                semantic_mismatch = True
+            if has_performance_terms and not (has_first_last_terms or has_scene_function_echo):
+                semantic_mismatch = True
     else:  # i2v
         if has_first_last_terms:
             semantic_mismatch = True
@@ -1335,15 +1418,17 @@ def _build_fallback_scene_prompts(
             str(scene_plan_row.get("scene_summary") or ""),
             str(story_core.get("story_summary") or ""),
         )
+        continuity_mode = _resolve_first_last_continuity_mode(scene_plan_row)
+        semantic_beat = _resolve_first_last_semantic_beat(scene_plan_row)
         first_state, last_state, visual_delta = _build_first_last_visual_delta(
             scene_plan_row=scene_plan_row,
             primary_role=primary_role,
             attached_prop_token=attached_prop_token,
         )
-        scene_space = _trim_sentence(f"the same {world_anchor} scene space", max_len=90)
+        scene_space = _trim_sentence(f"the same global {world_anchor} world-family scene space", max_len=90)
         photo_prompt = (
-            f"One transition keyframe of {primary_role} in the same {world_anchor} scene space, hinge moment for {scene_function}, "
-            "subject and environment remain stable, same outfit/light/framing family."
+            f"One transition keyframe of {primary_role} in the same global {world_anchor} world-family scene space, hinge moment for {scene_function}, "
+            "subject and environment remain stable, same outfit/light/framing family, echo continuity from previous scene."
         )
         start_image_prompt, end_image_prompt, positive_video_prompt, negative_video_prompt = _build_first_last_prompt_pair(
             primary_role=primary_role,
@@ -1355,6 +1440,8 @@ def _build_fallback_scene_prompts(
             first_last_mode=first_last_mode,
             scene_function=scene_function,
             emotional_intent=emotional,
+            continuity_mode=continuity_mode,
+            semantic_beat=semantic_beat,
         )
         video_prompt = positive_video_prompt
     else:
@@ -1413,6 +1500,8 @@ def _build_fallback_scene_prompts(
         fallback_notes["first_state"] = first_state
         fallback_notes["last_state"] = last_state
         fallback_notes["first_last_mode"] = first_last_mode
+        fallback_notes["continuity_mode"] = _resolve_first_last_continuity_mode(scene_plan_row)
+        fallback_notes["semantic_beat"] = _resolve_first_last_semantic_beat(scene_plan_row)
 
     return {
         "scene_id": scene_id,
@@ -1668,6 +1757,16 @@ def _normalize_scene_prompts(
             first_last_mode = str(scene.get("first_last_mode") or prompt_notes.get("first_last_mode") or "").strip().lower()
             if first_last_mode not in FIRST_LAST_MODES:
                 first_last_mode = "camera_settle"
+            continuity_mode = str(
+                prompt_notes.get("continuity_mode")
+                or fallback_row["prompt_notes"].get("continuity_mode")
+                or _resolve_first_last_continuity_mode(scene)
+            ).strip().lower() or "controlled_micro_transition"
+            semantic_beat = str(
+                prompt_notes.get("semantic_beat")
+                or fallback_row["prompt_notes"].get("semantic_beat")
+                or _resolve_first_last_semantic_beat(scene)
+            ).strip().lower() or "transition_beat"
             strict_start, strict_end, strict_positive, strict_negative = _build_first_last_prompt_pair(
                 primary_role=_build_human_subject_label(role_row, story_core, scene),
                 scene_space=_trim_sentence(str(world_continuity.get("environment_family") or "the same fixed scene space"), max_len=90),
@@ -1678,6 +1777,8 @@ def _normalize_scene_prompts(
                 first_last_mode=first_last_mode,
                 scene_function=str(scene.get("scene_function") or ""),
                 emotional_intent=str(scene.get("emotional_intent") or ""),
+                continuity_mode=continuity_mode,
+                semantic_beat=semantic_beat,
             )
             start_image_prompt = strict_start
             end_image_prompt = strict_end
@@ -1689,6 +1790,8 @@ def _normalize_scene_prompts(
             normalized_notes["first_state"] = first_state
             normalized_notes["last_state"] = last_state
             normalized_notes["first_last_mode"] = first_last_mode
+            normalized_notes["continuity_mode"] = continuity_mode
+            normalized_notes["semantic_beat"] = semantic_beat
             normalized_notes["same_world_required"] = bool(
                 prompt_notes.get("same_world_required") if "same_world_required" in prompt_notes else True
             )
