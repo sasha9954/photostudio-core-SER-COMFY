@@ -2736,7 +2736,8 @@ function mergeScenarioPackagePreservingAudioMap({
   const responseSafe = responsePackage && typeof responsePackage === "object" && !Array.isArray(responsePackage)
     ? responsePackage
     : {};
-  if (normalizedRequestedStageId !== "story_core" || executedSet.has("audio_map")) return responseSafe;
+  const isManualStoryCoreRunWithoutAudioMap = normalizedRequestedStageId === "story_core" && !executedSet.has("audio_map");
+  if (!isManualStoryCoreRunWithoutAudioMap) return responseSafe;
   const previousAudioMap = previousSafe?.audio_map && typeof previousSafe.audio_map === "object" && !Array.isArray(previousSafe.audio_map)
     ? previousSafe.audio_map
     : null;
@@ -8987,11 +8988,12 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
 const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", debugNodeId = "", sourceNodeId = "" } = {}) => {
   const normalizedStageId = String(stageId || "").trim().toLowerCase();
   if (!normalizedStageId) return;
+  const shouldFullClear = normalizedStageId !== "story_core";
   clearScenarioPipelineDownstreamRuntime({
     fromStageId: normalizedStageId,
     debugNodeId,
     sourceNodeId,
-    fullClear: normalizedStageId === "story_core" ? false : true,
+    fullClear: shouldFullClear,
   });
 }, [clearScenarioPipelineDownstreamRuntime]);
 
