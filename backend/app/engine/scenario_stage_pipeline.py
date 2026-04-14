@@ -5073,10 +5073,11 @@ def run_manual_stage(
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
     preserve_audio_map_for_story_core = stage_id == "story_core" and _is_usable_audio_map(_safe_dict(pkg.get("audio_map")))
     if preserve_audio_map_for_story_core:
+        # Manual CORE rerun must preserve upstream audio_map and skip audio_map dependency rebuild.
         dep_sequence = [dep_stage for dep_stage in dep_sequence if dep_stage != "audio_map"]
-    guarded_audio_map_before = deepcopy(_safe_dict(pkg.get("audio_map"))) if preserve_audio_map_for_story_core else {}
+    preserved_audio_map_snapshot = deepcopy(_safe_dict(pkg.get("audio_map"))) if preserve_audio_map_for_story_core else {}
     guarded_fingerprint_before = (
-        _audio_map_story_core_guard_fingerprint(guarded_audio_map_before) if preserve_audio_map_for_story_core else ""
+        _audio_map_story_core_guard_fingerprint(preserved_audio_map_snapshot) if preserve_audio_map_for_story_core else ""
     )
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
@@ -5089,8 +5090,8 @@ def run_manual_stage(
     if preserve_audio_map_for_story_core:
         guarded_audio_map_after = _safe_dict(pkg.get("audio_map"))
         guarded_fingerprint_after = _audio_map_story_core_guard_fingerprint(guarded_audio_map_after)
-        if guarded_fingerprint_before and guarded_fingerprint_after != guarded_fingerprint_before:
-            pkg["audio_map"] = guarded_audio_map_before
+        audio_map_was_mutated = guarded_audio_map_after != preserved_audio_map_snapshot
+        if audio_map_was_mutated:
             diagnostics = _safe_dict(pkg.get("diagnostics"))
             warnings = _safe_list(diagnostics.get("warnings"))
             warnings.append(
@@ -5101,8 +5102,13 @@ def run_manual_stage(
             )
             diagnostics["warnings"] = warnings[-80:]
             diagnostics["story_core_audio_map_mutation_guard_triggered"] = True
+            diagnostics["story_core_audio_map_mutation_guard_fingerprint_changed"] = bool(
+                guarded_fingerprint_before and guarded_fingerprint_after != guarded_fingerprint_before
+            )
             pkg["diagnostics"] = diagnostics
             _append_diag_event(pkg, "story_core audio_map mutation guard restored upstream audio_map", stage_id="story_core")
+        # Always restore preserved upstream audio_map snapshot for manual story_core rerun.
+        pkg["audio_map"] = preserved_audio_map_snapshot
     return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
 
 
