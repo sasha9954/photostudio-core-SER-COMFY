@@ -1580,6 +1580,7 @@ def _normalize_scene_prompts(
     semantic_mismatch_scene_ids: list[str] = []
     missing_photo_scene_ids: list[str] = []
     missing_video_scene_ids: list[str] = []
+    missing_field_by_scene: dict[str, list[str]] = {}
     mismatch_reason_by_scene: dict[str, list[str]] = {}
     unrelated_rows_discarded_count = 0
     i2v_template_rebuilt_count = 0
@@ -1657,6 +1658,7 @@ def _normalize_scene_prompts(
         if not photo_prompt:
             missing_photo_count += 1
             missing_photo_scene_ids.append(scene_id)
+            missing_field_by_scene.setdefault(scene_id, []).append("photo_prompt")
             used_fallback = True
             row_repaired_from_current_package = True
             photo_prompt = str(fallback_row.get("photo_prompt") or "")
@@ -1667,6 +1669,7 @@ def _normalize_scene_prompts(
         if not video_prompt:
             missing_video_count += 1
             missing_video_scene_ids.append(scene_id)
+            missing_field_by_scene.setdefault(scene_id, []).append("video_prompt")
             used_fallback = True
             row_repaired_from_current_package = True
             video_prompt = str(fallback_row.get("video_prompt") or "")
@@ -2027,6 +2030,10 @@ def _normalize_scene_prompts(
         "scene_prompts_semantic_mismatch_scene_ids": semantic_mismatch_scene_ids,
         "scene_prompts_missing_photo_scene_ids": missing_photo_scene_ids,
         "scene_prompts_missing_video_scene_ids": missing_video_scene_ids,
+        "scene_prompts_missing_field_by_scene": {
+            scene_id: list(dict.fromkeys(fields))
+            for scene_id, fields in missing_field_by_scene.items()
+        },
         "scene_prompts_mismatch_reason_by_scene": mismatch_reason_by_scene,
         "scene_prompts_rows_rebuilt_from_scene_plan_count": rows_rebuilt_from_scene_plan_count,
         "scene_prompts_positive_negative_leak_stripped_count": positive_negative_leak_stripped_count,
@@ -2080,6 +2087,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
         "scene_prompts_semantic_mismatch_scene_ids": [],
         "scene_prompts_missing_photo_scene_ids": [],
         "scene_prompts_missing_video_scene_ids": [],
+        "scene_prompts_missing_field_by_scene": {},
         "scene_prompts_mismatch_reason_by_scene": {},
         "scene_prompts_rows_rebuilt_from_scene_plan_count": 0,
         "scene_prompts_positive_negative_leak_stripped_count": 0,
@@ -2169,6 +2177,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 ),
                 "scene_prompts_missing_photo_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_photo_scene_ids")),
                 "scene_prompts_missing_video_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_video_scene_ids")),
+                "scene_prompts_missing_field_by_scene": _safe_dict(normalization_diag.get("scene_prompts_missing_field_by_scene")),
                 "scene_prompts_mismatch_reason_by_scene": _safe_dict(normalization_diag.get("scene_prompts_mismatch_reason_by_scene")),
                 "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
             }
@@ -2229,6 +2238,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any]) -> dict
                 ),
                 "scene_prompts_missing_photo_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_photo_scene_ids")),
                 "scene_prompts_missing_video_scene_ids": _safe_list(normalization_diag.get("scene_prompts_missing_video_scene_ids")),
+                "scene_prompts_missing_field_by_scene": _safe_dict(normalization_diag.get("scene_prompts_missing_field_by_scene")),
                 "scene_prompts_mismatch_reason_by_scene": _safe_dict(normalization_diag.get("scene_prompts_mismatch_reason_by_scene")),
                 "stage_source": str(normalization_diag.get("stage_source") or "current_package"),
             }
