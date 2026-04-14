@@ -97,6 +97,8 @@ _OWNERSHIP_ROLE_MAP = {
     "world": "environment",
 }
 _BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
+_SUBJECT_REF_TOKENS = {"char", "character", "person", "subject", "talent", "hero", "protagonist", "human", "face"}
+_OBJECT_REF_TOKENS = {"prop", "object", "item", "wardrobe", "vehicle", "accessory", "outfit", "tool", "bag", "phone"}
 
 
 def _utc_iso() -> str:
@@ -691,6 +693,52 @@ def _ref_record(ref_id: str, row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _canonical_subject_id(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    matched = re.search(r"(?:character|char)[_\-\s]*(\d+)", token)
+    if matched:
+        return f"character_{matched.group(1)}"
+    if token in {"main", "lead", "primary"}:
+        return "character_1"
+    if token in {"support", "secondary"}:
+        return "character_2"
+    if token in {"antagonist", "villain"}:
+        return "character_3"
+    return token if re.fullmatch(r"[a-z0-9_]{3,40}", token) else ""
+
+
+def _is_subject_ref(record: dict[str, str]) -> bool:
+    type_token = f"{record.get('type') or ''} {record.get('ref_id') or ''}".lower()
+    return any(token in type_token for token in _SUBJECT_REF_TOKENS)
+
+
+def _is_object_ref(record: dict[str, str], meta: dict[str, Any]) -> bool:
+    type_token = f"{record.get('type') or ''} {record.get('ref_id') or ''} {str(meta.get('type') or '')}".lower()
+    if any(token in type_token for token in _SUBJECT_REF_TOKENS):
+        return False
+    return any(token in type_token for token in _OBJECT_REF_TOKENS)
+
+
+def _build_world_model_normalized(
+    *,
+    content_type: str,
+    text_bundle: dict[str, str],
+    opening_anchor: str,
+    location_hints: list[str],
+    style_hints: list[str],
+    forbidden_drift: list[str],
+) -> str:
+    setting = _first_text(location_hints[0] if location_hints else "", opening_anchor, "grounded_environment")
+    mood = _first_text(style_hints[0] if style_hints else "", text_bundle.get("note"), text_bundle.get("director_note"), "coherent_cinematic")
+    premise = _first_text(text_bundle.get("story_text"), text_bundle.get("text"), "audio_synchronized_progression")
+    premise_tokens = [token.strip(" ,.;:!?") for token in re.split(r"[\n,.;:!?]+", premise) if token.strip()]
+    compact_premise = " / ".join(premise_tokens[:2])[:120] or "audio_synchronized_progression"
+    drift_guard = ", ".join([token.replace("forbid:", "").replace("_", " ") for token in forbidden_drift[:2]]) or "identity replacement"
+    return f"type:{content_type}; setting:{setting[:64]}; mood:{mood[:64]}; premise:{compact_premise}; guard:no {drift_guard}"
+
+
 def _build_story_core_v11(
     *,
     input_pkg: dict[str, Any],
@@ -708,11 +756,11 @@ def _build_story_core_v11(
     slots = _coerce_scene_slots(audio_map)
     total_slots = len(slots)
 
-    primary_subject = str(assigned_roles.get("primary_role") or "character_1").strip() or "character_1"
+    primary_subject = _canonical_subject_id(assigned_roles.get("primary_role")) or "character_1"
     role_subjects = [
         str(v).strip()
         for v in _safe_list(assigned_roles.get("active_roles"))
-        if str(v).strip() and str(v).strip() != primary_subject
+        if _canonical_subject_id(v) and _canonical_subject_id(v) != primary_subject
     ]
     connected_subjects = [
         str(v).strip()
@@ -721,21 +769,23 @@ def _build_story_core_v11(
             + _safe_list(connected_summary.get("secondary_subjects"))
             + _safe_list(connected_summary.get("subject_candidates"))
         )
-        if str(v).strip() and str(v).strip() != primary_subject
+        if _canonical_subject_id(v) and _canonical_subject_id(v) != primary_subject
     ]
     ref_subjects: list[str] = []
+    secondary_subject_labels: dict[str, str] = {}
     continuity_objects: list[dict[str, Any]] = []
     for ref_id, value in refs_inventory.items():
         if not isinstance(value, dict):
             continue
         record = _ref_record(str(ref_id), value)
         meta = _normalize_ref_meta(value.get("meta"))
-        type_token = record.get("type") or str(ref_id).lower()
-        is_subject_ref = any(token in type_token for token in ("char", "person", "subject", "talent", "hero"))
-        if is_subject_ref and record["label"] and record["label"] != primary_subject:
-            ref_subjects.append(record["label"])
-        is_object_ref = any(token in type_token for token in ("prop", "object", "item", "wardrobe", "vehicle")) or bool(meta.get("ownershipRoleMapped"))
-        if is_object_ref:
+        if _is_subject_ref(record):
+            canonical_ref_subject = _canonical_subject_id(record["ref_id"]) or _canonical_subject_id(record["label"])
+            if canonical_ref_subject and canonical_ref_subject != primary_subject:
+                ref_subjects.append(canonical_ref_subject)
+                if record["label"]:
+                    secondary_subject_labels[canonical_ref_subject] = record["label"]
+        if _is_object_ref(record, meta):
             continuity_objects.append(
                 {
                     "ref_id": record["ref_id"],
@@ -751,6 +801,11 @@ def _build_story_core_v11(
         label = str(row.get("label") or "").strip()
         if not (ref_id or label):
             continue
+        semantic_token = f"{ref_id} {label}".lower()
+        if any(token in semantic_token for token in _SUBJECT_REF_TOKENS):
+            continue
+        if not any(token in semantic_token for token in _OBJECT_REF_TOKENS):
+            continue
         continuity_objects.append(
             {
                 "ref_id": ref_id,
@@ -763,11 +818,18 @@ def _build_story_core_v11(
         )
     continuity_objects = list({f"{obj.get('ref_id')}::{obj.get('label')}": obj for obj in continuity_objects if obj.get("label") or obj.get("ref_id")}.values())[:16]
 
-    secondary_subjects = list(dict.fromkeys([*role_subjects, *connected_subjects, *ref_subjects]))[:6]
+    for candidate in [*role_subjects, *connected_subjects]:
+        canonical_candidate = _canonical_subject_id(candidate)
+        if canonical_candidate and canonical_candidate != primary_subject:
+            ref_subjects.append(canonical_candidate)
+            if canonical_candidate not in secondary_subject_labels and str(candidate).strip():
+                secondary_subject_labels[canonical_candidate] = str(candidate).strip()[:120]
+    secondary_subjects = list(dict.fromkeys(ref_subjects))[:6]
     if not secondary_subjects and continuity_objects:
-        secondary_subjects = [str(continuity_objects[0].get("ownership_role") or "shared")]
+        mapped_subject = _canonical_subject_id(continuity_objects[0].get("ownership_role"))
+        secondary_subjects = [mapped_subject] if mapped_subject else ["character_2"]
     if not secondary_subjects and refs_inventory:
-        secondary_subjects = ["support_presence_from_refs"]
+        secondary_subjects = ["character_2"]
     if not secondary_subjects:
         secondary_subjects = ["environment"]
 
@@ -791,8 +853,7 @@ def _build_story_core_v11(
         "ad": {"audio": 1.0, "continuity": 1.3, "causality": 1.1},
         "news": {"audio": 0.8, "continuity": 1.0, "causality": 1.35},
     }.get(content_type, {"audio": 1.0, "continuity": 1.0, "causality": 1.0})
-    object_labels = [str(obj.get("label") or "").lower() for obj in continuity_objects if str(obj.get("label") or "").strip()]
-    object_last_seen: dict[str, int] = {}
+    has_persistent_objects = any(str(obj.get("visibility_expectation") or "") == "persistent" for obj in continuity_objects)
     for idx, slot in enumerate(slots):
         slot_id = str(slot.get("id") or f"slot_{idx + 1}")
         phrase = str(slot.get("primary_phrase_text") or "").strip()
@@ -800,11 +861,13 @@ def _build_story_core_v11(
         phrase_key = re.sub(r"\s+", " ", phrase.lower()).strip()
         energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
         vocal = _to_float(_safe_dict(slot.get("audio_features")).get("vocal_ratio"), 0.4)
-        phrase_mentions_object = any(label and label in phrase_key for label in object_labels[:8])
-        continuity_pressure = "high" if (phrase_mentions_object or fn in {"transition_turn", "climax_pressure"}) else "medium"
         semantic_density = "high" if (vocal >= 0.55 or len(phrase.split()) >= 8) else ("low" if not phrase else "medium")
         narrative_load_score = (energy * mode_weight["audio"]) + (0.3 if fn in {"transition_turn", "climax_pressure"} else 0.0)
         narrative_load = "high" if narrative_load_score >= 0.9 else ("medium" if narrative_load_score >= 0.6 else "low")
+        object_presence_required = bool(continuity_objects) and (
+            fn in {"transition_turn", "climax_pressure"} or (has_persistent_objects and narrative_load in {"high", "medium"})
+        )
+        continuity_pressure = "high" if object_presence_required else "medium"
         primary_shift_allowed = bool(re.search(r"\b(we|they|together|crowd|everyone)\b", phrase_key)) and fn in {"transition_turn", "climax_pressure"}
         beat_primary_subject = primary_subject if not primary_shift_allowed else secondary_subjects[0]
 
@@ -823,9 +886,6 @@ def _build_story_core_v11(
             repeated_count = 0
 
         beat_secondary = secondary_subjects[:2] if idx % 2 == 0 else secondary_subjects[1:3] or secondary_subjects[:1]
-        for label in object_labels:
-            if label and label in phrase_key:
-                object_last_seen[label] = idx
         beats.append(
             {
                 "beat_id": f"beat_{idx + 1}",
@@ -837,7 +897,7 @@ def _build_story_core_v11(
                 "semantic_density": semantic_density,
                 "narrative_load": narrative_load,
                 "subject_presence_requirement": "primary_subject_visible_unless_explicit_handoff",
-                "continuity_visibility_requirement": "object_or_environment_anchor_required" if continuity_pressure == "high" else "world_anchor_or_subject_callback",
+                "continuity_visibility_requirement": "object_anchor_required" if object_presence_required else "world_anchor_or_subject_callback",
                 "beat_focus_hint": phrase[:180] or fn,
                 "source_slot_id": slot_id,
                 "group_reason": f"{fn}|density:{semantic_density}|continuity:{continuity_pressure}",
@@ -859,7 +919,14 @@ def _build_story_core_v11(
         for ref_id, row in refs_inventory.items()
         if isinstance(row, dict) and any(token in str(ref_id).lower() for token in ("style", "look", "mood", "grade"))
     ][:4]
-    world_model = _first_text(text_bundle.get("story_text"), text_bundle.get("text"), parsed_story_core.get("global_arc"), fallback_story_core.get("global_arc"))[:200]
+    world_model = _build_world_model_normalized(
+        content_type=content_type,
+        text_bundle=text_bundle,
+        opening_anchor=opening_anchor,
+        location_hints=location_hints,
+        style_hints=style_hints,
+        forbidden_drift=forbidden_drift,
+    )[:240]
     world_definition = {
         "world_model": world_model or "grounded_continuity_world",
         "world_axioms": [
@@ -911,8 +978,42 @@ def _build_story_core_v11(
     primary_per_beat = [str(item.get("beat_primary_subject") or "") for item in beats]
     shadow_count = sum(1 for subject in primary_per_beat if subject and subject != primary_subject)
     subject_shadowing = shadow_count > max(1, math.floor(len(beats) * 0.35))
-    continuity_break = any((len(beats) - 1 - seen_idx) >= 3 for seen_idx in object_last_seen.values()) if beats and object_last_seen else bool(continuity_objects and len(beats) >= 4 and not object_last_seen)
-    world_drift = any(token.replace("forbid:", "").replace("_", " ") in world_model.lower() for token in forbidden_drift if token.startswith("forbid:"))
+    required_object_beats = [idx for idx, beat in enumerate(beats) if str(beat.get("continuity_visibility_requirement") or "") == "object_anchor_required"]
+    required_object_beats_set = set(required_object_beats)
+    legitimized_transition_indices = {
+        idx + 1
+        for idx, event in enumerate(transition_events)
+        if str(event.get("type") or "") in {"function_turn", "subject_handoff_explicit"}
+    }
+    has_long_required_run = False
+    run_size = 0
+    for idx in range(len(beats)):
+        if idx in required_object_beats_set:
+            run_size += 1
+            has_long_required_run = has_long_required_run or run_size >= 3
+        else:
+            run_size = 0
+    has_unlegitimized_required_run = has_long_required_run and not any(idx in legitimized_transition_indices for idx in required_object_beats)
+    continuity_break = bool(
+        continuity_objects
+        and (
+            not continuity_matrix["subject_to_objects"]
+            or (has_persistent_objects and not required_object_beats)
+            or has_unlegitimized_required_run
+        )
+    )
+    world_anchor_text = " ".join(
+        [
+            str(world_definition.get("environment_anchor") or ""),
+            str(world_definition.get("style_anchor") or ""),
+            str(opening_anchor or ""),
+        ]
+    ).lower()
+    world_drift = any(
+        token.replace("forbid:", "").replace("_", " ") in world_anchor_text
+        for token in forbidden_drift
+        if token.startswith("forbid:")
+    )
     arc_tokens = [str(item.get("story_function") or "") for item in beats]
     flatline_segments: list[dict[str, Any]] = []
     start = 0
@@ -935,6 +1036,7 @@ def _build_story_core_v11(
         "narrative_backbone": {
             "primary_narrative_spine": primary_spine,
             "secondary_subjects": secondary_subjects,
+            "secondary_subject_labels": {key: secondary_subject_labels[key] for key in secondary_subjects if key in secondary_subject_labels},
             "continuity_objects": continuity_objects,
             "continuity_matrix": continuity_matrix,
             "subject_priority_rules": [
