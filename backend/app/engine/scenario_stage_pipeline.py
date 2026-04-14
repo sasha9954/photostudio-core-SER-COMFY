@@ -4210,8 +4210,10 @@ def _audio_map_story_core_guard_fingerprint(audio_map: dict[str, Any]) -> str:
 
     payload = {
         "duration_sec": round(_coerce_duration_sec(node.get("duration_sec")), 3),
+        "phrase_units_count": len(_safe_list(node.get("phrase_units"))),
         "scene_candidate_windows_count": len(_safe_list(node.get("scene_candidate_windows"))),
         "scene_slots_count": len(_safe_list(node.get("scene_slots"))),
+        "phrase_units": _norm_rows(node.get("phrase_units")),
         "scene_candidate_windows": _norm_rows(node.get("scene_candidate_windows")),
         "scene_slots": _norm_rows(node.get("scene_slots")),
     }
