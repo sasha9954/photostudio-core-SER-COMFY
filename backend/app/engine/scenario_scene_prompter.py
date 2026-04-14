@@ -816,6 +816,22 @@ def _presence_policy_clause(presence_policy: dict[str, Any]) -> str:
     return ""
 
 
+def _append_compact_clauses(prompt: str, clauses: list[str], *, max_len: int = 900) -> str:
+    text = str(prompt or "").strip()
+    if not clauses:
+        return text[:max_len]
+    low = text.lower()
+    for clause in clauses:
+        clean_clause = str(clause or "").strip().rstrip(".")
+        if not clean_clause:
+            continue
+        if clean_clause.lower() in low:
+            continue
+        text = f"{text.rstrip('. ')}. {clean_clause}".strip() if text else clean_clause
+        low = text.lower()
+    return text[:max_len]
+
+
 def _build_prompt(context: dict[str, Any]) -> str:
     canon = _safe_dict(context.get("video_capability_canon"))
     route_profiles = _safe_dict(canon.get("route_profiles"))
@@ -1716,10 +1732,14 @@ def _normalize_scene_prompts(
             normalized_notes["risk_simplified"] = False
 
         hard_constraints = _safe_dict(global_contract.get("hard_constraints"))
+        image_contract_clauses: list[str] = []
+        if required_world_anchor:
+            image_contract_clauses.append("Keep required world anchor continuity; no world-family drift")
         if required_props:
             props_clause = " Keep required continuity prop identity consistent across frames; do not replace with new key prop."
             video_prompt = f"{video_prompt.rstrip('. ')}.{props_clause}".strip()
             positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}.{props_clause}".strip()
+            image_contract_clauses.append("Keep required continuity prop identity consistent; do not replace key continuity props")
             normalized_notes["continuity_anchor"] = (
                 f"{normalized_notes.get('continuity_anchor', '').strip('; ')}; required continuity props: {', '.join(required_props)}"
             ).strip("; ")
@@ -1727,12 +1747,18 @@ def _normalize_scene_prompts(
             cast_clause = " Do not introduce extra identifiable cast; keep only contract-authorized actors."
             video_prompt = f"{video_prompt.rstrip('. ')}.{cast_clause}".strip()
             positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}.{cast_clause}".strip()
+            image_contract_clauses.append("Do not introduce extra identifiable cast; keep only contract-authorized actors")
             normalized_notes["cast_constraint"] = "must_not_invent_cast"
         if presence_clause:
             video_prompt = f"{video_prompt.rstrip('. ')}. {presence_clause}".strip()
             positive_video_prompt = f"{(positive_video_prompt or video_prompt).rstrip('. ')}. {presence_clause}".strip()
+            image_contract_clauses.append(presence_clause)
             normalized_notes["presence_policy"] = str(presence_policy.get("presence_policy") or "")
             normalized_notes["presence_clause"] = presence_clause
+        photo_prompt = _append_compact_clauses(photo_prompt, image_contract_clauses)
+        if actual_route == "first_last":
+            start_image_prompt = _append_compact_clauses(start_image_prompt, image_contract_clauses)
+            end_image_prompt = _append_compact_clauses(end_image_prompt, image_contract_clauses)
         if bool(scene_contract.get("allow_scene_local_props", True)):
             normalized_notes["scene_local_props_policy"] = "decor_allowed_non_continuity"
         else:

@@ -308,9 +308,11 @@ def _build_explicit_node_input(
     explicit_actors = [role for role in _CHARACTER_ROLES if role in present_roles]
     explicit_anchors = [role for role in ("location", "style", "props") if role in present_roles]
     occupied_slots = sorted(set([*explicit_actors, *explicit_anchors]))
+    has_explicit_props = "props" in explicit_anchors or bool(_safe_list(refs_present_by_role.get("props")))
     return {
         "actors": explicit_actors,
         "anchors": explicit_anchors,
+        "has_explicit_props": has_explicit_props,
         "refs_present_by_role": refs_present_by_role,
         "occupied_slots": occupied_slots,
         "ownership_binding_inventory": ownership_binding_inventory[:16],
@@ -400,7 +402,6 @@ def _scene_presence_policy_for_row(
 ) -> dict[str, Any]:
     base = _safe_dict(defaults)
     forbid_crowd = bool(director_constraints.get("forbid_crowd"))
-    no_second_actor = bool(director_constraints.get("no_second_actor") or director_constraints.get("solo_intent"))
     crowd_allowed = bool(base.get("crowd_allowed")) and not forbid_crowd
 
     energy = str(scene_window.get("energy") or "").strip().lower()
@@ -408,7 +409,7 @@ def _scene_presence_policy_for_row(
     scene_presence_mode = str(role_row.get("scene_presence_mode") or "").strip().lower()
     performance_focus = bool(role_row.get("performance_focus"))
 
-    strict_signal = forbid_crowd or no_second_actor or scene_presence_mode in {"private_release", "solo_observational"}
+    strict_signal = forbid_crowd or scene_presence_mode in {"private_release", "solo_observational"}
     strict_signal = strict_signal or any(
         token in scene_function
         for token in ("intimate", "minimal_intro", "minimal intro", "private", "release", "close_up", "close-up")
@@ -1288,7 +1289,10 @@ def _normalize_role_plan(
     if no_second_actor:
         forbidden_actor_ids.extend([role for role in _CHARACTER_ROLES if role != "character_1"])
 
-    role_arc_summary = str(raw_plan.get("role_arc_summary") or "").strip() or "Single-hero arc moves between internal pressure and urban world contact, then resolves into restrained release."
+    role_arc_summary = (
+        str(raw_plan.get("role_arc_summary") or "").strip()
+        or "Primary-actor arc moves from pressure to release through grounded performance and intimacy while preserving one coherent world family."
+    )
     continuity_notes = [str(item).strip() for item in _safe_list(raw_plan.get("continuity_notes")) if str(item).strip()]
     if not continuity_notes:
         continuity_notes = [
