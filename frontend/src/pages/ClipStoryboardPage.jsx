@@ -9095,7 +9095,7 @@ const clearScenarioPipelineDownstreamRuntime = useCallback(({
 const applyScenarioPipelinePreRunInvalidation = useCallback(({ stageId = "", debugNodeId = "", sourceNodeId = "" } = {}) => {
   const normalizedStageId = String(stageId || "").trim().toLowerCase();
   if (!normalizedStageId) return;
-  const requiresHardRuntimeClear = new Set(["story_core", "role_plan", "scene_plan", "scene_prompts", "finalize"]).has(normalizedStageId);
+  const requiresHardRuntimeClear = new Set(["story_core", "role_plan", "scene_plan", "scene_prompts"]).has(normalizedStageId);
   clearScenarioPipelineDownstreamRuntime({
     fromStageId: normalizedStageId,
     debugNodeId,
@@ -16167,6 +16167,14 @@ onClipSec: (nodeId, value) => {
             && !!previousConnectedContextFingerprint
             && sourceConnectedContextFingerprint !== previousConnectedContextFingerprint;
           const sourceScenarioContextStale = Boolean(sourceNode?.data?.scenarioContextStale);
+          const sourceStageId = String(
+            sourceNode?.data?.lastRequestedStageId
+            || sourceNode?.data?.pendingOutputs?.requestedStageId
+            || sourceNode?.data?.directorOutput?.requestedStageId
+            || sourceNode?.data?.outputs?.directorOutput?.requestedStageId
+            || ""
+          ).trim().toLowerCase();
+          const isFinalizeOnlyStageApply = sourceStageId === "finalize";
           const directFinalStoryboard = (
             sourceNode?.data?.storyboardPackage?.final_storyboard
             || sourceNode?.data?.directorOutput?.storyboardPackage?.final_storyboard
@@ -16267,8 +16275,13 @@ onClipSec: (nodeId, value) => {
           const previousRevision = String(base?.data?.storyboardRevision || "");
           const nextRevision = sourceScenarioRevision || previousRevision;
           const revisionChanged = previousRevision !== nextRevision;
+          const shouldSkipHardResetForFinalizeOnlyApply = isFinalizeOnlyStageApply
+            && !sourceIsGenerating
+            && !sourceScenarioContextStale
+            && !connectedContextChanged;
           const shouldHardResetStoryboardRuntime = validScenarioSource
             && !sourceIsGenerating
+            && !shouldSkipHardResetForFinalizeOnlyApply
             && (revisionChanged || sourceScenarioContextStale || connectedContextChanged);
           const runtimeBaseData = shouldHardResetStoryboardRuntime
             ? clearScenarioStoryboardGeneratedRuntime(base?.data || {}, { clearScenes: true })
@@ -17507,6 +17520,7 @@ onClipSec: (nodeId, value) => {
                         ? response.meta.diagnostics
                         : (nextStoryboardPackage?.diagnostics && typeof nextStoryboardPackage.diagnostics === "object" ? nextStoryboardPackage.diagnostics : {}),
                       stageStatuses: nextStoryboardPackage?.stage_statuses && typeof nextStoryboardPackage.stage_statuses === "object" ? nextStoryboardPackage.stage_statuses : {},
+                      lastRequestedStageId: stageId,
                       rawScenarioResponseSummary: compactResponseSummary,
                       normalizedStageOutputs: compactNormalizedOutputs,
                     },
@@ -17536,6 +17550,7 @@ onClipSec: (nodeId, value) => {
                       executedStages: Array.isArray(response?.executedStages) ? response.executedStages : [],
                     },
                     scenarioPackage: isFinalizeStage ? (responseFinalStoryboard || null) : null,
+                    requestedStageId: stageId,
                     ...(responseDebugMode ? { debugStoryboardPackage: nextStoryboardPackage } : {}),
                   };
                   return {
@@ -17548,6 +17563,7 @@ onClipSec: (nodeId, value) => {
                       pendingDirectorOutput: null,
                       pendingGeneratedAt: generatedAt,
                       pendingScenarioRevision: nextRevision,
+                      lastRequestedStageId: stageId,
                     },
                   };
                 })));
