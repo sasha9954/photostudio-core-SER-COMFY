@@ -3102,6 +3102,39 @@ def _resolve_scene_video_metadata(payload: ClipVideoIn, scene_contract: dict[str
     }
 
 
+def _is_video_metadata_route_allowed(
+    *,
+    payload: ClipVideoIn,
+    scene_contract: dict[str, Any] | None,
+    workflow_key: str,
+    model_key: str,
+) -> bool:
+    normalized_final_workflow_key = _normalize_ltx_workflow_key(workflow_key)
+    normalized_model_key = str(model_key or "").strip().lower()
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    route_candidates = [
+        payload.resolvedWorkflowKey,
+        payload.ltxMode,
+        payload.renderMode,
+        contract.get("resolvedWorkflowKey"),
+        contract.get("resolved_workflow_key"),
+        contract.get("video_generation_route"),
+        contract.get("videoGenerationRoute"),
+        contract.get("route"),
+    ]
+    normalized_candidates = {
+        _normalize_ltx_workflow_key(candidate)
+        for candidate in route_candidates
+        if str(candidate or "").strip()
+    }
+    route_is_i2v = "i2v" in normalized_candidates if normalized_candidates else True
+    return (
+        normalized_final_workflow_key == "i2v"
+        and normalized_model_key == "ltx23_dev_fp8"
+        and route_is_i2v
+    )
+
+
 def _infer_selected_view_hint(*values: Any) -> str:
     normalized = " ".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
     if not normalized:
@@ -15184,7 +15217,13 @@ def clip_video(payload: ClipVideoIn):
             or ""
         ).strip()
         scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
-        has_gemini_video_metadata = bool(scene_video_metadata.get("valid"))
+        metadata_route_allowed = _is_video_metadata_route_allowed(
+            payload=payload,
+            scene_contract=scene_contract_for_prompt,
+            workflow_key=final_workflow_key,
+            model_key=resolved_model_key,
+        )
+        has_gemini_video_metadata = bool(metadata_route_allowed and scene_video_metadata.get("valid"))
         if has_gemini_video_metadata:
             effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
             scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
@@ -15227,6 +15266,8 @@ def clip_video(payload: ClipVideoIn):
                 {
                     "sceneId": scene_id,
                     "source": "gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder",
+                    "workflowKey": final_workflow_key,
+                    "metadataRouteAllowed": metadata_route_allowed,
                     "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
                     "camera_tag": str(scene_video_metadata.get("camera_tag") or ""),
                     "finalPositivePromptPreview": _prompt_preview(effective_prompt, 280),
@@ -15955,7 +15996,13 @@ def clip_video(payload: ClipVideoIn):
     scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
     scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
     scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
-    has_gemini_video_metadata = bool(scene_video_metadata.get("valid"))
+    metadata_route_allowed = _is_video_metadata_route_allowed(
+        payload=payload,
+        scene_contract=scene_contract_for_prompt,
+        workflow_key=final_workflow_key,
+        model_key=resolved_model_key,
+    )
+    has_gemini_video_metadata = bool(metadata_route_allowed and scene_video_metadata.get("valid"))
     if has_gemini_video_metadata:
         effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
         scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
@@ -15994,6 +16041,8 @@ def clip_video(payload: ClipVideoIn):
             {
                 "sceneId": scene_id,
                 "source": "gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder",
+                "workflowKey": final_workflow_key,
+                "metadataRouteAllowed": metadata_route_allowed,
                 "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
                 "camera_tag": str(scene_video_metadata.get("camera_tag") or ""),
                 "finalPositivePromptPreview": _prompt_preview(effective_prompt, 280),

@@ -35,6 +35,7 @@ _ALLOWED_CAMERA_TAGS = {
 _NEGATIVE_FALLBACK = (
     "identity drift, broken anatomy, camera shake, surreal motion, background morphing"
 )
+_FINAL_VIDEO_METADATA_ALLOWED_ROUTES = {"i2v"}
 
 
 _CANON_SYSTEM_INSTRUCTION = """
@@ -172,6 +173,11 @@ def _sanitize_metadata(raw: Any, scene: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _is_video_metadata_route_allowed(scene: dict[str, Any]) -> bool:
+    route = str(scene.get("route") or "").strip().lower()
+    return route in _FINAL_VIDEO_METADATA_ALLOWED_ROUTES
+
+
 def _build_scene_input_payload(scene: dict[str, Any], package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     role_plan = _safe_dict(package.get("role_plan"))
@@ -240,8 +246,11 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     for scene in scenes:
         scene_payload = _build_scene_input_payload(scene, package)
         fallback = _fallback_metadata(scene)
-        metadata = fallback
-        if str(api_key or "").strip():
+        route_allowed = _is_video_metadata_route_allowed(scene)
+        metadata: dict[str, str] = {}
+        if route_allowed:
+            metadata = fallback
+        if route_allowed and str(api_key or "").strip():
             try:
                 prompt = _build_prompt(scene_payload)
                 response = post_generate_content(
@@ -267,6 +276,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             {
                 "sceneId": str(scene.get("scene_id") or "").strip(),
                 "route": str(scene.get("route") or "").strip(),
+                "metadata_route_allowed": route_allowed,
                 "prompt_source": str(metadata.get("prompt_source") or ""),
                 "ltx_positive_preview": str(metadata.get("ltx_positive") or "")[:220],
                 "ltx_negative_preview": str(metadata.get("ltx_negative") or "")[:220],
