@@ -1970,6 +1970,14 @@ def _validate_story_core_v11_payload(
     audio_segments: list[dict[str, Any]],
     user_concept: str,
 ) -> tuple[bool, str, list[str]]:
+    def _zone_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+
     errors: list[str] = []
     required_strings = ("core_version", "story_summary", "opening_anchor", "ending_callback_rule")
     for key in required_strings:
@@ -2019,14 +2027,48 @@ def _validate_story_core_v11_payload(
             mismatch_errors.append("segment_order_conflict")
         return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
 
-    technical_tokens = ("i2v", "ia2v", "first_last", "camera", "framing", "motion", "prompt", "renderer", "delivery")
+    route_tokens = ("i2v", "ia2v", "first_last")
+    technical_tokens = (
+        "camera",
+        "framing",
+        "shot",
+        "dolly",
+        "zoom",
+        "pan",
+        "tilt",
+        "motion",
+        "choreograph",
+        "prompt",
+        "renderer",
+        "delivery",
+    )
     role_tokens = ("cast", "roles", "role_plan", "character_1:", "character_2:", "character_3:")
     drift_keys = {"t0", "t1", "scene_slots", "scene_candidate_windows", "phrase_units"}
     json_dump = json.dumps(payload, ensure_ascii=False).lower()
     if any(token in json_dump for token in drift_keys):
         return False, CORE_TIMING_DRIFT, ["core_payload_attempts_timing_or_legacy_grid_control"]
-    if any(token in json_dump for token in technical_tokens):
-        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_or_route_language"]
+
+    forbidden_zones: list[Any] = [
+        payload.get("story_summary"),
+        payload.get("opening_anchor"),
+        payload.get("ending_callback_rule"),
+        payload.get("global_arc"),
+        payload.get("identity_doctrine"),
+        payload.get("narrative_segments"),
+    ]
+    forbidden_text = " ".join(_zone_text(zone) for zone in forbidden_zones if zone is not None).lower()
+    if any(token in forbidden_text for token in technical_tokens):
+        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_language_in_forbidden_zone"]
+    if any(token in forbidden_text for token in route_tokens):
+        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
+
+    direct_route_assignment_patterns = (
+        r"segment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}(->|=>|:|uses?|route)[^\n]{0,24}(i2v|ia2v|first_last)",
+        r"scene\s*\d+[^\n]{0,40}(->|=>|:|uses?|route)[^\n]{0,24}(i2v|ia2v|first_last)",
+    )
+    if any(re.search(pattern, json_dump) for pattern in direct_route_assignment_patterns):
+        return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_direct_route_assignment"]
+
     if any(token in json_dump for token in role_tokens):
         return False, CORE_ROLE_SPAWNING, ["core_payload_contains_role_or_cast_assignment"]
 
