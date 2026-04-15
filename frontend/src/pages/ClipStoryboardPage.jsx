@@ -14260,6 +14260,14 @@ Aspect ratio: ${imageFormat}`,
       ? buildContinuousContinuityBridge({ scene: targetScene, previousScene: targetPreviousScene })
       : "";
     const strictFirstLastMode = String(effectiveWorkflowKey || "").trim().toLowerCase() === "f_l";
+    const metadataWorkflowAllowed = String(effectiveWorkflowKey || "").trim().toLowerCase() === "i2v";
+    const metadataModelAllowed = String(resolvedModelKey || "").trim().toLowerCase() === "ltx23_dev_fp8";
+    const metadataRouteAllowed = Boolean(
+      metadataWorkflowAllowed
+      && metadataModelAllowed
+      && !strictFirstLastMode
+      && !lipSyncRoute
+    );
     const originalVideoPrompt = getSceneTransitionPrompt(targetScene);
     const strictFirstLastPositivePrompt = String(
       targetScene?.transitionActionPrompt
@@ -14272,7 +14280,7 @@ Aspect ratio: ${imageFormat}`,
     ).trim();
     const strictFirstLastNegativePrompt = resolveScenarioSceneNegativePrompt(targetScene);
     const sceneVideoMetadata = resolveScenarioSceneVideoMetadata(targetScene);
-    const hasVideoMetadata = Boolean(sceneVideoMetadata.ltxPositive && sceneVideoMetadata.ltxNegative);
+    const hasVideoMetadata = Boolean(metadataRouteAllowed && sceneVideoMetadata.ltxPositive);
     const sceneHumanVisualAnchors = (strictFirstLastMode || hasVideoMetadata) ? [] : buildScenarioHumanVisualAnchors(targetScene);
     const humanAnchorBlock = sceneHumanVisualAnchors.length
       ? [
@@ -14434,11 +14442,15 @@ Aspect ratio: ${imageFormat}`,
       };
       const payloadNegativePrompt = strictFirstLastMode
         ? strictFirstLastNegativePrompt
-        : (hasVideoMetadata ? sceneVideoMetadata.ltxNegative : resolveScenarioSceneNegativePrompt(targetScene));
+        : (hasVideoMetadata
+          ? (sceneVideoMetadata.ltxNegative || resolveScenarioSceneNegativePrompt(targetScene))
+          : resolveScenarioSceneNegativePrompt(targetScene));
       console.info("[SCENARIO VIDEO PROMPT SOURCE]", {
         sceneId,
         source: hasVideoMetadata ? "video_metadata" : "legacy_frontend_glue",
+        route: String(effectiveWorkflowKey || ""),
         hasVideoMetadata,
+        metadataRouteAllowed,
         finalVideoPromptPreview: String(finalVideoPrompt || "").slice(0, 280),
         finalNegativePreview: String(payloadNegativePrompt || "").slice(0, 220),
       });
