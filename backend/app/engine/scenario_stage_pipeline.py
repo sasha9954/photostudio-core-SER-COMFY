@@ -2682,6 +2682,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
 
+    role_by_segment = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(role_plan.get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
     role_by_scene = {
         str(_safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
         for row in _safe_list(role_plan.get("scene_roles"))
@@ -2705,7 +2710,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
 
     scene_ids: list[str] = []
-    for source in (plan_by_scene, prompts_by_scene, role_by_scene, final_video_prompt_by_scene):
+    for source in (plan_by_scene, prompts_by_scene, role_by_segment, role_by_scene, final_video_prompt_by_scene):
         for scene_id in source.keys():
             if scene_id and scene_id not in scene_ids:
                 scene_ids.append(scene_id)
@@ -2713,7 +2718,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     final_scenes: list[dict[str, Any]] = []
     for idx, scene_id in enumerate(scene_ids, start=1):
         scene_plan_row = _safe_dict(plan_by_scene.get(scene_id))
-        role_row = _safe_dict(role_by_scene.get(scene_id))
+        role_row = _safe_dict(role_by_segment.get(scene_id)) or _safe_dict(role_by_scene.get(scene_id))
         prompt_row = _safe_dict(prompts_by_scene.get(scene_id))
         final_video_prompt_row = _safe_dict(final_video_prompt_by_scene.get(scene_id))
         prompt_notes = _safe_dict(prompt_row.get("prompt_notes"))
@@ -2749,6 +2754,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         active_roles = _safe_list(role_row.get("active_roles"))
         secondary_roles = _safe_list(role_row.get("secondary_roles"))
         primary_role = str(role_row.get("primary_role") or scene_plan_row.get("primary_role") or "").strip()
+        if not active_roles:
+            active_roles = list(
+                dict.fromkeys([primary_role, *[str(role).strip() for role in secondary_roles if str(role).strip()]])
+            )
         must_appear = list(
             dict.fromkeys(
                 [
@@ -2826,7 +2835,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "audio_slice_expected_duration_sec": audio_slice_expected_duration_sec,
             "prompt_notes": prompt_notes,
             "video_metadata": video_metadata,
-            "scene_presence_mode": str(role_row.get("scene_presence_mode") or scene_plan_row.get("scene_presence_mode") or "").strip(),
+            "scene_presence_mode": str(role_row.get("presence_mode") or role_row.get("scene_presence_mode") or scene_plan_row.get("scene_presence_mode") or "").strip(),
+            "presence_weight": str(role_row.get("presence_weight") or "").strip(),
             "route_reason": str(scene_plan_row.get("route_reason") or "").strip(),
             "motion_intent": str(scene_plan_row.get("motion_intent") or "").strip(),
             "watchability_role": str(scene_plan_row.get("watchability_role") or "").strip(),
@@ -2847,8 +2857,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "context_refs": refs_inventory,
             "connected_context_summary": _safe_dict(input_pkg.get("connected_context_summary")),
             "role_type_by_role": assigned_roles,
-            "world_continuity": _safe_dict(role_plan.get("world_continuity")),
-            "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
+            "world_continuity": _safe_dict(story_core.get("world_lock")),
+            "continuity_notes": _safe_list(story_core.get("story_guidance")),
             "story_locks": {
                 "identity_lock": _safe_dict(story_core.get("identity_lock")),
                 "world_lock": _safe_dict(story_core.get("world_lock")),
@@ -2936,9 +2946,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "style_lock": _safe_dict(story_core.get("style_lock")),
             "narrative_locks": _safe_dict(story_core.get("narrative_locks")),
         },
-        "world_continuity": _safe_dict(role_plan.get("world_continuity")),
-        "role_arc_summary": str(role_plan.get("role_arc_summary") or "").strip(),
-        "continuity_notes": _safe_list(role_plan.get("continuity_notes")),
+        "world_continuity": _safe_dict(story_core.get("world_lock")),
+        "continuity_notes": _safe_list(story_core.get("story_guidance")),
         "route_mix_summary": _safe_dict(scene_plan.get("route_mix_summary")),
         "scene_arc_summary": str(scene_plan.get("scene_arc_summary") or "").strip(),
         "route_strategy_notes": _safe_list(scene_plan.get("route_strategy_notes")),
@@ -2953,7 +2962,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         "[FINALIZE STORYBOARD BUILD] planSceneCount=%s promptSceneCount=%s roleSceneCount=%s finalSceneCount=%s sceneIds=%s",
         len(plan_by_scene),
         len(prompts_by_scene),
-        len(role_by_scene),
+        len(role_by_segment) or len(role_by_scene),
         len(final_scenes),
         scene_ids,
     )
@@ -2963,7 +2972,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_scene_count"] = len(final_scenes)
     diagnostics["finalize_used_scene_prompts"] = bool(prompts_by_scene)
     diagnostics["finalize_used_scene_plan"] = bool(plan_by_scene)
-    diagnostics["finalize_used_role_plan"] = bool(role_by_scene)
+    diagnostics["finalize_used_role_plan"] = bool(role_by_segment or role_by_scene)
     diagnostics["finalize_used_final_video_prompt"] = bool(final_video_prompt_by_scene)
     package["diagnostics"] = diagnostics
     _append_diag_event(package, f"final_storyboard built scenes={len(final_scenes)}", stage_id="finalize")
@@ -5499,20 +5508,17 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     content_type = str(input_pkg.get("content_type") or "").strip().lower()
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["role_plan_backend"] = "gemini"
-    diagnostics["role_plan_prompt_version"] = ROLE_PLAN_PROMPT_VERSION
+    diagnostics["role_plan_prompt_version"] = "roles_v1_1"
     diagnostics["role_plan_error"] = ""
     diagnostics["role_plan_validation_error"] = ""
     diagnostics["validation_error"] = ""
     diagnostics["role_plan_used_fallback"] = False
-    diagnostics["role_plan_scene_count"] = 0
-    diagnostics["role_plan_present_roles"] = []
-    diagnostics["role_plan_character_roles_count"] = 0
-    diagnostics["role_plan_world_roles_count"] = 0
-    diagnostics["role_plan_world_anchor_mode"] = ""
-    diagnostics["role_plan_country_or_region"] = ""
-    diagnostics["role_plan_presence_modes"] = []
-    diagnostics["role_plan_presence_flat"] = False
-    diagnostics["role_plan_performance_focus_flat"] = False
+    diagnostics["role_plan_roles_version"] = ""
+    diagnostics["role_plan_roster_count"] = 0
+    diagnostics["role_plan_scene_casting_count"] = 0
+    diagnostics["role_plan_segment_coverage_ok"] = False
+    diagnostics["role_plan_retry_count"] = 0
+    diagnostics["role_plan_error_code"] = ""
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
     diagnostics["role_plan_empty"] = False
@@ -5522,7 +5528,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         package["role_plan"] = _attach_downstream_mode_metadata({}, package)
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["role_plan_error"] = f"unsupported_content_type:{content_type}"
-        diagnostics["role_plan_used_fallback"] = True
+        diagnostics["role_plan_used_fallback"] = False
         diagnostics["role_plan_skipped"] = True
         diagnostics["role_plan_skip_reason"] = f"unsupported_content_type:{content_type}"
         package["diagnostics"] = diagnostics
@@ -5539,31 +5545,24 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     role_diag = _safe_dict(result.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["role_plan_backend"] = "gemini"
-    diagnostics["role_plan_prompt_version"] = str(role_diag.get("prompt_version") or ROLE_PLAN_PROMPT_VERSION)
+    diagnostics["role_plan_prompt_version"] = str(role_diag.get("prompt_version") or "roles_v1_1")
     diagnostics["role_plan_used_fallback"] = bool(result.get("used_fallback"))
-    diagnostics["role_plan_scene_count"] = int(role_diag.get("scene_count") or len(_safe_list(role_plan.get("scene_roles"))))
-    diagnostics["role_plan_present_roles"] = _safe_list(role_diag.get("present_roles"))
-    diagnostics["role_plan_character_roles_count"] = int(role_diag.get("character_roles_count") or 0)
-    diagnostics["role_plan_world_roles_count"] = int(role_diag.get("world_roles_count") or 0)
-    diagnostics["role_plan_world_anchor_mode"] = str(role_diag.get("role_plan_world_anchor_mode") or "")
-    diagnostics["role_plan_country_or_region"] = str(role_diag.get("role_plan_country_or_region") or "")
-    diagnostics["role_plan_presence_modes"] = _safe_list(role_diag.get("role_plan_presence_modes"))
-    diagnostics["role_plan_presence_flat"] = bool(role_diag.get("role_plan_presence_flat"))
-    diagnostics["role_plan_performance_focus_flat"] = bool(role_diag.get("role_plan_performance_focus_flat"))
+    diagnostics["role_plan_roles_version"] = str(role_plan.get("roles_version") or role_diag.get("roles_version") or "")
+    diagnostics["role_plan_roster_count"] = int(role_diag.get("roster_count") or len(_safe_list(role_plan.get("roster"))))
+    diagnostics["role_plan_scene_casting_count"] = int(role_diag.get("scene_casting_count") or len(_safe_list(role_plan.get("scene_casting"))))
+    diagnostics["role_plan_segment_coverage_ok"] = bool(role_diag.get("segment_coverage_ok"))
+    diagnostics["role_plan_retry_count"] = int(result.get("retry_count") or role_diag.get("retry_count") or 0)
+    diagnostics["role_plan_error_code"] = str(result.get("error_code") or role_diag.get("error_code") or "")
     diagnostics["role_plan_error"] = str(result.get("error") or "")
     diagnostics["role_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["validation_error"] = str(result.get("validation_error") or "")
     diagnostics["role_plan_skipped"] = False
     diagnostics["role_plan_skip_reason"] = ""
-    diagnostics["role_plan_empty"] = not bool(role_plan and _safe_list(role_plan.get("scene_roles")))
+    diagnostics["role_plan_empty"] = not bool(role_plan and _safe_list(role_plan.get("scene_casting")))
     package["diagnostics"] = diagnostics
 
-    if role_plan and _safe_list(role_plan.get("scene_roles")):
+    if role_plan and _safe_list(role_plan.get("scene_casting")):
         _append_diag_event(package, "role_plan generated", stage_id="role_plan")
-        if diagnostics.get("role_plan_presence_flat"):
-            _append_diag_event(package, "role_plan_presence_flat warning", stage_id="role_plan")
-        if diagnostics.get("role_plan_performance_focus_flat"):
-            _append_diag_event(package, "role_plan_performance_focus_flat warning", stage_id="role_plan")
     else:
         _append_diag_event(package, "role_plan empty", stage_id="role_plan")
     return package

@@ -345,6 +345,30 @@ def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
+    scene_casting = _safe_list(role_plan.get("scene_casting"))
+    if scene_casting:
+        for row_raw in scene_casting:
+            row = _safe_dict(row_raw)
+            segment_id = str(row.get("segment_id") or "").strip()
+            if segment_id:
+                lookup[segment_id] = {
+                    "scene_id": segment_id,
+                    "segment_id": segment_id,
+                    "primary_role": str(row.get("primary_role") or "").strip(),
+                    "secondary_roles": _safe_list(row.get("secondary_roles")),
+                    "scene_presence_mode": str(row.get("presence_mode") or "").strip(),
+                    "presence_weight": str(row.get("presence_weight") or "").strip(),
+                    "performance_focus": str(row.get("performance_focus") or "").strip(),
+                    "active_roles": list(
+                        dict.fromkeys(
+                            [
+                                str(row.get("primary_role") or "").strip(),
+                                *[str(role).strip() for role in _safe_list(row.get("secondary_roles")) if str(role).strip()],
+                            ]
+                        )
+                    ),
+                }
+        return lookup
     for row_raw in _safe_list(role_plan.get("scene_roles")):
         row = _safe_dict(row_raw)
         scene_id = str(row.get("scene_id") or "").strip()
@@ -354,7 +378,9 @@ def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, A
 
 
 def _build_scene_world_summary(role_plan: dict[str, Any], story_core: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    world = _safe_dict(role_plan.get("world_continuity"))
+    world = _safe_dict(story_core.get("world_lock"))
+    if not world:
+        world = _safe_dict(role_plan.get("world_continuity"))
     environment_family = str(world.get("environment_family") or "").strip()
     country = str(world.get("country_or_region") or "").strip()
     location_progression = [str(item).strip() for item in _safe_list(world.get("location_progression")) if str(item).strip()]
@@ -444,8 +470,10 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
         },
         "role_plan": {
-            "global_roles": _safe_dict(role_plan.get("global_roles")),
-            "world_continuity": _safe_dict(role_plan.get("world_continuity")),
+            "roles_version": str(role_plan.get("roles_version") or ""),
+            "roster": _safe_list(role_plan.get("roster")),
+            "scene_casting": _safe_list(role_plan.get("scene_casting")),
+            "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
             "world_summary": world_summary,
             "scene_roles": _safe_list(role_plan.get("scene_roles")),
             "compiled_contract": {
@@ -582,7 +610,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "MODE IS CLIP ONLY.\\n"
         "Build final watchable scene plan from fixed scene windows.\\n"
         "Audio energy is the primary default driver of dramaturgy in clip/music_video mode.\\n"
-        "Do not read or reason from raw Scenario Director text in this stage; use role_plan.compiled_contract only for cast/world constraints.\\n"
+        "Do not read or reason from raw Scenario Director text in this stage; use role_plan.scene_casting/roster as cast source, with legacy compiled_contract only as fallback.\\n"
         "Refs lock identity/world/style continuity; text sets premise only when present.\\n"
         "Use scene windows exactly as provided.\\n"
         "Do not add, merge, split, or invent extra scenes.\\n"
@@ -594,7 +622,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "Do NOT assign ia2v to every performance scene. Do NOT flatten all scenes into one route.\\n"
         "Route spacing policy: ia2v scenes must not be adjacent; spread ia2v as rare emotional accents with at least one non-ia2v between them whenever possible.\\n"
         "first_last scenes should not be adjacent to another first_last unless unavoidable. Keep route rhythm staggered, not paired.\\n"
-        "Preserve realism and coherent lighting/world progression from role_plan world continuity.\\n"
+        "Preserve realism and coherent lighting/world progression from story_core world continuity (role_plan world block is legacy fallback only).\\n"
         "CLIP MODE CORE PRINCIPLE: visual/emotional arc under music energy, NOT literal travel-story by default.\\n"
         "If user/director text does not explicitly demand travel plot, keep one coherent environment family and build progression through energy/intimacy/framing/pressure-release.\\n"
         "Do not invent arbitrary location-chain city-route narratives from nowhere.\\n"

@@ -180,11 +180,12 @@ def _is_video_metadata_route_allowed(scene: dict[str, Any]) -> bool:
 
 def _build_scene_input_payload(scene: dict[str, Any], package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
+    story_core = _safe_dict(package.get("story_core"))
     role_plan = _safe_dict(package.get("role_plan"))
     scene_plan = _safe_dict(package.get("scene_plan"))
     continuity = {
-        "world_continuity": _safe_dict(role_plan.get("world_continuity")),
-        "continuity_notes": _safe_list(role_plan.get("continuity_notes"))[:8],
+        "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
+        "continuity_notes": _safe_list(story_core.get("story_guidance"))[:8] or _safe_list(role_plan.get("continuity_notes"))[:8],
         "route_mix_summary": _safe_dict(scene_plan.get("route_mix_summary")),
     }
     return {
