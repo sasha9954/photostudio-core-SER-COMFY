@@ -12149,13 +12149,34 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       });
     }
 
-    const imageStrategy = String(targetScene?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
-    const requestedSlot = slot === "start" || slot === "end" ? slot : "single";
-    const normalizedSlot = imageStrategy === "first_last"
+    const videoProfile = resolveScenarioSceneVideoProfile(targetScene || {});
+    const canonicalRoute = String(videoProfile?.canonicalRoute || "").trim().toLowerCase();
+    const imageStrategy = String(targetScene?.imageStrategy || videoProfile?.imageStrategy || deriveScenarioImageStrategy(targetScene)).trim().toLowerCase() || "single";
+    const requestedSlotRaw = String(slot || "single").trim().toLowerCase();
+    const requestedSlot = (requestedSlotRaw === "start" || requestedSlotRaw === "first")
+      ? "start"
+      : (requestedSlotRaw === "end" || requestedSlotRaw === "last")
+        ? "end"
+        : "single";
+    const isTwoFrameScene = Boolean(
+      videoProfile?.requiresTwoFrames
+      || canonicalRoute === "f_l"
+      || imageStrategy === "first_last"
+    );
+    const normalizedSlot = isTwoFrameScene
       ? (requestedSlot === "end" ? "end" : "start")
       : (imageStrategy === "continuation" ? (requestedSlot === "end" ? "end" : "start") : "single");
+    console.debug("[SCENARIO FIRST_LAST SLOT MODE]", {
+      sceneId: String(targetScene?.sceneId || ""),
+      isTwoFrameScene,
+      slotAction: requestedSlotRaw || "single",
+      effectiveSlot: normalizedSlot,
+    });
     console.debug("[SCENARIO IMAGE] generation_mode_resolved", {
       sceneId: String(targetScene?.sceneId || ""),
+      canonicalRoute,
+      requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
+      isTwoFrameScene,
       imageStrategy,
       requestedSlot,
       normalizedSlot,
@@ -12198,7 +12219,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
     const { width, height } = getSceneImageSize(imageFormat);
 
     const sceneDeltaRaw = getSceneFramePromptByStrategy(targetScene, normalizedSlot);
-    const sceneDelta = imageStrategy === "first_last"
+    const sceneDelta = isTwoFrameScene
       ? ensureFirstLastSlotPrompt(targetScene, normalizedSlot, sceneDeltaRaw)
       : sceneDeltaRaw;
     const continuityContractLines = [
@@ -12224,9 +12245,9 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       return;
     }
     const visualGlueText = buildScenarioVisualGlueText(targetScene);
-    const applyFirstLastContinuityContract = imageStrategy === "first_last" && normalizedSlot === "end";
+    const applyFirstLastContinuityContract = isTwoFrameScene && normalizedSlot === "end";
     const finalSceneDelta = `${visualGlueText}\n\n${sceneDelta}${applyFirstLastContinuityContract ? `\n\n${firstLastContinuityClause}` : ""}`.trim();
-    if (imageStrategy === "first_last") {
+    if (isTwoFrameScene) {
       const firstLastDerived = deriveFirstLastFramePrompts(targetScene || {});
       const startPromptCheck = ensureFirstLastSlotPrompt(targetScene, "start", firstLastDerived.start || getSceneFramePromptByStrategy(targetScene, "start"));
       const endPromptCheck = ensureFirstLastSlotPrompt(targetScene, "end", firstLastDerived.end || getSceneFramePromptByStrategy(targetScene, "end"));
@@ -13155,14 +13176,16 @@ Aspect ratio: ${imageFormat}`,
         return;
       }
       let runtimeImagePatch = {};
-      if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "start") {
+      if ((imageStrategy === "continuation" || isTwoFrameScene) && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
           imageUrl: "",
           generatedImageUrl: generatedImageUrl,
           resultImageUrl: generatedImageUrl,
           finalImageUrl: generatedImageUrl,
           startImageUrl: generatedImageUrl,
+          firstFrameImageUrl: generatedImageUrl,
           startFrameImageUrl: generatedImageUrl,
+          startFramePreviewUrl: generatedImageUrl,
           suppressInheritedStartPreview: false,
           imageStatus: "",
           imageError: "",
@@ -13182,9 +13205,20 @@ Aspect ratio: ${imageFormat}`,
           startFrameError: imageDegraded ? imageDegradeReason : "",
           imageDegraded,
         };
-      } else if ((imageStrategy === "continuation" || imageStrategy === "first_last") && normalizedSlot === "end") {
+        console.debug("[SCENARIO FIRST_LAST SLOT APPLY]", {
+          sceneId: String(sceneId || ""),
+          canonicalRoute,
+          requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
+          requestedSlot: normalizedSlot,
+          returnedImageUrl: generatedImageUrl,
+          wroteStartImage: true,
+          wroteEndImage: false,
+          wroteGenericImage: false,
+          reason: "slot_specific_start_apply",
+        });
+      } else if ((imageStrategy === "continuation" || isTwoFrameScene) && normalizedSlot === "end") {
         const existingStartAssetUrl = String(targetScene?.startImageUrl || targetScene?.startFrameImageUrl || "").trim();
-        const duplicatedFirstLastOutput = imageStrategy === "first_last" && existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl;
+        const duplicatedFirstLastOutput = isTwoFrameScene && existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl;
         console.debug("[SCENARIO FIRST_LAST ASSET CHECK]", {
           sceneId: String(sceneId || ""),
           startImageUrl: existingStartAssetUrl,
@@ -13200,7 +13234,9 @@ Aspect ratio: ${imageFormat}`,
           resultImageUrl: generatedImageUrl,
           finalImageUrl: generatedImageUrl,
           endImageUrl: generatedImageUrl,
+          lastFrameImageUrl: generatedImageUrl,
           endFrameImageUrl: generatedImageUrl,
+          endFramePreviewUrl: generatedImageUrl,
           suppressInheritedStartPreview: false,
           imageStatus: "",
           imageError: "",
@@ -13220,7 +13256,18 @@ Aspect ratio: ${imageFormat}`,
           endFrameError: imageDegraded ? imageDegradeReason : "",
           imageDegraded,
         };
-        if (imageStrategy === "first_last") {
+        console.debug("[SCENARIO FIRST_LAST SLOT APPLY]", {
+          sceneId: String(sceneId || ""),
+          canonicalRoute,
+          requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
+          requestedSlot: normalizedSlot,
+          returnedImageUrl: generatedImageUrl,
+          wroteStartImage: false,
+          wroteEndImage: true,
+          wroteGenericImage: false,
+          reason: "slot_specific_end_apply",
+        });
+        if (isTwoFrameScene) {
           console.debug("[SCENARIO FIRST_LAST ASSET CHECK]", {
             sceneId,
             startImageUrl: existingStartAssetUrl,
@@ -13260,6 +13307,17 @@ Aspect ratio: ${imageFormat}`,
           imageError: imageDegraded ? imageDegradeReason : "",
           imageDegraded,
         };
+        console.debug("[SCENARIO FIRST_LAST SLOT APPLY]", {
+          sceneId: String(sceneId || ""),
+          canonicalRoute,
+          requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
+          requestedSlot: normalizedSlot,
+          returnedImageUrl: generatedImageUrl,
+          wroteStartImage: false,
+          wroteEndImage: false,
+          wroteGenericImage: true,
+          reason: "single_image_scene_or_generic_apply",
+        });
       }
       updateScenarioSceneGenerationRuntime(sceneId, runtimeImagePatch, { nodeId: targetNodeId });
       updateScenarioSceneGenerationRuntime(sceneId, {
@@ -13350,7 +13408,7 @@ Aspect ratio: ${imageFormat}`,
           });
         }
       }, 0);
-      if (imageStrategy === "first_last" && requestedSlot === "single") {
+      if (isTwoFrameScene && requestedSlot === "single") {
         await handleGenerateScenarioImage("end", { sceneIndex: targetSceneIndex, sceneId });
       }
     } catch (e) {
