@@ -1415,6 +1415,11 @@ def _resolve_generation_and_target_duration(payload: ClipVideoIn, workflow_key: 
         generation_duration = target_duration
 
     normalized_workflow = _normalize_ltx_workflow_key(workflow_key) or str(workflow_key or "").strip().lower()
+    if normalized_workflow == "i2v":
+        generation_duration = float(target_duration) + 1.0
+        trim_reason = "generation_exceeds_target" if generation_duration > target_duration else "target_ge_generation_no_trim"
+        return float(generation_duration), float(target_duration), "i2v_plus_1s_compact_overgenerate", trim_reason
+
     overgenerate_allowed = normalized_workflow in {"i2v", "f_l"}
     overgenerate_applied = False
     overgenerate_reason = "not_applicable"
@@ -2013,6 +2018,62 @@ def _prompt_preview(value: str | None, limit: int = 500) -> str:
     return raw[: max(80, int(limit or 500))]
 
 
+LTX_I2V_COMPACT_NEGATIVE_FALLBACK = (
+    "identity drift, face drift, outfit drift, location drift, lighting drift, broken anatomy, extra limbs, "
+    "warped hands, camera shake, surreal motion, flips, acrobatics, body morphing"
+)
+
+
+def _is_ltx_i2v_compact_mode(*, workflow_key: str | None, model_key: str | None) -> bool:
+    normalized_workflow = _normalize_ltx_workflow_key(workflow_key)
+    normalized_model = str(model_key or "").strip().lower()
+    return normalized_workflow == "i2v" and normalized_model == "ltx23_dev_fp8"
+
+
+def _compact_sentence(value: str, *, fallback: str, limit: int = 140) -> str:
+    raw = re.sub(r"\s+", " ", str(value or "").strip())
+    if not raw:
+        return fallback
+    raw = re.split(r"[.!?;\n]", raw, maxsplit=1)[0].strip(" ,;:.")
+    if not raw:
+        return fallback
+    if len(raw) > limit:
+        raw = raw[:limit].rstrip(" ,;:.")
+    return raw or fallback
+
+
+def _infer_camera_instruction(*values: str) -> str:
+    blob = " ".join(str(v or "").strip().lower() for v in values if str(v or "").strip())
+    if not blob:
+        return "Camera holds a stable gentle push-in."
+    if any(marker in blob for marker in ("pan", "side", "lateral")):
+        return "Camera makes a slow stable side pan."
+    if any(marker in blob for marker in ("tilt", "upward", "downward")):
+        return "Camera performs a subtle controlled tilt."
+    if any(marker in blob for marker in ("track", "follow", "dolly", "push", "move in")):
+        return "Camera performs a gentle stable push-in."
+    if any(marker in blob for marker in ("static", "locked", "still", "hold")):
+        return "Camera remains locked and stable."
+    return "Camera performs a gentle stable push-in."
+
+
+def _looks_like_compact_ltx_negative(value: str) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    if len(normalized) > 320:
+        return False
+    banned_markers = (
+        "global video consistency",
+        "hard camera profile",
+        "contract-authorized actors",
+        "same world family",
+        "production setup consistency",
+    )
+    lowered = normalized.lower()
+    return not any(marker in lowered for marker in banned_markers)
+
+
 def _looks_like_human_scene(*values: Any, scene_human_visual_anchors: list[str] | None = None) -> bool:
     if isinstance(scene_human_visual_anchors, list) and any(str(item or "").strip() for item in scene_human_visual_anchors):
         return True
@@ -2520,6 +2581,7 @@ def _compose_video_effective_prompt(
     duet_identity_contract: str | None = None,
     director_genre_intent: str | None = None,
     workflow_key: str | None = None,
+    model_key: str | None = None,
 ) -> tuple[str, dict]:
     base_prompt = str(video_prompt or "").strip()
     transition_prompt = str(transition_action_prompt or "").strip()
@@ -2535,6 +2597,54 @@ def _compose_video_effective_prompt(
         or (scene_contract if isinstance(scene_contract, dict) else {}).get("negative_prompt")
         or ""
     ).strip()
+    if _is_ltx_i2v_compact_mode(workflow_key=workflow_key, model_key=model_key):
+        motion_source = transition_prompt or base_prompt
+        action_line = _compact_sentence(
+            motion_source,
+            fallback="She makes one natural, readable motion.",
+            limit=150,
+        )
+        camera_line = _infer_camera_instruction(transition_prompt, base_prompt)
+        effective_prompt = " ".join(
+            [
+                "Use the uploaded image as the exact first frame and identity anchor.",
+                "Same woman, same face, same outfit, same location, same light, same realism.",
+                action_line + ".",
+                camera_line,
+                "Real-time physically natural motion.",
+                "No identity drift, no broken anatomy, no camera shake, no surreal motion.",
+            ]
+        ).strip()
+        return effective_prompt, {
+            "has_humans": True,
+            "requestedPromptPreview": _prompt_preview(base_prompt, 500),
+            "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+            "effectivePromptLength": len(effective_prompt),
+            "videoPromptLength": len(base_prompt),
+            "transitionActionPromptLength": len(transition_prompt),
+            "sceneHumanVisualAnchors": [str(item or "").strip() for item in (scene_human_visual_anchors or []) if str(item or "").strip()],
+            "hardContinuityContractApplied": False,
+            "openingShot": None,
+            "identityLockApplied": True,
+            "genreHardeningApplied": False,
+            "genreHardeningSource": "ltx_safe_compact",
+            "genreHardeningPreview": "",
+            "ltxCanonApplied": False,
+            "ltxCanonLipSyncMode": False,
+            "duetHardeningApplied": False,
+            "duetHardeningSource": "ltx_safe_compact",
+            "duetContractDetected": False,
+            "duetContractPreview": {},
+            "routeAwareStrictModeApplied": True,
+            "resolvedStrictPositivePromptPreview": _prompt_preview(effective_prompt, 320),
+            "resolvedStrictNegativePromptPreview": "",
+            "humanAnchorsSuppressedForFirstLast": False,
+            "globalConsistencySuppressedForFirstLast": True,
+            "effectivePromptSource": "ltx_safe_compact",
+            "promptBuilderMode": "ltx_safe_compact",
+            "payloadVideoPromptPreview": _prompt_preview(base_prompt, 320),
+            "payloadTransitionActionPromptPreview": _prompt_preview(transition_prompt, 320),
+        }
     if strict_first_last_mode and strict_positive_prompt:
         effective_prompt = build_clip_video_motion_prompt(
             base_prompt=strict_positive_prompt,
@@ -2674,9 +2784,15 @@ def _compose_video_effective_prompt(
     }
 
 
-def _resolve_scene_video_negative_prompt(payload: ClipVideoIn, scene_contract: dict[str, Any] | None = None) -> str:
+def _resolve_scene_video_negative_prompt(
+    payload: ClipVideoIn,
+    scene_contract: dict[str, Any] | None = None,
+    *,
+    workflow_key: str | None = None,
+    model_key: str | None = None,
+) -> str:
     contract = scene_contract if isinstance(scene_contract, dict) else {}
-    return str(
+    resolved = str(
         payload.videoNegativePrompt
         or payload.video_negative_prompt
         or contract.get("negativeVideoPrompt")
@@ -2687,6 +2803,11 @@ def _resolve_scene_video_negative_prompt(payload: ClipVideoIn, scene_contract: d
         or contract.get("negative_prompt")
         or ""
     ).strip()
+    if _is_ltx_i2v_compact_mode(workflow_key=workflow_key, model_key=model_key):
+        if _looks_like_compact_ltx_negative(resolved):
+            return resolved
+        return LTX_I2V_COMPACT_NEGATIVE_FALLBACK
+    return resolved
 
 
 def _infer_selected_view_hint(*values: Any) -> str:
@@ -14780,8 +14901,14 @@ def clip_video(payload: ClipVideoIn):
             duet_identity_contract=payload.duetIdentityContract,
             director_genre_intent=payload.directorGenreIntent,
             workflow_key=final_workflow_key,
+            model_key=resolved_model_key,
         )
-        scene_video_negative_prompt = _resolve_scene_video_negative_prompt(payload, scene_contract_for_prompt)
+        scene_video_negative_prompt = _resolve_scene_video_negative_prompt(
+            payload,
+            scene_contract_for_prompt,
+            workflow_key=final_workflow_key,
+            model_key=resolved_model_key,
+        )
         print(
             "[CLIP VIDEO NEGATIVE TRACE] "
             + json.dumps(
@@ -14803,6 +14930,23 @@ def clip_video(payload: ClipVideoIn):
         )
         prompt_debug["resolvedStrictNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
         prompt_debug["payloadVideoNegativePromptPreview"] = _prompt_preview(scene_video_negative_prompt, 320)
+        if _is_ltx_i2v_compact_mode(workflow_key=final_workflow_key, model_key=resolved_model_key):
+            print(
+                "[LTX I2V PROMPT MODE] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "targetDurationSec": float(target_duration_sec),
+                        "generationDurationSec": float(generation_duration_sec),
+                        "overgenerateSeconds": round(float(generation_duration_sec - target_duration_sec), 3),
+                        "promptBuilderMode": "ltx_safe_compact",
+                        "positivePromptPreview": _prompt_preview(effective_prompt, 320),
+                        "negativePromptPreview": _prompt_preview(scene_video_negative_prompt, 320),
+                        "finalPromptLength": len(str(effective_prompt or "")),
+                    },
+                    ensure_ascii=False,
+                )
+            )
         print(
             "[CLIP VIDEO PROMPT TRANSPORT] "
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} source_image_url={source_image_url} "
@@ -15133,7 +15277,7 @@ def clip_video(payload: ClipVideoIn):
             negative_prompt=scene_video_negative_prompt,
             width=width,
             height=height,
-            requested_duration_sec=requested_duration,
+            requested_duration_sec=generation_duration_sec if _is_ltx_i2v_compact_mode(workflow_key=final_workflow_key, model_key=resolved_model_key) else requested_duration,
             workflow_path=workflow_path,
             workflow_key=final_workflow_key,
             model_key=resolved_model_key,
@@ -15360,7 +15504,7 @@ def clip_video(payload: ClipVideoIn):
             "model": resolved_model_key,
             "taskId": prompt_id,
             "mode": str(comfy_out.get("mode") or mode),
-            "requestedDurationSec": round(float(requested_duration), 3),
+            "requestedDurationSec": round(float(target_duration_sec if _is_ltx_i2v_compact_mode(workflow_key=final_workflow_key, model_key=resolved_model_key) else requested_duration), 3),
             "targetDurationSec": round(float(target_duration_sec), 3),
             "generationDurationSec": round(float(generation_duration_sec), 3),
             "providerDurationSec": round(float(source_video_duration_sec or comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or generation_duration_sec), 3),
@@ -15398,7 +15542,7 @@ def clip_video(payload: ClipVideoIn):
                 "negativePromptPreview": str(comfy_debug.get("negative_prompt_preview") or ""),
                 "resolvedNegativePromptNodeId": str(comfy_debug.get("resolved_negative_prompt_node_id") or ""),
                 "negativePromptSource": str(comfy_debug.get("negative_prompt_source") or "missing"),
-                "requestedDurationSec": float(requested_duration),
+                "requestedDurationSec": float(target_duration_sec if _is_ltx_i2v_compact_mode(workflow_key=final_workflow_key, model_key=resolved_model_key) else requested_duration),
                 "generationDurationSec": float(generation_duration_sec),
                 "targetDurationSec": float(target_duration_sec),
                 "providerDurationSec": float(comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or requested_duration),
