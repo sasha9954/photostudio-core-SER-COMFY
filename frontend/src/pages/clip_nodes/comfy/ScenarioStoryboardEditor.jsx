@@ -136,27 +136,38 @@ function isFirstLastScene(scene = {}) {
 }
 
 function resolveScenePreviewSources(scene = {}) {
-  const imageStrategy = String(scene?.imageStrategy || "").trim().toLowerCase() || "single";
-  const transitionType = String(scene?.transitionType || "").trim().toLowerCase();
-  const resolvedSinglePreviewSrc = String(resolveAssetUrl(scene?.imageUrl || "") || "").trim();
-  const resolvedStartPreviewSrc = String(resolveAssetUrl(
-    scene?.startImageUrl
-    || scene?.startFrameImageUrl
-    || scene?.startFramePreviewUrl
-    || scene?.imageUrl
-    || ""
-  ) || "").trim();
-  const resolvedEndPreviewSrc = String(resolveAssetUrl(
-    scene?.endImageUrl
-    || scene?.endFrameImageUrl
-    || scene?.endFramePreviewUrl
-    || ""
-  ) || "").trim();
-  const isContinuous = transitionType === "continuous" || imageStrategy === "continuation" || imageStrategy === "first_last";
+  const profile = resolveScenarioSceneVideoProfile(scene);
+  const canonicalRoute = String(profile?.canonicalRoute || "").trim().toLowerCase();
+  const imageStrategy = String(scene?.imageStrategy || profile?.imageStrategy || "").trim().toLowerCase() || "single";
+  const transitionType = String(scene?.transitionType || profile?.transitionType || "").trim().toLowerCase();
+  const isTwoFrameScene = Boolean(profile?.requiresTwoFrames || canonicalRoute === "f_l" || imageStrategy === "first_last");
+  const resolveAliasHit = (fields = []) => {
+    for (const field of fields) {
+      const value = String(scene?.[field] || "").trim();
+      if (value) return { field: `scene.${field}`, value };
+    }
+    return { field: "none", value: "" };
+  };
+  const singleHit = resolveAliasHit(["imageUrl", "generatedImageUrl", "resultImageUrl", "finalImageUrl", "previewUrl", "image_url", "preview_url"]);
+  const startHit = resolveAliasHit(["startImageUrl", "startFrameImageUrl", "startFramePreviewUrl", "firstFrameImageUrl", "firstImageUrl"]);
+  const endHit = resolveAliasHit(["endImageUrl", "endFrameImageUrl", "endFramePreviewUrl", "lastFrameImageUrl", "lastImageUrl"]);
+  const resolvedSinglePreviewSrc = String(resolveAssetUrl(singleHit.value || "") || "").trim();
+  const resolvedStartPreviewSrc = String(resolveAssetUrl(startHit.value || (isTwoFrameScene ? "" : singleHit.value) || "") || "").trim();
+  const resolvedEndPreviewSrc = String(resolveAssetUrl(endHit.value || "") || "").trim();
+  const isContinuous = transitionType === "continuous" || imageStrategy === "continuation" || isTwoFrameScene;
   const resolvedPreviewSrc = isContinuous
     ? (resolvedStartPreviewSrc || resolvedEndPreviewSrc || resolvedSinglePreviewSrc)
     : (resolvedSinglePreviewSrc || resolvedStartPreviewSrc || resolvedEndPreviewSrc);
-  return { resolvedPreviewSrc, resolvedSinglePreviewSrc, resolvedStartPreviewSrc, resolvedEndPreviewSrc };
+  return {
+    resolvedPreviewSrc,
+    resolvedSinglePreviewSrc,
+    resolvedStartPreviewSrc,
+    resolvedEndPreviewSrc,
+    canonicalRoute,
+    requiresTwoFrames: Boolean(profile?.requiresTwoFrames),
+    firstPreviewResolvedFrom: startHit.field,
+    lastPreviewResolvedFrom: endHit.field,
+  };
 }
 
 function deriveFirstLastFramePrompts(scene = {}) {
@@ -906,6 +917,17 @@ export default function ScenarioStoryboardEditor({
       end: endFrameSourceUrl,
     });
   }, [selectedScene?.imageUrl, imageApiResult?.imageUrl, runtimeFallbackImageUrl, selectedSceneId, sourceImageUrl, startFrameSourceUrl, endFrameSourceUrl]);
+  useEffect(() => {
+    if (!selectedScene) return;
+    console.debug("[SCENARIO FIRST_LAST PREVIEW RESOLVE]", {
+      sceneId: String(selectedScene?.sceneId || selectedSceneId || ""),
+      canonicalRoute: String(previewSources?.canonicalRoute || ""),
+      firstPreviewResolvedFrom: String(previewSources?.firstPreviewResolvedFrom || "none"),
+      lastPreviewResolvedFrom: String(previewSources?.lastPreviewResolvedFrom || "none"),
+      firstPreviewUrl: String(startFrameSourceUrl || ""),
+      lastPreviewUrl: String(endFrameSourceUrl || ""),
+    });
+  }, [previewSources?.canonicalRoute, previewSources?.firstPreviewResolvedFrom, previewSources?.lastPreviewResolvedFrom, selectedScene, selectedSceneId, startFrameSourceUrl, endFrameSourceUrl]);
   useEffect(() => {
     if (!open || !selectedScene) return;
     console.debug("[SCENARIO UI ROUTE TRACE]", {
