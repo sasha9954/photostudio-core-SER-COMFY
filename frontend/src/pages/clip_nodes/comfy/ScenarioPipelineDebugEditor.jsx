@@ -136,7 +136,9 @@ function buildCompactDebugSnapshot({ contextSummary = {}, executedStages = [], d
     packageStats: {
       hasStoryCore: Boolean(safePkg?.story_core && typeof safePkg.story_core === "object" && Object.keys(safePkg.story_core).length),
       audioWindows: Array.isArray(safePkg?.audio_map?.scene_candidate_windows) ? safePkg.audio_map.scene_candidate_windows.length : 0,
-      rolePlanScenes: Array.isArray(safePkg?.role_plan?.scene_roles) ? safePkg.role_plan.scene_roles.length : 0,
+      rolePlanScenes: Array.isArray(safePkg?.role_plan?.scene_casting)
+        ? safePkg.role_plan.scene_casting.length
+        : (Array.isArray(safePkg?.role_plan?.scene_roles) ? safePkg.role_plan.scene_roles.length : 0),
       scenePlanScenes: Array.isArray(safePkg?.scene_plan?.scenes) ? safePkg.scene_plan.scenes.length : 0,
       scenePrompts: Array.isArray(safePkg?.scene_prompts?.scenes) ? safePkg.scene_prompts.scenes.length : 0,
       finalScenes: Array.isArray(safePkg?.final_storyboard?.scenes) ? safePkg.final_storyboard.scenes.length : 0,
@@ -258,6 +260,8 @@ export default function ScenarioPipelineDebugEditor({
   const alignmentAttempted = Boolean(allDiagnostics?.audio_map_alignment_attempted ?? false);
   const alignmentUnavailableReason = String(allDiagnostics?.audio_map_alignment_unavailable_reason || "—");
 
+  const rolePlanRoster = Array.isArray(rolePlan?.roster) ? rolePlan.roster : [];
+  const rolePlanSceneCasting = Array.isArray(rolePlan?.scene_casting) ? rolePlan.scene_casting : [];
   const rolePlanSceneRoles = Array.isArray(rolePlan?.scene_roles) ? rolePlan.scene_roles : [];
   const scenePlanScenes = Array.isArray(scenePlan?.scenes) ? scenePlan.scenes : [];
   const scenePlanRouteMix = scenePlan?.route_mix_summary || {};
@@ -267,13 +271,13 @@ export default function ScenarioPipelineDebugEditor({
     return acc;
   }, {});
   const worldContinuity = rolePlan?.world_continuity || null;
-  const presenceModeDistribution = rolePlanSceneRoles.reduce((acc, row) => {
-    const key = String(row?.scene_presence_mode || "unspecified").trim() || "unspecified";
+  const presenceModeDistribution = rolePlanSceneCasting.reduce((acc, row) => {
+    const key = String(row?.presence_mode || "unspecified").trim() || "unspecified";
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
-  const performanceFocusDistribution = rolePlanSceneRoles.reduce((acc, row) => {
-    const key = row?.performance_focus ? "true" : "false";
+  const presenceWeightDistribution = rolePlanSceneCasting.reduce((acc, row) => {
+    const key = String(row?.presence_weight || "unspecified").trim() || "unspecified";
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
@@ -341,21 +345,26 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(rolePlanMeta?.director_mode || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(rolePlanMeta?.story_truth_source || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>audio_truth_scope</span><strong>{String(rolePlanMeta?.audio_truth_scope || "—")}</strong></div>
-        <div className="clipSB_storyboardKv"><span>global_roles</span><strong>{Object.keys(rolePlan?.global_roles || {}).length ? "present" : "—"}</strong></div>
-        <div className="clipSB_storyboardKv"><span>world_continuity</span><strong>{worldContinuity ? "present" : "empty"}</strong></div>
-        <div className="clipSB_storyboardKv"><span>scene_roles</span><strong>{rolePlanSceneRoles.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>roles_version</span><strong>{String(rolePlan?.roles_version || "—")}</strong></div>
+        <div className="clipSB_storyboardKv"><span>roster_count</span><strong>{rolePlanRoster.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_casting_count</span><strong>{rolePlanSceneCasting.length}</strong></div>
         <div className="clipSB_storyboardKv"><span>presence_mode_distribution</span><strong>{Object.keys(presenceModeDistribution).length ? toJson(presenceModeDistribution) : "{}"}</strong></div>
-        <div className="clipSB_storyboardKv"><span>performance_focus_distribution</span><strong>{Object.keys(performanceFocusDistribution).length ? toJson(performanceFocusDistribution) : "{}"}</strong></div>
-        <div className="clipSB_storyboardKv"><span>role_arc_summary</span><strong>{String(rolePlan?.role_arc_summary || "—")}</strong></div>
-        <div className="clipSB_storyboardKv"><span>continuity_notes</span><strong>{Array.isArray(rolePlan?.continuity_notes) ? rolePlan.continuity_notes.length : 0}</strong></div>
+        <div className="clipSB_storyboardKv"><span>presence_weight_distribution</span><strong>{Object.keys(presenceWeightDistribution).length ? toJson(presenceWeightDistribution) : "{}"}</strong></div>
+        <div className="clipSB_storyboardKv"><span>legacy scene_roles</span><strong>{rolePlanSceneRoles.length}</strong></div>
+        <div className="clipSB_storyboardKv"><span>legacy bridge</span><strong>{rolePlan?.legacy_bridge_generated ? "deprecated bridge present" : "none"}</strong></div>
         <pre className="clipSB_pre">{toJson({
-          global_roles: rolePlan?.global_roles || {},
+          roles_version: rolePlan?.roles_version || "",
+          roster: rolePlanRoster,
+          scene_casting: rolePlanSceneCasting,
           world_continuity: worldContinuity,
-          scene_presence_mode_distribution: presenceModeDistribution,
-          performance_focus_distribution: performanceFocusDistribution,
-          scene_roles: rolePlanSceneRoles,
-          role_arc_summary: rolePlan?.role_arc_summary || "",
-          continuity_notes: rolePlan?.continuity_notes || [],
+          presence_mode_distribution: presenceModeDistribution,
+          presence_weight_distribution: presenceWeightDistribution,
+          legacy_bridge: rolePlan?.legacy_bridge_generated ? {
+            legacy_bridge_generated: rolePlan?.legacy_bridge_generated,
+            legacy_bridge_source: rolePlan?.legacy_bridge_source,
+            deprecated: rolePlan?.deprecated,
+            scene_roles: rolePlanSceneRoles,
+          } : null,
         })}</pre>
       </div>
     ) : (

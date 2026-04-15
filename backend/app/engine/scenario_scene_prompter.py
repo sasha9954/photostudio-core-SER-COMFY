@@ -314,6 +314,25 @@ def _build_scene_windows(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
+    scene_casting = _safe_list(role_plan.get("scene_casting"))
+    if scene_casting:
+        for row_raw in scene_casting:
+            row = _safe_dict(row_raw)
+            segment_id = str(row.get("segment_id") or "").strip()
+            if segment_id:
+                primary_role = str(row.get("primary_role") or "").strip()
+                secondary_roles = [str(role).strip() for role in _safe_list(row.get("secondary_roles")) if str(role).strip()]
+                lookup[segment_id] = {
+                    "scene_id": segment_id,
+                    "segment_id": segment_id,
+                    "primary_role": primary_role,
+                    "secondary_roles": secondary_roles,
+                    "active_roles": list(dict.fromkeys([primary_role, *secondary_roles])),
+                    "scene_presence_mode": str(row.get("presence_mode") or "").strip(),
+                    "presence_weight": str(row.get("presence_weight") or "").strip(),
+                    "performance_focus": str(row.get("performance_focus") or "").strip(),
+                }
+        return lookup
     for row_raw in _safe_list(role_plan.get("scene_roles")):
         row = _safe_dict(row_raw)
         scene_id = str(row.get("scene_id") or "").strip()
@@ -801,7 +820,10 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
             "audio_dramaturgy": _safe_dict(audio_map.get("audio_dramaturgy")),
         },
         "role_plan": {
-            "world_continuity": _safe_dict(role_plan.get("world_continuity")),
+            "roles_version": str(role_plan.get("roles_version") or ""),
+            "roster": _safe_list(role_plan.get("roster")),
+            "scene_casting": _safe_list(role_plan.get("scene_casting")),
+            "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
             "compiled_contract": {
                 "global_contract": _safe_dict(compiled_contract.get("global_contract")),
                 "scene_contracts": _safe_list(compiled_contract.get("scene_contracts")),
@@ -867,7 +889,7 @@ def _build_compact_context(package: dict[str, Any]) -> tuple[dict[str, Any], dic
         "scene_rows": _safe_list(scene_plan.get("scenes")),
         "role_lookup": role_lookup,
         "story_core": story_core,
-        "world_continuity": _safe_dict(role_plan.get("world_continuity")),
+        "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
         "ownership_binding_inventory": ownership_binding_inventory,
         "compiled_contract": compiled_contract,
     }
@@ -926,7 +948,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Return STRICT JSON only. No markdown.\\n"
         "MODE is clip only.\\n"
         "Task: build planning-to-generation bridge prompts for later storyboard/render stages.\\n"
-        "Do not access raw Scenario Director text directly; treat role_plan.compiled_contract as source of cast/world/presence constraints.\\n"
+        "Do not access raw Scenario Director text directly; treat role_plan.scene_casting/roster as cast source (legacy compiled_contract optional fallback only).\\n"
         "Prompts are translation layer only: do not invent new plot geography beyond upstream story/role/scene contracts.\\n"
         "Do NOT produce render payloads or API calls.\\n"
         "For each scene from scene_plan, write route-aware photo_prompt and video_prompt with compact production language.\\n"
