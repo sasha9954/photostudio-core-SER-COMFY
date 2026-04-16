@@ -6233,22 +6233,11 @@ def run_manual_stage(
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
     executed_stage_ids: list[str] = []
-    if stage_id == "finalize":
-        # Guardrail: pressing FINAL must not retrigger upstream creative Gemini stages.
-        # Finalize can run only from already prepared normalized outputs.
-        pkg = invalidate_downstream_stages(pkg, stage_id, reason=f"manual_rerun:{stage_id}")
-        pkg = run_stage(stage_id, pkg, payload)
-        executed_stage_ids.append(stage_id)
-        return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     dep_sequence = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
     reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
     missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
-    continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
-    if missing_upstream:
-        first_missing_idx = dep_sequence.index(missing_upstream[0])
-        dep_sequence = dep_sequence[first_missing_idx:]
-    else:
-        dep_sequence = []
+    continuation_mode = "reuse_existing_package"
+    dep_sequence = []
     preserve_audio_map_for_story_core = stage_id == "story_core" and _is_usable_audio_map(_safe_dict(pkg.get("audio_map")))
     if preserve_audio_map_for_story_core:
         # Manual CORE rerun must preserve upstream audio_map and skip audio_map dependency rebuild.
@@ -6265,10 +6254,21 @@ def run_manual_stage(
     diagnostics["continuation_mode"] = continuation_mode
     diagnostics["upstream_package_complete"] = not bool(missing_upstream)
     diagnostics["reused_upstream_stages"] = reusable_upstream
-    diagnostics["regenerated_stages"] = list(dep_sequence) + [stage_id]
-    if missing_upstream:
-        diagnostics["recompute_missing_upstream_stages"] = missing_upstream
+    diagnostics["regenerated_stages"] = [stage_id]
+    diagnostics["manual_stage_run_policy_applied"] = False
+    diagnostics["manual_requested_stage_requires_complete_upstream"] = False
+    diagnostics["manual_stage_run_blocked_by_missing_upstream"] = False
+    diagnostics["blocked_upstream_stages"] = []
     pkg["diagnostics"] = diagnostics
+    if missing_upstream:
+        diagnostics["continuation_mode"] = "blocked_by_missing_upstream"
+        diagnostics["manual_stage_run_policy_applied"] = True
+        diagnostics["manual_requested_stage_requires_complete_upstream"] = True
+        diagnostics["manual_stage_run_blocked_by_missing_upstream"] = True
+        diagnostics["blocked_upstream_stages"] = missing_upstream
+        diagnostics["regenerated_stages"] = []
+        pkg["diagnostics"] = diagnostics
+        return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
         executed_stage_ids.append(dep_stage)
