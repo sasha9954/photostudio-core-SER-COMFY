@@ -2190,6 +2190,49 @@ _CAMERA_TECH_LEAK_REGEXES: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _clip_validation_excerpt(text: str, *, start: int, end: int, radius: int = 56, max_len: int = 140) -> str:
+    source = str(text or "")
+    if not source:
+        return ""
+    safe_start = max(0, int(start))
+    safe_end = max(safe_start, int(end))
+    left = max(0, safe_start - radius)
+    right = min(len(source), safe_end + radius)
+    excerpt = source[left:right].strip()
+    return excerpt[:max_len]
+
+
+def _build_prompts_validation_zones(*, prompts_v11: dict[str, Any], row: dict[str, Any]) -> list[tuple[str, str]]:
+    visual = _safe_dict(row.get("visual_description"))
+    character = _safe_dict(row.get("character_state"))
+    environment = _safe_dict(row.get("environment_details"))
+    prompt_notes = row.get("prompt_notes")
+    return [
+        ("global_style_anchor", str(prompts_v11.get("global_style_anchor") or "")),
+        ("subject_description", str(visual.get("subject_description") or "")),
+        ("background_description", str(visual.get("background_description") or "")),
+        ("negative_description", str(visual.get("negative_description") or "")),
+        ("character_state", json.dumps(character, ensure_ascii=False)),
+        ("environment_details", json.dumps(environment, ensure_ascii=False)),
+        ("prompt_notes", " ".join(str(v) for v in _safe_list(prompt_notes))),
+    ]
+
+
+def _locate_text_match(*, zones: list[tuple[str, str]], token: str) -> dict[str, str]:
+    needle = str(token or "").lower()
+    for field_name, text in zones:
+        haystack = str(text or "")
+        lower = haystack.lower()
+        offset = lower.find(needle)
+        if offset >= 0:
+            return {
+                "match_field": field_name,
+                "match_pattern": token,
+                "match_excerpt": _clip_validation_excerpt(haystack, start=offset, end=offset + len(needle)),
+            }
+    return {"match_field": "", "match_pattern": token, "match_excerpt": ""}
+
+
 def _suggest_local_zone_hint(
     *,
     scene_row: dict[str, Any],
@@ -2578,7 +2621,16 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             ]
         ).lower()
         if any(token in blob for token in _TECHNICAL_TAG_PATTERNS):
-            return "PROMPTS_TECHNICAL_TAGGING", f"technical_tagging:{segment_id}", {}
+            zones = _build_prompts_validation_zones(prompts_v11=prompts_v11, row=row)
+            hit = next((token for token in _TECHNICAL_TAG_PATTERNS if token in blob), "")
+            match = _locate_text_match(zones=zones, token=hit)
+            return "PROMPTS_TECHNICAL_TAGGING", f"technical_tagging:{segment_id}", {
+                "scene_prompts_offending_segment_id": segment_id,
+                "scene_prompts_technical_tagging_match_type": "technical_tag_token",
+                "scene_prompts_technical_tagging_match_pattern": str(match.get("match_pattern") or ""),
+                "scene_prompts_technical_tagging_match_excerpt": str(match.get("match_excerpt") or ""),
+                "scene_prompts_technical_tagging_match_field": str(match.get("match_field") or ""),
+            }
         if any(token in blob for token in _QUALITY_BUZZWORDS):
             return "PROMPTS_QUALITY_BUZZWORDS", f"quality_buzzwords:{segment_id}", {}
         if any(token in blob for token in _CAMERA_LEAK_PATTERNS) and any(regex.search(blob) for regex in _CAMERA_TECH_LEAK_REGEXES):
@@ -2642,6 +2694,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_transition_present_count": 0,
         "scene_prompts_error_code": "",
         "scene_prompts_validation_error": "",
+        "scene_prompts_offending_segment_id": "",
+        "scene_prompts_technical_tagging_match_type": "",
+        "scene_prompts_technical_tagging_match_pattern": "",
+        "scene_prompts_technical_tagging_match_excerpt": "",
+        "scene_prompts_technical_tagging_match_field": "",
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
