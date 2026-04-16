@@ -160,6 +160,28 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     return isinstance(output, dict) and bool(output)
 
 
+def _is_usable_final_video_prompt_snapshot(value: Any) -> bool:
+    row = _safe_dict(value)
+    segments = _safe_list(row.get("segments"))
+    scenes = _safe_list(row.get("scenes"))
+    return bool(segments) or bool(scenes)
+
+
+def _is_usable_final_storyboard_snapshot(value: Any) -> bool:
+    row = _safe_dict(value)
+    return bool(_safe_list(row.get("scenes")))
+
+
+def _mark_preserved_snapshot_diagnostic(package: dict[str, Any], stage_id: str) -> None:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    preserved_ids = [str(item).strip() for item in _safe_list(diagnostics.get("preserved_snapshot_stage_ids")) if str(item).strip()]
+    if stage_id not in preserved_ids:
+        preserved_ids.append(stage_id)
+    diagnostics["preserved_snapshot_stage_ids"] = preserved_ids
+    diagnostics["manual_rerun_preserved_downstream_snapshot"] = bool(preserved_ids)
+    package["diagnostics"] = diagnostics
+
+
 def _can_reuse_stage_output(package: dict[str, Any], stage_id: str) -> bool:
     statuses = _safe_dict(_safe_dict(package).get("stage_statuses"))
     status = str(_safe_dict(statuses.get(stage_id)).get("status") or "").strip().lower()
@@ -2511,11 +2533,17 @@ def invalidate_downstream_stages(package: dict[str, Any], from_stage_id: str, re
     statuses = _safe_dict(pkg.get("stage_statuses"))
     diagnostics = _safe_dict(pkg.get("diagnostics"))
     for stage_id in downstream:
-        if stage_id == "finalize":
-            pkg["final_storyboard"] = {"scenes": []}
-        elif stage_id in STAGE_SECTION_RESETTERS:
+        if stage_id in STAGE_SECTION_RESETTERS and stage_id not in {"final_video_prompt", "finalize"}:
             section_name = "final_storyboard" if stage_id == "finalize" else stage_id
             pkg[section_name] = STAGE_SECTION_RESETTERS[stage_id]()
+        elif stage_id == "final_video_prompt" and _is_usable_final_video_prompt_snapshot(pkg.get("final_video_prompt")):
+            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
+            _mark_preserved_snapshot_diagnostic(pkg, "final_video_prompt")
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+        elif stage_id == "finalize" and _is_usable_final_storyboard_snapshot(pkg.get("final_storyboard")):
+            diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
+            _mark_preserved_snapshot_diagnostic(pkg, "finalize")
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
         stage_state = _safe_dict(statuses.get(stage_id))
         stage_state["status"] = "stale"
         stage_state["updated_at"] = _utc_iso()
@@ -6148,6 +6176,8 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     return package
 
 def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
+    previous_final_video_prompt = _safe_dict(package.get("final_video_prompt"))
+    has_previous_final_video_prompt_snapshot = _is_usable_final_video_prompt_snapshot(previous_final_video_prompt)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["final_video_prompt_backend"] = "gemini"
     diagnostics["final_video_prompt_prompt_version"] = FINAL_VIDEO_PROMPT_STAGE_VERSION
@@ -6155,15 +6185,14 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_segment_count"] = 0
     diagnostics["final_video_prompt_error"] = ""
     diagnostics["final_video_prompt_hard_failed"] = False
+    diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = False
     package["diagnostics"] = diagnostics
-    package["final_video_prompt"] = {"delivery_version": "1.1", "segments": [], "scenes": []}
 
     result = generate_ltx_video_prompt_metadata(
         api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
         package=package,
     )
     final_video_prompt = _safe_dict(result.get("final_video_prompt"))
-    package["final_video_prompt"] = final_video_prompt
 
     diag = _safe_dict(result.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))
@@ -6181,12 +6210,17 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     final_segments = _safe_list(final_video_prompt.get("segments")) or _safe_list(final_video_prompt.get("scenes"))
     if bool(result.get("ok")) and final_segments:
+        package["final_video_prompt"] = final_video_prompt
         _append_diag_event(package, "final_video_prompt generated", stage_id="final_video_prompt")
     else:
         diagnostics["final_video_prompt_hard_failed"] = True
+        if has_previous_final_video_prompt_snapshot:
+            package["final_video_prompt"] = deepcopy(previous_final_video_prompt)
+            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
+            _mark_preserved_snapshot_diagnostic(package, "final_video_prompt")
+            diagnostics = _safe_dict(package.get("diagnostics"))
         package["diagnostics"] = diagnostics
         hard_fail_error = str(result.get("error") or "final_video_prompt_invalid")
-        package["final_video_prompt"] = {"delivery_version": "1.1", "segments": [], "scenes": []}
         _append_diag_event(package, f"final_video_prompt hard fail after retry: {hard_fail_error}", stage_id="final_video_prompt")
         raise RuntimeError(hard_fail_error)
     return package
@@ -6208,6 +6242,10 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         _safe_dict(pkg.get("diagnostics")).setdefault("errors", []).append(f"{stage_id}: {error_code} {missing}")
         return pkg
 
+    previous_final_storyboard_snapshot = deepcopy(_safe_dict(pkg.get("final_storyboard")))
+    has_previous_final_storyboard_snapshot = _is_usable_final_storyboard_snapshot(previous_final_storyboard_snapshot)
+    previous_final_video_prompt_snapshot = deepcopy(_safe_dict(pkg.get("final_video_prompt")))
+    has_previous_final_video_prompt_snapshot = _is_usable_final_video_prompt_snapshot(previous_final_video_prompt_snapshot)
     try:
         if stage_id == "input_package":
             pkg = _run_input_package_stage(pkg)
@@ -6227,6 +6265,18 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             pkg = _run_finalize_stage(pkg)
         _set_stage_status(pkg, stage_id, "done")
     except Exception as exc:  # noqa: BLE001
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        if stage_id == "finalize" and has_previous_final_storyboard_snapshot:
+            pkg["final_storyboard"] = deepcopy(previous_final_storyboard_snapshot)
+            diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
+            pkg["diagnostics"] = diagnostics
+            _mark_preserved_snapshot_diagnostic(pkg, "finalize")
+        if stage_id == "final_video_prompt" and has_previous_final_video_prompt_snapshot:
+            pkg["final_video_prompt"] = deepcopy(previous_final_video_prompt_snapshot)
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
+            pkg["diagnostics"] = diagnostics
+            _mark_preserved_snapshot_diagnostic(pkg, "final_video_prompt")
         _set_stage_status(pkg, stage_id, "error", error=str(exc))
         diagnostics = _safe_dict(pkg.get("diagnostics"))
         errors = _safe_list(diagnostics.get("errors"))
@@ -6274,6 +6324,10 @@ def run_manual_stage(
     diagnostics["manual_stage_run_policy_applied"] = False
     diagnostics["manual_requested_stage_requires_complete_upstream"] = False
     diagnostics["manual_stage_run_blocked_by_missing_upstream"] = False
+    diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = False
+    diagnostics["final_storyboard_preserved_last_successful_snapshot"] = False
+    diagnostics["manual_rerun_preserved_downstream_snapshot"] = False
+    diagnostics["preserved_snapshot_stage_ids"] = []
     diagnostics["blocked_upstream_stages"] = []
     pkg["diagnostics"] = diagnostics
     if missing_upstream:
@@ -6283,6 +6337,17 @@ def run_manual_stage(
         diagnostics["manual_stage_run_blocked_by_missing_upstream"] = True
         diagnostics["blocked_upstream_stages"] = missing_upstream
         diagnostics["regenerated_stages"] = []
+        if _is_usable_final_video_prompt_snapshot(pkg.get("final_video_prompt")):
+            diagnostics["final_video_prompt_preserved_last_successful_snapshot"] = True
+            diagnostics["preserved_snapshot_stage_ids"] = ["final_video_prompt"]
+        if _is_usable_final_storyboard_snapshot(pkg.get("final_storyboard")):
+            diagnostics["final_storyboard_preserved_last_successful_snapshot"] = True
+            diagnostics["preserved_snapshot_stage_ids"] = list(
+                dict.fromkeys([*_safe_list(diagnostics.get("preserved_snapshot_stage_ids")), "finalize"])
+            )
+        diagnostics["manual_rerun_preserved_downstream_snapshot"] = bool(
+            _safe_list(diagnostics.get("preserved_snapshot_stage_ids"))
+        )
         pkg["diagnostics"] = diagnostics
         return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
     for dep_stage in dep_sequence:
