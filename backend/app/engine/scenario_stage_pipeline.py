@@ -5990,8 +5990,16 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_transition_required_count"] = 0
     diagnostics["scene_prompts_transition_present_count"] = 0
     diagnostics["scene_prompts_error_code"] = ""
+    diagnostics["scene_prompts_last_error_code"] = ""
+    diagnostics["scene_prompts_retry_used"] = False
+    diagnostics["scene_prompts_retry_feedback"] = ""
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["scene_prompts_validation_error"] = ""
+    diagnostics["scene_prompts_offending_segment_id"] = ""
+    diagnostics["scene_prompts_technical_tagging_match_type"] = ""
+    diagnostics["scene_prompts_technical_tagging_match_pattern"] = ""
+    diagnostics["scene_prompts_technical_tagging_match_excerpt"] = ""
+    diagnostics["scene_prompts_technical_tagging_match_field"] = ""
     diagnostics["validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
@@ -6010,10 +6018,15 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
         validation_error_code = str(result.get("error_code") or _safe_dict(result.get("diagnostics")).get("scene_prompts_error_code") or "").strip()
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["scene_prompts_retry_used"] = True
+        diagnostics["scene_prompts_last_error_code"] = validation_error_code or "PROMPTS_SCHEMA_INVALID"
         validation_feedback = (
             f"Previous output invalid: validation_error={initial_validation_error}; "
             f"error_code={validation_error_code or 'PROMPTS_SCHEMA_INVALID'}"
         )
+        diagnostics["scene_prompts_retry_feedback"] = f"{validation_error_code or 'PROMPTS_SCHEMA_INVALID'}: {initial_validation_error}"
+        package["diagnostics"] = diagnostics
         _append_diag_event(package, f"scene_prompts validation failed, retrying once: {validation_feedback}", stage_id="scene_prompts")
         retry_result = build_gemini_scene_prompts(
             api_key=str(os.getenv("GEMINI_API_KEY") or "").strip(),
@@ -6092,6 +6105,9 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_transition_required_count"] = int(prompts_diag.get("scene_prompts_transition_required_count") or 0)
     diagnostics["scene_prompts_transition_present_count"] = int(prompts_diag.get("scene_prompts_transition_present_count") or 0)
     diagnostics["scene_prompts_error_code"] = str(prompts_diag.get("scene_prompts_error_code") or "")
+    diagnostics["scene_prompts_last_error_code"] = str(
+        prompts_diag.get("scene_prompts_error_code") or diagnostics.get("scene_prompts_last_error_code") or ""
+    )
     diagnostics["scene_prompts_route_semantics_mismatch_count"] = int(
         prompts_diag.get("scene_prompts_route_semantics_mismatch_count")
         or diagnostics.get("scene_prompts_route_semantics_mismatch_count")
