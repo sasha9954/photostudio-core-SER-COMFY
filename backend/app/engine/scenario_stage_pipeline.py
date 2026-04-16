@@ -2775,7 +2775,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         return normalized_rows
 
     scene_plan_rows = _normalize_stage_rows(_safe_list(scene_plan.get("scenes")), stage_name="scene_plan")
-    scene_prompts_rows = _normalize_stage_rows(_safe_list(scene_prompts.get("scenes")), stage_name="scene_prompts")
+    scene_prompts_source_rows = _safe_list(scene_prompts.get("segments")) or _safe_list(scene_prompts.get("scenes"))
+    scene_prompts_rows = _normalize_stage_rows(scene_prompts_source_rows, stage_name="scene_prompts")
     role_scene_casting_rows = _normalize_stage_rows(_safe_list(role_plan.get("scene_casting")), stage_name="role_plan_scene_casting")
     role_scene_roles_rows = _normalize_stage_rows(_safe_list(role_plan.get("scene_roles")), stage_name="role_plan_scene_roles")
     final_video_prompt_rows = _safe_list(final_video_prompt.get("segments")) or _safe_list(final_video_prompt.get("scenes"))
